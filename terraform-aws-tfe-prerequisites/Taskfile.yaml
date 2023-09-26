@@ -1,0 +1,224 @@
+version: '3'
+
+vars:
+  PRODUCT: tfe
+  CLOUD: aws
+  DEPLOY_DIR: terraform-{{.CLOUD}}-{{.PRODUCT}}
+  DEPLOY_BRANCH: main
+  PREREQ_DIR: terraform-{{.CLOUD}}-{{.PRODUCT}}-prerequisites
+  PREREQ_BRANCH: main
+  SED_CMD: '{{ if eq OS "darwin" }}gsed{{ else }}sed{{ end }}'
+
+tasks:
+  default:
+    desc: Creates a packaged bundle of the HashiCorp Enterprise installer for {{.PRODUCT}} on {{.CLOUD}}
+    alias: [run]
+    platforms: [linux, darwin]
+    cmds:
+      - task: prereq
+      - task: build
+      - defer: { task: cleanup }
+
+  prereq:
+    desc: Checks to make sure prereqs are installed
+
+    preconditions:
+      - sh: command -v {{.SED_CMD}}
+        msg: |
+          The SED_CMD var was set to {{.SED_CMD}}.  This does not appear to be set in the path.  Please update or replace the SED_CMD to the cmd or alias that references GNU-SED.  If you do not have GNU-SED, this is required for this TaskFile to run
+      - sh: command -v jq
+        msg: |
+          It appears that `jq` is not installed.  Please install with your package manager
+      - sh: command -v git
+        msg: |
+          It appears that `git` is not installed.  Please install with your package manager
+      - sh: command -v zip
+        msg: |
+          It appears that `zip` is not installed.  Please install with your package manager
+
+  build:
+    desc: Builds the bundle
+    deps: [clone-wrapper, clone-deploy-modules]
+    cmds:
+      - task: update-example-sources
+      - task: terraform-fmt
+      - task: delete-git-folders
+      - echo "Zipping file"
+      - zip -r -q {{.DEPLOY_DIR}}-bundle.zip {{.PREREQ_DIR}} {{.DEPLOY_DIR}}
+      - echo "Done"
+    generates:
+      - '{{.DEPLOY_DIR}}-bundle.zip'
+
+  clone-deploy-modules:
+    desc: Clones down the deployment module
+    cmds:
+      - echo "Creating Deployment module folder and downloading"
+      - mkdir -p '{{ .DEPLOY_DIR }}'
+      - echo "Cloning Deployment module from {{ .DEPLOY_BRANCH }}"
+      - git clone -b {{ .DEPLOY_BRANCH }} git@github.com:hashicorp-modules/{{.DEPLOY_DIR}}.git '{{.DEPLOY_DIR}}'
+      - task: clone-deploy-submodules
+      - task: update-module-sources
+        vars: { DIR: '{{.DEPLOY_DIR}}' }
+    silent: true
+    status:
+      - test -d '{{.DEPLOY_DIR}}'
+
+  clone-wrapper:
+    desc: Clones down the wrapper modules
+    cmds:
+      - echo "Creating wrapper folder and downloading wrapper for {{.PRODUCT}}"
+      - echo "Cloning wrapper module from {{ .PREREQ_BRANCH }}"
+      - git clone -b {{ .PREREQ_BRANCH }} git@github.com:hashicorp-modules/{{ .PREREQ_DIR}}.git {{.PREREQ_DIR}}
+      - task: clone-submodules
+      - task: update-module-sources
+        vars: { DIR: '{{.PREREQ_DIR}}' }
+    silent: true
+    status:
+      - test -d {{.PREREQ_DIR}}
+
+  clone-submodules:
+    desc: Initializes the wrapper modules and migrates them to a modules dir
+    cmds:
+      - |
+        cd {{.PREREQ_DIR}} && terraform init > /dev/null
+        mkdir -p modules
+
+        output_object="{\"ext_modules\":[],\"prereq\":[]}"
+
+        for name in ".terraform/modules"/*; do
+          base=$(basename "$name")
+          if [[ "$base" != "modules.json" ]]; then
+            if [[ "$base" == *.* ]]; then
+              mkdir -p modules/${base%%.*}/modules/${base#*.}
+              if [[ "$base" == *."vpc_endpoints" ]]; then
+                cp -r ".terraform/modules/$base/modules/vpc-endpoints/"* modules/${base%%.*}/modules/${base#*.}
+              else
+                cp -r .terraform/modules/$base/* modules/${base%%.*}/modules/${base#*.}
+              fi
+              ext_module="{\"name\":\"${base#*.}\", \"caller\":\"modules/${base%%.*}/main.tf\", \"source\":\"./modules/${base#*.}\"}"
+              output_object="$(echo $output_object | jq '.ext_modules += ['"$ext_module"']')"
+            else
+              cp -r .terraform/modules/$base modules/$base
+              prereq="{\"name\":\"$base\",\"caller\":\"main.tf\", \"source\":\"./modules/$base\"}"
+              output_object="$(echo $output_object | jq '.prereq += ['"$prereq"']')"
+            fi
+          fi
+          echo "$output_object">pkg_modules.json
+        done
+        cd {{.TASKFILE_DIR}}
+    silent: true
+    status:
+      - test -d {{.PREREQ_DIR}}/modules
+    generates:
+      - pkg_modules.json
+
+  clone-deploy-submodules:
+    desc: Initializes the wrapper modules and migrates them to a modules dir
+    cmds:
+      - |
+        cd {{.DEPLOY_DIR}} && terraform init > /dev/null
+        mkdir -p modules
+
+        output_object="{\"ext_modules\":[],\"prereq\":[]}"
+
+        for name in ".terraform/modules"/*; do
+          base=$(basename "$name")
+          if [[ "$base" != "modules.json" ]]; then
+            if [[ "$base" == *.* ]]; then
+              mkdir -p modules/${base%%.*}/modules/${base#*.}
+              if [[ "$base" == *."vpc_endpoints" ]]; then
+                cp -r ".terraform/modules/$base/modules/vpc-endpoints/"* modules/${base%%.*}/modules/${base#*.}
+              else
+                cp -r .terraform/modules/$base/* modules/${base%%.*}/modules/${base#*.}
+              fi
+              ext_module="{\"name\":\"${base#*.}\", \"caller\":\"modules/${base%%.*}/main.tf\", \"source\":\"./modules/${base#*.}\"}"
+              output_object="$(echo $output_object | jq '.ext_modules += ['"$ext_module"']')"
+            else
+              cp -r .terraform/modules/$base modules/$base
+              prereq="{\"name\":\"$base\",\"caller\":\"main.tf\", \"source\":\"./modules/$base\"}"
+              output_object="$(echo $output_object | jq '.prereq += ['"$prereq"']')"
+            fi
+          fi
+          echo "$output_object">pkg_modules.json
+        done
+        cd {{.TASKFILE_DIR}}
+    silent: true
+    status:
+      - test -d {{.DEPLOY_DIR}}/modules
+    generates:
+      - pkg_modules.json
+
+  update-module-sources:
+    desc: Replaces the module sources with the new source location
+    cmds:
+      - |
+        cd {{ .DIR }}
+        jq -c '.ext_modules[]' < "pkg_modules.json" | while read module; do
+          module_name=$(jq -r '.name' <<< "$module")
+          new_source=$(jq -r '.source' <<< "$module")
+          caller=$(jq -r '.caller' <<< "$module")
+
+          new_source=$({{.SED_CMD}} 's/\//\\\//g' <<< "$new_source")
+
+          {{.SED_CMD}} -i'' '/^module "'"$module_name"'" {/,/^}/s/source[[:space:]]*=[[:space:]]*"[^"]*"/source = "'"$new_source"'"/' "$caller"
+
+          {{.SED_CMD}} -i'' -E '/[[:space:]]+version[[:space:]]+=/d' $caller
+        done
+
+        jq -c '.prereq[]' < "pkg_modules.json" | while read module; do
+          module_name=$(jq -r '.name' <<< "$module")
+          new_source=$(jq -r '.source' <<< "$module")
+          caller=$(jq -r '.caller' <<< "$module")
+
+          new_source=$({{.SED_CMD}} 's/\//\\\//g' <<< "$new_source")
+          {{.SED_CMD}} -i'' '/^module "'"$module_name"'" {/,/^}/s/source[[:space:]]*=[[:space:]]*"[^"]*"/source = "'"$new_source"'"/' "$caller"
+
+        done
+        cd {{.TASKFILE_DIR}}
+    status:
+      - grep -q -E -r --include="main.tf" "source[[:space:]]=[[:space:]]\"\./modules/" {{ .DIR }}
+    silent: true
+    vars:
+      DIR: '{{.DIR | default "{{.DEPLOY_DIR}}-bundle"}}'
+
+  update-example-sources:
+    desc:  Updates the examples under the examples/ directory to use the deployment module
+    cmds:
+      - |
+        cd {{.PREREQ_DIR}}
+        new_source="..\/..\/..\/{{.DEPLOY_DIR}}"
+
+        update_modules=$(grep -Eo -r --include="main.tf" "module[[:space:]]\"(.*{{.PRODUCT}})\"" ./examples)
+
+        echo "$update_modules" | while IFS=: read -r filename module_line; do
+            echo "$filename"
+            module_name=$(echo "$module_line" | cut -d '"' -f2)
+           {{.SED_CMD}} -i'' '/^module "'"$module_name"'" {/,/^}/s/source[[:space:]]*=[[:space:]]*"[^"]*"/source = "'"$new_source"'"/' "$filename"
+        done
+        cd {{.TASKFILE_DIR}}
+    status:
+      - grep -E -r --include="main.tf" "source[[:space:]]=[[:space:]]\"../../../{{.DEPLOY_DIR}}\"" {{.PREREQ_DIR}}/examples
+    silent: true
+
+  terraform-fmt:
+    desc: Formats TF files recursively
+    cmds:
+      - find {{.PREREQ_DIR}} -type f -name "*.tf" -not -path '*/\.*' -maxdepth 3 -exec terraform fmt {} \;
+
+  delete-git-folders:
+    desc: Remove git folders
+    cmds:
+      - |-
+        targets=(".git" ".terraform" ".github")
+        search_dirs=("{{.PREREQ_DIR}}" "{{.DEPLOY_DIR}}")
+        for search_dir in ${search_dirs[@]}; do
+          for target in ${targets[@]}; do
+            find "$search_dir" -type d -name "$target" -execdir rm -rf "{}" \; -prune
+          done
+        done
+
+  cleanup:
+    desc: Removes the cloned repositories
+    cmds:
+      - echo "Cleaning up repositories"
+      - rm -rf '{{.DEPLOY_DIR}}' '{{.PREREQ_DIR}}'

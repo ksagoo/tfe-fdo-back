@@ -1,0 +1,66 @@
+{
+  "ext_modules": [
+    {
+      "name": "rds",
+      "caller": "modules/database/main.tf",
+      "source": "./modules/rds"
+    },
+    {
+      "name": "acm",
+      "caller": "modules/ingress/main.tf",
+      "source": "./modules/acm"
+    },
+    {
+      "name": "vpc",
+      "caller": "modules/networking/main.tf",
+      "source": "./modules/vpc"
+    },
+    {
+      "name": "vpc_endpoints",
+      "caller": "modules/networking/main.tf",
+      "source": "./modules/vpc_endpoints"
+    }
+  ],
+  "prereq": [
+    {
+      "name": "database",
+      "caller": "main.tf",
+      "source": "./modules/database"
+    },
+    {
+      "name": "iam",
+      "caller": "main.tf",
+      "source": "./modules/iam"
+    },
+    {
+      "name": "ingress",
+      "caller": "main.tf",
+      "source": "./modules/ingress"
+    },
+    {
+      "name": "kms",
+      "caller": "main.tf",
+      "source": "./modules/kms"
+    },
+    {
+      "name": "networking",
+      "caller": "main.tf",
+      "source": "./modules/networking"
+    },
+    {
+      "name": "redis",
+      "caller": "main.tf",
+      "source": "./modules/redis"
+    },
+    {
+      "name": "s3",
+      "caller": "main.tf",
+      "source": "./modules/s3"
+    },
+    {
+      "name": "secrets_manager",
+      "caller": "main.tf",
+      "source": "./modules/secrets_manager"
+    }
+  ]
+}
