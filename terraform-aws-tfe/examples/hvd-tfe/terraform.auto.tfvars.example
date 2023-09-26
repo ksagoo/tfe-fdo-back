@@ -1,0 +1,79 @@
+#------------------------------------------------------------------------------
+# General
+#------------------------------------------------------------------------------
+
+# Prefix for all resources created by this module
+friendly_name_prefix = "hashicat"
+
+# AWS Tagging Configuration
+common_tags  = {
+  deployment = "dev"
+  site       = "one"
+}
+
+#------------------------------------------------------------------------------
+# TFE Configuration
+#------------------------------------------------------------------------------
+tfe_active_active        = true
+tfe_fdo_release_sequence = "v202309-1"
+tfe_hostname             = "tfe.hashicat.aws.sbx.hashicorpdemo.com"
+asg_hook_value           = "hashicat-9c6c44-us-east-2-tfe-asg-hook"
+ssh_keypair_name         = "hashicat-9c6c44-tfe-keypair"
+
+#------------------------------------------------------------------------------
+# Network Configuration
+#------------------------------------------------------------------------------
+ec2_subnet_ids           = ["subnet-060ad98b2a2bad6a3","subnet-0dc426ead0506b1c3","subnet-07f45c38621d1da2a"]
+vpc_id                   = "vpc-0e4119dc42e20fe98"
+
+#------------------------------------------------------------------------------
+# Database Configuration
+#------------------------------------------------------------------------------
+db_username         = "tfe"
+db_password         = "correct-horse-battery-staple"
+db_database_name    = "tfe"
+db_cluster_endpoint = "hashicat-9c6c44.cluster-ctqfsgswysih.us-east-2.rds.amazonaws.com"
+
+#------------------------------------------------------------------------------
+# Redis Configuration
+#------------------------------------------------------------------------------
+redis_host              = "master.hashicat-9c6c44-redis-rep-group.ygc6bz.use2.cache.amazonaws.com"
+redis_password          = "faculty-untried-cohesive-voucher"
+redis_security_group_id = "sg-0ffe7aaae556615a8"
+
+#------------------------------------------------------------------------------
+# Secret Manager Configuration - Initial TFE Secrets
+#------------------------------------------------------------------------------
+license_secret_arn       = "arn:aws:secretsmanager:us-east-2:441170333099:secret:hashicat-9c6c44-tfe-license-PfqMIb"
+tfe_enc_password_arn     = "arn:aws:secretsmanager:us-east-2:441170333099:secret:hashicat-9c6c44-enc_password-test-Wd49Z8"
+tfe_console_password_arn = "arn:aws:secretsmanager:us-east-2:441170333099:secret:hashicat-9c6c44-console_password-test-shxkCa"
+tfe_cert_secret_arn      = "arn:aws:secretsmanager:us-east-2:441170333099:secret:hashicat-9c6c44-cert_pem_public-shxkCa"
+tfe_privkey_secret_arn   = "arn:aws:secretsmanager:us-east-2:441170333099:secret:hashicat-9c6c44-cert_pem_private-odetla"
+ca_bundle_secret_arn     = "arn:aws:secretsmanager:us-east-2:441170333099:secret:hashicat-9c6c44-cert_pem_bundle-odetla"
+
+#------------------------------------------------------------------------------
+# IAM Configuration
+#------------------------------------------------------------------------------
+iam_profile_name = "hashicat-9c6c44-us-east-2-tfe-role"
+
+#------------------------------------------------------------------------------
+# S3 Configuration
+#------------------------------------------------------------------------------
+s3_app_bucket_name   = "hashicat-9c6c44-tfe-bootstrap-us-east-2"
+s3_log_bucket_name       = "hashicat-9c6c44-tfe-logging-us-east-2"
+
+#------------------------------------------------------------------------------
+# KMS Configuration
+#------------------------------------------------------------------------------
+kms_key_arn = "arn:aws:kms:us-east-2:441170333099:alias/hashicat-9c6c44-tfe-kms-key-alias"
+
+#------------------------------------------------------------------------------
+# LB Configuration
+#------------------------------------------------------------------------------
+lb_type    = "application"
+lb_tg_arns = ["arn:aws:elasticloadbalancing:us-east-2:441170333099:targetgroup/hashicat-9c6c44-tfe-tls-tg/150535a5bd22c7b1"]
+lb_security_group_id = "sg-002d8b2c407fcc39c"
+#------------------------------------------------------------------------------
+# Logging Configuration
+#------------------------------------------------------------------------------
+log_group_name = "hashicat-9c6c44-tfe-log-group"

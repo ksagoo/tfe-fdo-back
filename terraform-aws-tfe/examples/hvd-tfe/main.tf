@@ -1,0 +1,37 @@
+module "tfe" {
+  source                    = "../../"
+  permit_all_egress         = true
+  friendly_name_prefix      = var.friendly_name_prefix
+  tfe_fdo_release_sequence  = var.tfe_fdo_release_sequence
+  ssh_key_pair              = var.ssh_keypair_name
+  vpc_id                    = var.vpc_id
+  tfe_hostname              = var.tfe_hostname
+  enable_active_active      = var.tfe_active_active
+  iam_instance_profile      = var.iam_profile_name
+  kms_key_arn               = var.kms_key_arn
+  ec2_subnet_ids            = var.ec2_subnet_ids
+  lb_tg_arns                = var.lb_tg_arns
+  lb_type                   = var.lb_type
+  lb_security_group_id      = var.lb_security_group_id
+  s3_app_bucket_name        = var.s3_app_bucket_name
+  s3_log_bucket_name        = var.s3_log_bucket_name
+  cloudwatch_log_group_name = var.log_group_name
+  license_secret_arn        = var.license_secret_arn
+  enc_password_arn          = var.tfe_enc_password_arn
+  console_password_arn      = var.tfe_console_password_arn
+  tfe_cert_secret_arn       = var.tfe_cert_secret_arn
+  tfe_privkey_secret_arn    = var.tfe_privkey_secret_arn
+  ca_bundle_secret_arn      = var.ca_bundle_secret_arn
+  db_username               = var.db_username
+  db_password               = var.db_password
+  db_database_name          = var.db_database_name
+  db_cluster_endpoint       = var.db_cluster_endpoint
+  asg_hook_value            = var.asg_hook_value
+  redis_host                = var.redis_host
+  redis_password            = var.redis_password
+  redis_security_group_id   = var.redis_security_group_id
+  product                   = "tfefdo"
+  asg_max_size              = 2 # Set this in your separate workspace to deploy TFE.  This is just for an example of how to use this module with the deployment module
+  asg_instance_count        = 2 # Set this in your separate workspace to deploy TFE.  This is just for an example of how to use this module with the deployment module
+  common_tags               = var.common_tags
+}
