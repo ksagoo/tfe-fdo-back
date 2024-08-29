@@ -1,0 +1,50 @@
+curl -X POST "https://{API_HOST}/identity-management/v2/groups" \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer {API_TOKEN}" \
+-d '{
+      "groupName": "New Subgroup Name",
+      "parentGroupId": "Parent_Group_ID",
+      "description": "Description of the new subgroup",
+      "permissions": {
+          "read": [
+              "papi",
+              "ccu"
+          ],
+          "write": [
+              "papi"
+          ],
+          "execute": [
+              "ccu"
+          ]
+      },
+      "notifications": {
+          "enabled": true,
+          "emails": [
+              "admin@example.com"
+          ]
+      }
+    }'
+
+
+. Breaking Down the Request:
+groupName: The name of the new subgroup you want to create.
+parentGroupId: The ID of the parent group under which this new subgroup will be created.
+description: A brief description of the subgroup.
+permissions: Specifies the permissions for this subgroup:
+read: Lists the services the subgroup can read (e.g., papi for Property Manager API, ccu for Content Control Utility).
+write: Lists the services the subgroup can modify.
+execute: Lists the services where the subgroup can execute actions (e.g., purge requests via ccu).
+notifications: Optional section to specify if notifications should be enabled and which email addresses should receive them.
+5. Example Permissions Breakdown:
+papi: Access to the Property Manager API.
+ccu: Access to the Content Control Utility (for cache purges).
+Adjust the services based on what your subgroup needs to manage.
+6. Execute the Request:
+Run the cURL command in your terminal, or use a REST client like Postman to execute the request. Ensure that the response indicates successful creation (HTTP status code 201).
+
+7. Verify the Subgroup:
+After running the API request, you can verify the creation of the subgroup by querying the list of groups or by checking the Akamai Control Center.
+
+Important Notes:
+Permissions Scope: Ensure that the services and permissions you specify are supported and available within your Akamai contract.
+Error Handling: If you receive any errors, check the response message for details and adjust your request accordingly.
