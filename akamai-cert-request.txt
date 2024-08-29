@@ -1,0 +1,192 @@
+To create a new certificate request in Akamai via the API, you typically use the Akamai Certificate Provisioning System (CPS) API. Below is an example of how to construct the API request to create a new certificate request.
+
+Step-by-Step API Request Example
+1. Prerequisites:
+API Credentials: Ensure you have your Akamai API client credentials (client token, client secret, and access token).
+API Host: The Akamai API endpoint for CPS (e.g., https://{API_HOST}/).
+Configuration ID: The ID of the CPS configuration you want to request a certificate for.
+2. API Endpoint:
+The endpoint for creating a new certificate request is typically:
+
+bash
+Copy code
+POST https://{API_HOST}/cps/v2/enrollments
+3. Construct the API Request:
+Here’s an example using cURL to create a new certificate request:
+
+bash
+Copy code
+curl -X POST "https://{API_HOST}/cps/v2/enrollments" \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer {API_TOKEN}" \
+-d '{
+      "certificateSigningRequest": {
+          "organization": "Your Organization Name",
+          "organizationalUnit": "Your Unit Name",
+          "country": "US",
+          "state": "Your State",
+          "locality": "Your City",
+          "commonName": "www.example.com",
+          "subjectAlternativeNames": [
+              "example.com",
+              "www.example.com"
+          ],
+          "keyAlgorithm": "RSA",
+          "keySize": 2048,
+          "digestAlgorithm": "SHA-256"
+      },
+      "validationType": "DV", // Use "DV", "OV", or "EV" based on the validation type needed
+      "networkConfiguration": {
+          "contractId": "1-1ABCD",
+          "groupId": "12345",
+          "certificateType": "SAN", // Use "SAN" or "WILDCARD" depending on the certificate type
+          "multiStacked": true // Set to true or false based on whether it's multi-stacked
+      },
+      "csrConfig": {
+          "upload": false, // Set to true if uploading an existing CSR
+          "certificateChain": false, // Include chain in CSR
+          "csr": "", // Use if uploading an existing CSR
+          "createSanRequest": false, // Set to true if SAN should be managed separately
+          "dnsNames": [
+              "example.com",
+              "www.example.com"
+          ]
+      }
+    }'
+4. Breaking Down the Request:
+certificateSigningRequest: Contains details about the certificate request:
+
+organization: Name of your organization.
+organizationalUnit: The unit within your organization.
+country: Country code (e.g., US for the United States).
+state: The state where your organization is located.
+locality: The city where your organization is located.
+commonName: The primary domain for the certificate.
+subjectAlternativeNames: Additional domains that should be covered by the certificate.
+keyAlgorithm: The algorithm for the key (e.g., RSA).
+keySize: The size of the key (e.g., 2048).
+digestAlgorithm: The digest algorithm (e.g., SHA-256).
+validationType: The type of validation for the certificate (DV, OV, or EV).
+
+networkConfiguration: Network settings related to the certificate:
+
+contractId: Your Akamai contract ID.
+groupId: The ID of the group associated with the certificate.
+certificateType: The type of certificate (SAN or WILDCARD).
+multiStacked: Boolean indicating if the certificate is multi-stacked.
+csrConfig: Configuration related to the Certificate Signing Request (CSR):
+
+upload: Set to true if you're uploading an existing CSR.
+certificateChain: Indicates if a certificate chain should be included.
+csr: Use this field to include an existing CSR if uploading.
+createSanRequest: Set to true if SAN (Subject Alternative Names) should be managed separately.
+dnsNames: The DNS names included in the CSR.
+5. Execute the Request:
+Run the cURL command in your terminal, or use a REST client like Postman to execute the request. Ensure that the response indicates successful creation (HTTP status code 201).
+
+6. Monitor the Request:
+After submitting the certificate request, you can monitor the status using the CPS API by querying the specific enrollment ID that will be provided in the response.
+
+Important Notes:
+Validation Type: Choose the appropriate validation type based on your needs—Domain Validation (DV), Organization Validation (OV), or Extended Validation (EV).
+Certificate Type: SAN certificates allow multiple domains, while WILDCARD certificates cover all subdomains of a single domain.
+CSR Management: If you need to manage SANs separately or upload your own CSR, ensure that your configuration matches your organization's requirements.
+This API request structure should help you initiate a new certificate request via Akamai’s CPS API.
+
+
+Creating a new certificate request via the Akamai Certificate Provisioning System (CPS) using Terraform involves configuring the appropriate Terraform provider and resources. Below is an example of how to set this up in Terraform.
+
+Step-by-Step Guide to Creating a Certificate Request with Terraform
+1. Prerequisites:
+Akamai Provider: Ensure you have the Akamai Terraform provider installed.
+API Credentials: You need your Akamai EdgeGrid credentials (client token, client secret, and access token).
+Configuration ID: The ID of the CPS configuration for which you want to request a certificate.
+2. Terraform Configuration:
+First, you need to configure the Akamai provider with your API credentials.
+
+hcl
+Copy code
+provider "akamai" {
+  edgerc = "~/.edgerc"
+  config_section = "default"
+}
+Alternatively, you can specify credentials directly within the Terraform file (not recommended for production environments):
+
+hcl
+Copy code
+provider "akamai" {
+  client_token = "your-client-token"
+  client_secret = "your-client-secret"
+  access_token = "your-access-token"
+  host = "your-akamai-host"
+}
+3. Define the Certificate Enrollment Resource:
+Now, define the resource for the certificate enrollment:
+
+hcl
+Copy code
+resource "akamai_cps_enrollment" "example_certificate" {
+  contract_id = "1-1ABCD"  # Replace with your contract ID
+  group_id    = "12345"    # Replace with your group ID
+
+  product_id   = "standard_tls" # The product ID, adjust as necessary
+  deployment_mode = "active"    # Use "active" or "staging" depending on your needs
+  cert_type    = "san"          # Use "san" or "wildcard" depending on your needs
+
+  # Certificate Signing Request (CSR) details
+  csr {
+    common_name              = "www.example.com"
+    subject_alternative_name = ["example.com", "www.example.com"]
+    country                  = "US"
+    state                    = "Your State"
+    locality                 = "Your City"
+    organization             = "Your Organization Name"
+    organizational_unit      = "Your Unit Name"
+    key_type                 = "rsa"       # or "ec" for elliptic curve
+    key_size                 = 2048        # Key size for RSA
+    digest_algorithm         = "sha256"    # Digest algorithm for the CSR
+  }
+
+  # Certificate validation type: DV, OV, or EV
+  validation_type = "dv"
+
+  network_configuration {
+    enable_multi_stacked  = true
+  }
+
+  # Optional: Notification settings
+  notifications {
+    enabled = true
+    emails  = ["admin@example.com"]
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+4. Apply the Configuration:
+Initialize Terraform: Run the following command to initialize Terraform and download the necessary providers:
+
+bash
+Copy code
+terraform init
+Plan the Deployment: Run the following command to see what changes will be made:
+
+bash
+Copy code
+terraform plan
+Apply the Configuration: Run the following command to apply the configuration and create the certificate request:
+
+bash
+Copy code
+terraform apply
+You’ll be prompted to confirm the action. Type yes to proceed.
+
+5. Monitor the Request:
+You can monitor the status of your certificate request through the Akamai Control Center or by querying the status via the Terraform state.
+
+Important Notes:
+Product ID: The product_id needs to match the type of certificate you are requesting, such as standard_tls, enhanced_tls, etc. Adjust based on your Akamai contract.
+Validation Type: Ensure that the validation type (DV, OV, or EV) matches your requirements.
+Lifecycle Management: The lifecycle block ensures that the resource is not destroyed until a new one is successfully created, which is important for maintaining service continuity.
+This Terraform configuration should guide you in creating a new certificate request on Akamai using the CPS API. Make sure to adjust the parameters according to your specific needs and Akamai setup.
