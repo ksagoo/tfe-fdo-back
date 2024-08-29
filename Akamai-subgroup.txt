@@ -48,3 +48,73 @@ After running the API request, you can verify the creation of the subgroup by qu
 Important Notes:
 Permissions Scope: Ensure that the services and permissions you specify are supported and available within your Akamai contract.
 Error Handling: If you receive any errors, check the response message for details and adjust your request accordingly.
+
+
+
+However, you can manage Akamai configurations using Terraform, but IAM (like creating subgroups or managing users) is generally handled through Akamai’s Control Center or via API calls directly, not through Terraform.
+
+Possible Alternatives:
+Using External Script Execution:
+
+You could use Terraform's local-exec provisioner or an external script to execute API calls that manage IAM components (like creating subgroups). This is a bit of a workaround and involves writing the necessary API logic in a script (e.g., using curl or a Python script) that Terraform would execute.
+Using Custom Providers:
+
+If there is a critical need, you could theoretically write a custom Terraform provider that interacts with the Akamai IAM API to create and manage subgroups. However, this requires deep knowledge of both Terraform provider development and the Akamai API.
+Example Using local-exec Provisioner:
+Here’s a hypothetical example where you might use a local-exec provisioner to run a script that creates a subgroup via the Akamai API:
+
+hcl
+Copy code
+provider "akamai" {
+  edgerc        = "~/.edgerc"
+  config_section = "default"
+}
+
+resource "null_resource" "create_akamai_subgroup" {
+  provisioner "local-exec" {
+    command = <<EOT
+    curl -X POST "https://{API_HOST}/identity-management/v2/groups" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${var.api_token}" \
+    -d '{
+          "groupName": "${var.subgroup_name}",
+          "parentGroupId": "${var.parent_group_id}",
+          "description": "${var.description}",
+          "permissions": {
+              "read": [
+                  "papi",
+                  "ccu"
+              ],
+              "write": [
+                  "papi"
+              ],
+              "execute": [
+                  "ccu"
+              ]
+          }
+        }'
+    EOT
+  }
+}
+
+variable "api_token" {
+  type = string
+}
+
+variable "subgroup_name" {
+  type = string
+}
+
+variable "parent_group_id" {
+  type = string
+}
+
+variable "description" {
+  type = string
+}
+
+Key Points:
+API Interaction: This method relies on external scripts to interact with the Akamai API, not native Terraform resources.
+Management: The management and tracking of IAM resources created this way would be somewhat outside Terraform’s state management, which can make it harder to track changes or roll back configurations.
+Conclusion:
+While you can't natively create Akamai subgroups using Terraform, you can integrate API calls using Terraform's provisioners or manage these resources directly through Akamai's API. For robust and native support, the Akamai Control Center or direct API usage would still be the most reliable method.
