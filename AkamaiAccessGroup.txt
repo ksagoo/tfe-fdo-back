@@ -1,0 +1,63 @@
+import os
+import requests
+import argparse
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+
+# Function to load credentials from the .edgerc file
+def load_edgerc(section="default"):
+    edgerc = EdgeRc(os.path.expanduser("~/.edgerc"))
+    base_url = f"https://{edgerc.get(section, 'host')}/"
+    session = requests.Session()
+    session.auth = EdgeGridAuth.from_edgerc(edgerc, section)
+    return session, base_url
+
+# Function to check if the access group exists
+def check_access_group_exists(session, base_url, group_name):
+    endpoint = f"{base_url}identity/v1/groups"
+    response = session.get(endpoint)
+
+    if response.status_code == 200:
+        groups = response.json()
+        for group in groups['groups']:
+            if group['groupName'] == group_name:
+                return True
+    else:
+        print(f"Error fetching access groups: {response.status_code}")
+    return False
+
+# Function to create the access group
+def create_access_group(session, base_url, group_name, description):
+    if not check_access_group_exists(session, base_url, group_name):
+        endpoint = f"{base_url}identity/v1/groups"
+        payload = {
+            "groupName": group_name,
+            "description": description
+        }
+        response = session.post(endpoint, json=payload)
+        if response.status_code == 201:
+            print(f"Access group '{group_name}' created successfully.")
+        else:
+            print(f"Failed to create access group. Status code: {response.status_code}")
+            print(f"Response: {response.text}")
+    else:
+        print(f"Access group '{group_name}' already exists.")
+
+# Main function to handle command-line arguments
+def main():
+    parser = argparse.ArgumentParser(description="Create an Akamai access group.")
+    parser.add_argument("group_name", help="Name of the access group to be created")
+    parser.add_argument("description", help="Description for the new access group")
+    parser.add_argument("--env", default="default", help="Environment section in .edgerc file (default or prod)")
+
+    args = parser.parse_args()
+
+    session, base_url = load_edgerc(section=args.env)
+
+    create_access_group(session, base_url, args.group_name, args.description)
+
+if __name__ == "__main__":
+    main()
+//Execution 
+python akamai_access_group.py "NewAccessGroup" "This is a test group"
+//With prod Env
+python akamai_access_group.py "NewAccessGroup" "This is a test group" --env prod
