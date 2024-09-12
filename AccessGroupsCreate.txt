@@ -36,7 +36,7 @@ def check_group_exists(session, base_url, group_name):
     return False
 
 # Function to create a new group
-def create_group(session, base_url, group_name, parent_group_id):
+def create_group(session, base_url, group_name, parent_group_id="198338"):
     url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
     headers = {
         "accept": "application/json",
@@ -59,7 +59,7 @@ def create_group(session, base_url, group_name, parent_group_id):
 def main():
     parser = argparse.ArgumentParser(description="Create an Akamai Access Group if it doesn't already exist.")
     parser.add_argument("group_name", help="The name of the group to create.")
-    parser.add_argument("parent_group_id", help="The ID of the parent group.")
+    parser.add_argument("--parent_group_id", default="198338", help="The ID of the parent group. Defaults to '198338'.")
     parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
     parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
 
