@@ -116,9 +116,13 @@ def main():
 
     args = parser.parse_args()
 
+    # Trim leading/trailing spaces from input values
+    group_name = args.group_name.strip()
+    parent_group_name = args.parent_group_name.strip() if args.parent_group_name else None
+
     # Debugging: Print the parameter values being used
-    print(f"Group Name: {args.group_name}")
-    print(f"Parent Group Name: {args.parent_group_name}")
+    print(f"Group Name: '{group_name}'")
+    print(f"Parent Group Name: '{parent_group_name}'")
     print(f"Parent Group ID: {args.parent_group_id}")
     print(f"EdgeRC File: {args.edgerc_file}")
     print(f"Section Name: {args.section_name}")
@@ -127,15 +131,15 @@ def main():
     session, base_url = setup_session(edgerc_file, args.section_name)
     
     group_exists, existing_group_id, resolved_parent_group_id = check_group_exists(
-        session, base_url, args.group_name, args.parent_group_name, args.parent_group_id
+        session, base_url, group_name, parent_group_name, args.parent_group_id
     )
     
     if group_exists is None:
         print("Error checking group existence. Exiting without creating the group.")
     elif not group_exists:
-        create_group(session, base_url, args.group_name, resolved_parent_group_id)
+        create_group(session, base_url, group_name, resolved_parent_group_id)
     else:
-        print(f"Group '{args.group_name}' already exists under parent group ID '{resolved_parent_group_id}' with groupId '{existing_group_id}'. No action needed.")
+        print(f"Group '{group_name}' already exists under parent group ID '{resolved_parent_group_id}' with groupId '{existing_group_id}'. No action needed.")
 
 if __name__ == "__main__":
     main()
