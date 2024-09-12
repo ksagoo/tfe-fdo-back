@@ -35,11 +35,13 @@ def check_group_exists(session, base_url, group_name):
             for group in groups:
                 if group.get("name") == group_name:
                     return True
+            return False  # Group does not exist
         else:
             print(f"Failed to fetch groups: {response.status_code} - {response.text}")
+            return None
     except Exception as e:
         print(f"Error during group existence check: {e}")
-    return False
+        return None
 
 # Function to create a new group
 def create_group(session, base_url, group_name, parent_group_id="198338"):
@@ -78,7 +80,11 @@ def main():
     edgerc_file = os.path.expanduser(args.edgerc_file)
     session, base_url = setup_session(edgerc_file, args.section_name)
     
-    if not check_group_exists(session, base_url, args.group_name):
+    group_exists = check_group_exists(session, base_url, args.group_name)
+    
+    if group_exists is None:
+        print("Error checking group existence. Exiting without creating the group.")
+    elif not group_exists:
         create_group(session, base_url, args.group_name, args.parent_group_id)
     else:
         print(f"Group '{args.group_name}' already exists. No action needed.")
