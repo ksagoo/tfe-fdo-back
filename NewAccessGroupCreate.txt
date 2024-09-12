@@ -48,9 +48,9 @@ def check_group_exists_under_parent(parent_group, group_name):
     for subgroup in parent_group.get("subGroups", []):
         print(f"Subgroup under parent: {subgroup.get('groupName')} (ID: {subgroup.get('groupId')})")
         if subgroup.get("groupName") == group_name:
-            print(f"Duplicate found: {subgroup.get('groupName')} matches {group_name}")
-            return True
-    return False
+            print(f"Duplicate found: {subgroup.get('groupName')} (ID: {subgroup.get('groupId')}) matches {group_name}")
+            return True, subgroup.get('groupId')
+    return False, None
 
 # Function to check if a group already exists under the specified parent group
 def check_group_exists(session, base_url, group_name, parent_group_id):
@@ -68,16 +68,17 @@ def check_group_exists(session, base_url, group_name, parent_group_id):
             parent_group = find_parent_group(groups, parent_group_id)
             if parent_group:
                 print(f"Found parent group: {parent_group.get('groupName')} (ID: {parent_group.get('groupId')})")
-                return check_group_exists_under_parent(parent_group, group_name)
+                group_exists, existing_group_id = check_group_exists_under_parent(parent_group, group_name)
+                return group_exists, existing_group_id
             else:
                 print(f"Parent group ID {parent_group_id} not found in the hierarchy.")
-                return None
+                return None, None
         else:
             print(f"Failed to fetch groups: {response.status_code} - {response.text}")
-            return None
+            return None, None
     except Exception as e:
         print(f"Error during group existence check: {e}")
-        return None
+        return None, None
 
 # Function to create a new group and output the groupId of the created group
 def create_group(session, base_url, group_name, parent_group_id=199633):
@@ -123,14 +124,14 @@ def main():
     edgerc_file = os.path.expanduser(args.edgerc_file)
     session, base_url = setup_session(edgerc_file, args.section_name)
     
-    group_exists = check_group_exists(session, base_url, args.group_name, args.parent_group_id)
+    group_exists, existing_group_id = check_group_exists(session, base_url, args.group_name, args.parent_group_id)
     
     if group_exists is None:
         print("Error checking group existence. Exiting without creating the group.")
     elif not group_exists:
         create_group(session, base_url, args.group_name, args.parent_group_id)
     else:
-        print(f"Group '{args.group_name}' already exists under parent group ID '{args.parent_group_id}'. No action needed.")
+        print(f"Group '{args.group_name}' already exists under parent group ID '{args.parent_group_id}' with groupId '{existing_group_id}'. No action needed.")
 
 if __name__ == "__main__":
     main()
