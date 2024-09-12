@@ -55,6 +55,9 @@ def check_group_exists(session, base_url, group_name, parent_group_id):
 
         if response.status_code == 200:
             groups = response.json()
+            print("Groups returned from API:")
+            for group in groups:
+                print(f"- Group Name: {group.get('groupName')}, Group ID: {group.get('groupId')}")
             if check_group_exists_under_parent(groups, group_name, parent_group_id):
                 return True
             return False  # Group does not exist under the specified parent
