@@ -40,10 +40,11 @@ def check_group_exists_under_parent(groups, group_name, parent_group_id):
             print(f"Found parent group: {parent_group_name} (ID: {group.get('groupId')})")
             # Now check if the target group exists under this parent group's first-level subgroups
             for subgroup in group.get("subGroups", []):
-                print(f"Subgroup under parent: {subgroup.get('groupName')} (ID: {subgroup.get('groupId')})")
-                if subgroup.get("groupName") == group_name:
-                    print(f"Duplicate found: {subgroup.get('groupName')} matches {group_name}")
-                    return True
+                if subgroup.get("parentGroupId") == parent_group_id:
+                    print(f"Subgroup under parent: {subgroup.get('groupName')} (ID: {subgroup.get('groupId')})")
+                    if subgroup.get("groupName") == group_name:
+                        print(f"Duplicate found: {subgroup.get('groupName')} matches {group_name}")
+                        return True
             return False  # Group does not exist under the specified parent at the first level
     return False  # Parent group not found
 
@@ -71,7 +72,7 @@ def check_group_exists(session, base_url, group_name, parent_group_id):
         return None
 
 # Function to create a new group and output the groupId of the created group
-def create_group(session, base_url, group_name, parent_group_id="grp_199633"):
+def create_group(session, base_url, group_name, parent_group_id=199633):
     try:
         url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
         print(f"Creating group at URL: {url}")
@@ -99,7 +100,7 @@ def create_group(session, base_url, group_name, parent_group_id="grp_199633"):
 def main():
     parser = argparse.ArgumentParser(description="Create an Akamai Access Group if it doesn't already exist.")
     parser.add_argument("group_name", help="The name of the group to create.")
-    parser.add_argument("--parent_group_id", default="grp_199633", help="The ID of the parent group. Defaults to 'grp_199633'.")
+    parser.add_argument("--parent_group_id", type=int, default=199633, help="The numeric ID of the parent group. Defaults to '199633'.")
     parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
     parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
 
