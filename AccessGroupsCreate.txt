@@ -1,0 +1,77 @@
+import os
+import argparse
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+
+# Function to load EdgeRc and set up authentication
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/"
+        session = requests.Session()
+        session.auth = EdgeGridAuth(
+            client_token=edgerc.get(section_name, 'client_token'),
+            client_secret=edgerc.get(section_name, 'client_secret'),
+            access_token=edgerc.get(section_name, 'access_token')
+        )
+        return session, base_url
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Function to check if a group already exists
+def check_group_exists(session, base_url, group_name):
+    url = urljoin(base_url, "identity-management/v3/user-admin/groups")
+    headers = {"accept": "application/json"}
+    response = session.get(url, headers=headers)
+
+    if response.status_code == 200:
+        groups = response.json()
+        for group in groups:
+            if group.get("name") == group_name:
+                return True
+    else:
+        print(f"Failed to fetch groups: {response.status_code} - {response.text}")
+    return False
+
+# Function to create a new group
+def create_group(session, base_url, group_name, parent_group_id):
+    url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
+    }
+    payload = {
+        "groupName": group_name
+    }
+    
+    response = session.post(url, json=payload, headers=headers)
+    
+    if response.status_code == 201:
+        print(f"Group '{group_name}' created successfully.")
+    elif response.status_code == 409:
+        print(f"Group '{group_name}' already exists.")
+    else:
+        print(f"Failed to create group: {response.status_code} - {response.text}")
+
+# Main logic
+def main():
+    parser = argparse.ArgumentParser(description="Create an Akamai Access Group if it doesn't already exist.")
+    parser.add_argument("group_name", help="The name of the group to create.")
+    parser.add_argument("parent_group_id", help="The ID of the parent group.")
+    parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
+    parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
+
+    args = parser.parse_args()
+
+    edgerc_file = os.path.expanduser(args.edgerc_file)
+    session, base_url = setup_session(edgerc_file, args.section_name)
+    
+    if check_group_exists(session, base_url, args.group_name):
+        print(f"Group '{args.group_name}' already exists.")
+    else:
+        create_group(session, base_url, args.group_name, args.parent_group_id)
+
+if __name__ == "__main__":
+    main()
