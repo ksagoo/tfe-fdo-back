@@ -39,8 +39,9 @@ def check_group_exists_under_parent(groups, group_name, parent_group_id):
             print(f"Found parent group: {parent_group_name} (ID: {group.get('groupId')})")
             # Now check if the target group exists under this parent group's first-level subgroups
             for subgroup in group.get("subGroups", []):
-                print(f"Checking subgroup: {subgroup.get('groupName')} (ID: {subgroup.get('groupId')})")
+                print(f"Subgroup under parent: {subgroup.get('groupName')} (ID: {subgroup.get('groupId')})")
                 if subgroup.get("groupName") == group_name:
+                    print(f"Duplicate found: {subgroup.get('groupName')} matches {group_name}")
                     return True
             return False  # Group does not exist under the specified parent at the first level
     return False  # Parent group not found
