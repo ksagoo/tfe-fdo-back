@@ -178,9 +178,16 @@ def main():
     # Determine which parent group ID to use
     if args.parent_group_id:
         resolved_parent_group_id = args.parent_group_id
-        parent_group_name = None  # Ignore parent group name if ID is provided
     elif args.parent_group_name:
-        resolved_parent_group_id = None  # To be determined based on the parent group name
+        # Resolve the parent group name to an ID
+        group_exists, existing_group_id, resolved_parent_group = check_group_exists(
+            session, base_url, "", args.parent_group_name, None
+        )
+        if not group_exists and resolved_parent_group is not None:
+            resolved_parent_group_id = resolved_parent_group.get('groupId')
+        else:
+            print(f"Error: Could not resolve parent group name '{args.parent_group_name}' to an ID. Exiting.")
+            return
     else:
         resolved_parent_group_id = default_parent_group_id
 
@@ -188,7 +195,7 @@ def main():
     session, base_url = setup_session(edgerc_file, args.section_name)
     
     group_exists, existing_group_id, resolved_parent_group = check_group_exists(
-        session, base_url, group_name, args.parent_group_name, resolved_parent_group_id
+        session, base_url, group_name, None, resolved_parent_group_id
     )
     
     if group_exists is None:
