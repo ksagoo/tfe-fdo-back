@@ -9,7 +9,8 @@ Description:
     This script manages the creation of Akamai access groups. It checks if a group 
     exists under a specified parent group and creates it if it does not exist. The 
     script also supports the creation of regional subgroups (APAC, EMEA, AMER) under 
-    the newly created group.
+    the newly created group. Additionally, `Prod` and `PreProd` subgroups are 
+    automatically created under each regional subgroup.
 
 Parameters:
     group_name_segment (required) : The name segment of the group to create.
@@ -38,8 +39,13 @@ Usage:
     - To create a group with a custom prefix and specific regions:
         python script.py "NewGroupNameSegment" --group_prefix="ABCD-DDoS-BSB" --regions APAC EMEA --env=DEV
 
+Notes:
+    - Under each regional subgroup (APAC, EMEA, AMER), `Prod` and `PreProd` subgroups
+      are automatically created.
+
 ===================================================================================
 """
+
 
 import os
 import argparse
