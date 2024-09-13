@@ -109,27 +109,29 @@ def create_group(session, base_url, group_name, parent_group_id):
         return None
 
 # Function to check and create missing subgroups
-def ensure_subgroups(session, base_url, parent_group, region):
-    region_group_name = f"{parent_group.get('groupName')}-{region}"
-    
-    # Check if the region group exists
-    region_group_exists, region_group_id = check_group_exists_under_parent(parent_group, region_group_name)
-    if region_group_exists:
-        print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
+def ensure_subgroups(session, base_url, parent_group_id, region):
+    parent_group_url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
+    response = session.get(parent_group_url)
+    if response.status_code == 200:
+        parent_group = response.json()
+        region_group_name = f"{parent_group.get('groupName')}-{region}"
+        
+        region_group_exists, region_group_id = check_group_exists_under_parent(parent_group, region_group_name)
+        if region_group_exists:
+            print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
+        else:
+            region_group_id = create_group(session, base_url, region_group_name, parent_group_id)
+        
+        if region_group_id:
+            ensure_subgroup(session, base_url, region_group_id, f"{region_group_name}-PreProd")
+            ensure_subgroup(session, base_url, region_group_id, f"{region_group_name}-Prod")
     else:
-        # Create the region group if it doesn't exist
-        region_group_id = create_group(session, base_url, region_group_name, parent_group.get('groupId'))
-    
-    # If region group exists or is created, ensure PreProd and Prod subgroups are created
-    if region_group_id:
-        ensure_subgroup(session, base_url, region_group_id, f"{region_group_name}-PreProd")
-        ensure_subgroup(session, base_url, region_group_id, f"{region_group_name}-Prod")
+        print(f"Failed to fetch parent group details for groupId: {parent_group_id}")
 
 # Function to ensure a subgroup exists under a parent group
 def ensure_subgroup(session, base_url, parent_group_id, subgroup_name):
-    # Retrieve the parent group to check for its subgroups
-    url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
-    response = session.get(url)
+    parent_group_url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
+    response = session.get(parent_group_url)
     if response.status_code == 200:
         parent_group = response.json()
         subgroup_exists, subgroup_id = check_group_exists_under_parent(parent_group, subgroup_name)
@@ -195,11 +197,11 @@ def main():
         new_group_id = create_group(session, base_url, group_name, resolved_parent_group_id)
         if new_group_id:
             for region in args.regions:
-                ensure_subgroups(session, base_url, resolved_parent_group, region)
+                ensure_subgroups(session, base_url, new_group_id, region)
     else:
         print(f"Group '{group_name}' already exists under parent group '{resolved_parent_group.get('groupName')}' with groupId '{existing_group_id}'. Checking for missing subgroups...")
         for region in args.regions:
-            ensure_subgroups(session, base_url, resolved_parent_group, region)
+            ensure_subgroups(session, base_url, existing_group_id, region)
 
 if __name__ == "__main__":
     main()
