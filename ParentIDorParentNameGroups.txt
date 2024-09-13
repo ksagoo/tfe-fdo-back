@@ -192,4 +192,7 @@ def main():
     elif not group_exists:
         create_group(session, base_url, group_name, resolved_parent_group_id)
     else:
-        print(f"Group '{group_name}' already exists under parent group ID '{resolved_parent_group_id}'
+        print(f"Group '{group_name}' already exists under parent group ID '{resolved_parent_group_id}' with groupId '{existing_group_id}'. No action needed.")
+
+if __name__ == "__main__":
+    main()
