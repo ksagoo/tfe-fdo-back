@@ -14,6 +14,12 @@ def setup_session(edgerc_file, section_name):
         client_secret = edgerc.get(section_name, 'client_secret')
         access_token = edgerc.get(section_name, 'access_token')
         
+        # Debugging output
+        print(f"Base URL: {base_url}")
+        print(f"Client Token: {client_token}")
+        print(f"Client Secret: {client_secret}")
+        print(f"Access Token: {access_token}")
+        
         session = requests.Session()
         session.auth = EdgeGridAuth(
             client_token=client_token,
@@ -48,11 +54,16 @@ def check_group_exists_under_parent(parent_group, group_name):
 def check_group_exists(session, base_url, group_name, parent_group_name=None, parent_group_id=None):
     try:
         url = urljoin(base_url, "identity-management/v3/user-admin/groups")
+        print(f"Checking group existence at URL: {url}")
         headers = {"accept": "application/json"}
         response = session.get(url, headers=headers)
 
         if response.status_code == 200:
             groups = response.json()
+            
+            # Debugging output
+            print("Complete JSON response of groups:")
+            print(json.dumps(groups, indent=4))
 
             parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
             if parent_group:
@@ -71,6 +82,7 @@ def check_group_exists(session, base_url, group_name, parent_group_name=None, pa
 def create_group(session, base_url, group_name, parent_group_id):
     try:
         url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
+        print(f"Creating group at URL: {url}")
         headers = {
             "accept": "application/json",
             "content-type": "application/json"
@@ -83,7 +95,9 @@ def create_group(session, base_url, group_name, parent_group_id):
         
         if response.status_code == 201:
             created_group = response.json()
-            return created_group.get('groupId')
+            group_id = created_group.get('groupId')
+            print(f"Group '{group_name}' created successfully with groupId: {group_id}")
+            return group_id
         elif response.status_code == 409:
             print(f"Group '{group_name}' already exists.")
             return None
@@ -94,19 +108,36 @@ def create_group(session, base_url, group_name, parent_group_id):
         print(f"Error during group creation: {e}")
         return None
 
-# Function to create subgroups for regions and their environments
-def create_subgroups(session, base_url, parent_group_id, region):
+# Function to check and create missing subgroups
+def ensure_subgroups(session, base_url, parent_group_id, region):
     region_group_name = f"{parent_group_id}-{region}"
-    region_group_id = create_group(session, base_url, region_group_name, parent_group_id)
     
+    # Check if the region group exists
+    region_group_exists, region_group_id = check_group_exists_under_parent(parent_group_id, region_group_name)
+    if region_group_exists:
+        print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
+    else:
+        # Create the region group if it doesn't exist
+        region_group_id = create_group(session, base_url, region_group_name, parent_group_id)
+    
+    # If region group exists or is created, ensure PreProd and Prod subgroups are created
     if region_group_id:
-        create_group(session, base_url, f"{region_group_name}-PreProd", region_group_id)
-        create_group(session, base_url, f"{region_group_name}-Prod", region_group_id)
+        ensure_subgroup(session, base_url, region_group_id, f"{region_group_name}-PreProd")
+        ensure_subgroup(session, base_url, region_group_id, f"{region_group_name}-Prod")
+
+# Function to ensure a subgroup exists under a parent group
+def ensure_subgroup(session, base_url, parent_group_id, subgroup_name):
+    subgroup_exists, subgroup_id = check_group_exists_under_parent(parent_group_id, subgroup_name)
+    if subgroup_exists:
+        print(f"Subgroup '{subgroup_name}' already exists with groupId: {subgroup_id}")
+    else:
+        create_group(session, base_url, subgroup_name, parent_group_id)
 
 # Main logic
 def main():
     parser = argparse.ArgumentParser(description="Create an Akamai Access Group if it doesn't already exist.")
     parser.add_argument("group_name_segment", help="The name segment of the group to create.")
+    parser.add_argument("--group_prefix", default="KSSS-DDoS-KSD", help="The prefix for the group name. Default is 'KSSS-DDoS-KSD'.")
     parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER"], default=["APAC", "EMEA", "AMER"], 
                         help="Regions for which subgroups will be created (APAC, EMEA, AMER).")
     parser.add_argument("--parent_group_name", help="The name of the parent group. Provide either this or --parent_group_id.")
@@ -117,8 +148,20 @@ def main():
 
     args = parser.parse_args()
 
-    # Prepare the full group name
-    group_name = f"KSSS-DDoS-KSD-{args.group_name_segment.strip().upper()}"
+    # Debugging output: Print the parameters being used
+    print("Parameters being used:")
+    print(f"Group Name Segment: {args.group_name_segment}")
+    print(f"Group Prefix: {args.group_prefix}")
+    print(f"Regions: {args.regions}")
+    print(f"Parent Group Name: {args.parent_group_name}")
+    print(f"Parent Group ID: {args.parent_group_id}")
+    print(f"Environment: {args.env}")
+    print(f"EdgeRC File: {args.edgerc_file}")
+    print(f"Section Name: {args.section_name}")
+
+    # Prepare the full group name with the option to override the prefix
+    group_name = f"{args.group_prefix}-{args.group_name_segment.strip().upper()}"
+    print(f"Constructed Group Name: {group_name}")
 
     # Determine default parent group ID based on environment
     default_parent_group_id = 199633 if args.env == "DEV" else 1234567
@@ -145,9 +188,11 @@ def main():
         new_group_id = create_group(session, base_url, group_name, resolved_parent_group_id)
         if new_group_id:
             for region in args.regions:
-                create_subgroups(session, base_url, new_group_id, region)
+                ensure_subgroups(session, base_url, new_group_id, region)
     else:
-        print(f"Group '{group_name}' already exists under parent group ID '{resolved_parent_group_id}' with groupId '{existing_group_id}'. No action needed.")
+        print(f"Group '{group_name}' already exists under parent group ID '{resolved_parent_group_id}' with groupId '{existing_group_id}'. Checking for missing subgroups...")
+        for region in args.regions:
+            ensure_subgroups(session, base_url, existing_group_id, region)
 
 if __name__ == "__main__":
     main()
