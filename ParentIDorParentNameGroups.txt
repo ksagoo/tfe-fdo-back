@@ -1,3 +1,41 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+===================================================================================
+                                Akamai Access Group Management Script
+===================================================================================
+Script Name:
+    Akamai Access Group Management Script
+
+Description:
+    This script manages the creation of Akamai access groups. It checks if a group 
+    exists under a specified parent group and creates it if it does not exist.
+
+Parameters:
+    group_name (required)      : The name of the group to create.
+    --parent_group_name        : The name of the parent group. Provide either this or --parent_group_id.
+    --parent_group_id          : The numeric ID of the parent group. Provide either this or --parent_group_name.
+    --env                      : The environment (DEV or PROD). Default is DEV.
+    --edgerc_file              : Path to the .edgerc file. Default is '~/.edgerc'.
+    --section_name             : Section name in the .edgerc file. Default is 'default'.
+
+Usage:
+    - To create a group in the DEV environment with a default parent group ID:
+        python script.py "NewGroupName" --env=DEV
+
+    - To create a group in the PROD environment using a specific parent group ID:
+        python script.py "NewGroupName" --env=PROD --parent_group_id=1234567
+
+    - To create a group using a parent group name:
+        python script.py "NewGroupName" --parent_group_name="Main Street Corporation"
+
+    - To create a group using a parent group ID in the PROD environment:
+        python script.py "NewGroupName" --env=PROD --parent_group_id=1234567
+
+===================================================================================
+"""
+
 import os
 import argparse
 import requests
@@ -154,7 +192,4 @@ def main():
     elif not group_exists:
         create_group(session, base_url, group_name, resolved_parent_group_id)
     else:
-        print(f"Group '{group_name}' already exists under parent group ID '{resolved_parent_group_id}' with groupId '{existing_group_id}'. No action needed.")
-
-if __name__ == "__main__":
-    main()
+        print(f"Group '{group_name}' already exists under parent group ID '{resolved_parent_group_id}'
