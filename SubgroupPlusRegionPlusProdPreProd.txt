@@ -1,3 +1,46 @@
+"""
+===================================================================================
+                                Akamai Access Group Management Script
+===================================================================================
+Script Name:
+    Akamai Access Group Management Script
+
+Description:
+    This script manages the creation of Akamai access groups. It checks if a group 
+    exists under a specified parent group and creates it if it does not exist. The 
+    script also supports the creation of regional subgroups (APAC, EMEA, AMER) under 
+    the newly created group.
+
+Parameters:
+    group_name_segment (required) : The name segment of the group to create.
+    --group_prefix                 : The prefix for the group name. Default is 'KSSS-DDoS-KSD'.
+    --regions                      : Regions for which subgroups will be created (APAC, EMEA, AMER). 
+                                     Default is all three: APAC, EMEA, AMER.
+    --parent_group_name            : The name of the parent group. Provide either this or --parent_group_id.
+    --parent_group_id              : The numeric ID of the parent group. Provide either this or --parent_group_name.
+    --env                          : The environment (DEV or PROD). Default is DEV.
+    --edgerc_file                  : Path to the .edgerc file. Default is '~/.edgerc'.
+    --section_name                 : Section name in the .edgerc file. Default is 'default'.
+
+Usage:
+    - To create a group in the DEV environment with a default parent group ID:
+        python script.py "NewGroupNameSegment" --env=DEV
+
+    - To create a group in the PROD environment using a specific parent group ID:
+        python script.py "NewGroupNameSegment" --env=PROD --parent_group_id=1234567
+
+    - To create a group using a parent group name:
+        python script.py "NewGroupNameSegment" --parent_group_name="Main Street Corporation"
+
+    - To create a group using a parent group ID in the PROD environment:
+        python script.py "NewGroupNameSegment" --env=PROD --parent_group_id=1234567
+
+    - To create a group with a custom prefix and specific regions:
+        python script.py "NewGroupNameSegment" --group_prefix="ABCD-DDoS-BSB" --regions APAC EMEA --env=DEV
+
+===================================================================================
+"""
+
 import os
 import argparse
 import requests
@@ -157,39 +200,47 @@ def main():
 
     args = parser.parse_args()
 
+    # Trim any leading or trailing whitespace from the arguments
+    group_name_segment = args.group_name_segment.strip()
+    group_prefix = args.group_prefix.strip()
+    parent_group_name = args.parent_group_name.strip() if args.parent_group_name else None
+
     edgerc_file = os.path.expanduser(args.edgerc_file)
     session, base_url = setup_session(edgerc_file, args.section_name)
     
     # Debugging output: Print the parameters being used
     print("Parameters being used:")
-    print(f"Group Name Segment: {args.group_name_segment}")
-    print(f"Group Prefix: {args.group_prefix}")
+    print(f"Group Name Segment: {group_name_segment}")
+    print(f"Group Prefix: {group_prefix}")
     print(f"Regions: {args.regions}")
-    print(f"Parent Group Name: {args.parent_group_name}")
+    print(f"Parent Group Name: {parent_group_name}")
     print(f"Parent Group ID: {args.parent_group_id}")
     print(f"Environment: {args.env}")
     print(f"EdgeRC File: {args.edgerc_file}")
     print(f"Section Name: {args.section_name}")
 
-    # Prepare the full group name with the option to override the prefix
-    group_name = f"{args.group_prefix}-{args.group_name_segment.strip().upper()}"
-    print(f"Constructed Group Name: {group_name}")
+    # Set default parent group ID based on environment
+    if args.env == "DEV":
+        default_parent_group_id = 185773
+    else:  # PROD
+        default_parent_group_id = 1234567
 
-    # Determine default parent group ID based on environment
-    default_parent_group_id = 185773
+    # Prepare the full group name with the option to override the prefix
+    group_name = f"{group_prefix}-{group_name_segment.upper()}"
+    print(f"Constructed Group Name: {group_name}")
 
     # Determine which parent group ID to use
     if args.parent_group_id:
         resolved_parent_group_id = args.parent_group_id
-    elif args.parent_group_name:
+    elif parent_group_name:
         # Resolve the parent group name to an ID
         group_exists, existing_group_id, resolved_parent_group = check_group_exists(
-            session, base_url, "", args.parent_group_name, None
+            session, base_url, "", parent_group_name, None
         )
         if not group_exists and resolved_parent_group is not None:
             resolved_parent_group_id = resolved_parent_group.get('groupId')
         else:
-            print(f"Error: Could not resolve parent group name '{args.parent_group_name}' to an ID. Exiting.")
+            print(f"Error: Could not resolve parent group name '{parent_group_name}' to an ID. Exiting.")
             return
     else:
         resolved_parent_group_id = default_parent_group_id
