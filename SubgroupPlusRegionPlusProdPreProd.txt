@@ -126,12 +126,19 @@ def ensure_subgroups(session, base_url, parent_group, region):
         ensure_subgroup(session, base_url, region_group_id, f"{region_group_name}-Prod")
 
 # Function to ensure a subgroup exists under a parent group
-def ensure_subgroup(session, base_url, parent_group, subgroup_name):
-    subgroup_exists, subgroup_id = check_group_exists_under_parent(parent_group, subgroup_name)
-    if subgroup_exists:
-        print(f"Subgroup '{subgroup_name}' already exists with groupId: {subgroup_id}")
+def ensure_subgroup(session, base_url, parent_group_id, subgroup_name):
+    # Retrieve the parent group to check for its subgroups
+    url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
+    response = session.get(url)
+    if response.status_code == 200:
+        parent_group = response.json()
+        subgroup_exists, subgroup_id = check_group_exists_under_parent(parent_group, subgroup_name)
+        if subgroup_exists:
+            print(f"Subgroup '{subgroup_name}' already exists with groupId: {subgroup_id}")
+        else:
+            create_group(session, base_url, subgroup_name, parent_group_id)
     else:
-        create_group(session, base_url, subgroup_name, parent_group.get('groupId'))
+        print(f"Failed to fetch parent group details for groupId: {parent_group_id}")
 
 # Main logic
 def main():
