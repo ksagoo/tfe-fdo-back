@@ -95,57 +95,6 @@ This function recursively searches through the group hierarchy to find a parent 
 - If a group matches the `parent_group_name` or `parent_group_id`, it returns that group.
 - Recursively searches through subgroups if the group is not found at the current level.
 
-## Summary
-
-This document provides a detailed explanation of the Akamai Access Group Management Script. The script is designed to automate the creation and management of access groups within the Akamai platform, ensuring that necessary groups and subgroups are created under specified parent groups. It is environment-aware, functioning differently based on whether it is running in a development or production environment.
-
-The main function orchestrates the script's flow, setting up the necessary session and checking for the existence of groups. If a group does not exist, the script creates it, along with regional subgroups (APAC, EMEA, AMER) and their respective Prod and PreProd subgroups. The script is highly flexible, allowing for group creation based on either a parent group name or ID.
-
-## Usage
-
-Here are some examples of how to execute the script:
-
-1. **Create a group in the DEV environment with a default parent group ID:**
-
-   ```bash
-   python script.py "TestGroup" --env=DEV
-   ```
-
-2. **Create a group in the PROD environment with a specific parent group ID:**
-
-   ```bash
-   python script.py "ProdGroup" --env=PROD --parent_group_id=1234567
-   ```
-
-3. **Create a group using a parent group name:**
-
-   ```bash
-   python script.py "NamedGroup" --parent_group_name="Main Street Corporation"
-   ```
-
-4. **Create a group with a custom prefix in the DEV environment:**
-
-   ```bash
-   python script.py "CustomSegment" --group_prefix="ABCD-DDoS-KSD" --env=DEV
-   ```
-
-5. **Create a group and specify regions for subgroups:**
-
-   ```bash
-   python script.py "RegionalGroup" --regions="APAC,EMEA" --env=DEV
-   ```
-
-6. **Specify a custom `.edgerc` file and section name:**
-
-   ```bash
-   python script.py "CustomEdgercGroup" --parent_group_id=199633 --edgerc_file="/path/to/.edgerc" --section_name="custom_section"
-   ```
-
-## Summary
-
-This document provides a detailed explanation of the Akamai Access Group Management Script. The script is designed to automate the creation and management of access groups within the Akamai platform, ensuring that necessary groups and subgroups are created under specified parent groups. It is environment-aware, functioning differently based on whether it is running in a development or production environment.
-
-The main function orchestrates the script's flow, setting up the necessary session and checking for the existence of groups. If a group does not exist, the script creates it, along with regional subgroups (APAC, EMEA, AMER) and their respective Prod and PreProd subgroups. The script is highly flexible, allowing for group creation based on either a parent group name or ID.
 
 ### 5. `check_group_exists_under_parent` Function
 
@@ -244,42 +193,54 @@ Here are some examples of how to execute the script:
    ```bash
    python script.py "CustomEdgercGroup" --parent_group_id=199633 --edgerc_file="/path/to/.edgerc" --section_name="custom_section"
    ```
+## Summary
 
-### 5. `check_group_exists_under_parent` Function
+This document provides a detailed explanation of the Akamai Access Group Management Script. The script is designed to automate the creation and management of access groups within the Akamai platform, ensuring that necessary groups and subgroups are created under specified parent groups. It is environment-aware, functioning differently based on whether it is running in a development or production environment.
 
-```python
-def check_group_exists_under_parent(parent_group, group_name):
-```
+The main function orchestrates the script's flow, setting up the necessary session and checking for the existence of groups. If a group does not exist, the script creates it, along with regional subgroups (APAC, EMEA, AMER) and their respective Prod and PreProd subgroups. The script is highly flexible, allowing for group creation based on either a parent group name or ID.
 
-This function checks if a specific group exists under the identified parent group.
+## Usage
 
-**Parameters:**
-- **`parent_group`:** The parent group object under which to search.
-- **`group_name`:** The name of the group to check for.
+Here are some examples of how to execute the script:
 
-**Returns:**
-- A tuple `(True, groupId)` if the group exists, or `(False, None)` if it does not.
+1. **Create a group in the DEV environment with a default parent group ID:**
 
-**Key Steps:**
-- Iterates through the subgroups of the parent group.
-- If a subgroup matches the `group_name`, it returns `True` along with the group's ID.
-- If no match is found, it returns `False`.
+   ```bash
+   python script.py "TestGroup" --env=DEV
+   ```
 
-### 7. `ensure_subgroups` Function
+2. **Create a group in the PROD environment with a specific parent group ID:**
 
-```python
-def ensure_subgroups(session, base_url, parent_group_id, region):
-```
+   ```bash
+   python script.py "ProdGroup" --env=PROD --parent_group_id=1234567
+   ```
 
-This function ensures that regional subgroups (`APAC`, `EMEA`, `AMER`) and their respective `Prod` and `PreProd` subgroups are created under the specified parent group.
+3. **Create a group using a parent group name:**
 
-**Parameters:**
-- **`session`:** The session object configured for API communication.
-- **`base_url`:** The base URL of the Akamai API.
-- **`parent_group_id`:** The ID of the parent group under which the regional subgroups will be created.
-- **`region`:** The region name to append to the subgroup names.
+   ```bash
+   python script.py "NamedGroup" --parent_group_name="Main Street Corporation"
+   ```
 
-**Key Steps:**
-- Constructs the regional group name and checks if it exists.
-- Creates the regional group if it does not exist.
-- Ensures that `Prod` and `PreProd` subgroups are created under the regional group.
+4. **Create a group with a custom prefix in the DEV environment:**
+
+   ```bash
+   python script.py "CustomSegment" --group_prefix="ABCD-DDoS-KSD" --env=DEV
+   ```
+
+5. **Create a group and specify regions for subgroups:**
+
+   ```bash
+   python script.py "RegionalGroup" --regions="APAC,EMEA" --env=DEV
+   ```
+
+6. **Specify a custom `.edgerc` file and section name:**
+
+   ```bash
+   python script.py "CustomEdgercGroup" --parent_group_id=199633 --edgerc_file="/path/to/.edgerc" --section_name="custom_section"
+   ```
+
+## Summary
+
+This document provides a detailed explanation of the Akamai Access Group Management Script. The script is designed to automate the creation and management of access groups within the Akamai platform, ensuring that necessary groups and subgroups are created under specified parent groups. It is environment-aware, functioning differently based on whether it is running in a development or production environment.
+
+The main function orchestrates the script's flow, setting up the necessary session and checking for the existence of groups. If a group does not exist, the script creates it, along with regional subgroups (APAC, EMEA, AMER) and their respective Prod and PreProd subgroups. The script is highly flexible, allowing for group creation based on either a parent group name or ID.
