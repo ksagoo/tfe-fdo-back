@@ -79,3 +79,27 @@ This project is licensed under the MIT License. See the `LICENSE` file for detai
 ## Contact
 
 For any questions or issues, please contact [Your Name](mailto:your.email@example.com).
+
+
+1. main Function
+
+python
+Copy code
+def main():
+The main function coordinates the script's overall flow, handling parameter parsing, environment setup, and function calls.
+
+Parameters:
+
+group_name_segment (required): The name segment for the group to create.
+--group_prefix (optional): The prefix for the group name. Default is KSSS-DDoS-KSD.
+--regions (optional): Specifies the regions for which subgroups will be created (APAC, EMEA, AMER). Default is all three regions.
+--parent_group_name (optional): The name of the parent group. You must provide either this or --parent_group_id.
+--parent_group_id (optional): The numeric ID of the parent group. You must provide either this or --parent_group_name.
+--env (optional): The environment (DEV or PROD). Default is DEV. This determines the default parent group ID.
+--edgerc_file (optional): Path to the .edgerc file for Akamai API authentication. Default is ~/.edgerc.
+--section_name (optional): Section name in the .edgerc file. Default is default.
+Key Steps:
+
+Parses command-line arguments, including group_name_segment, parent_group_name, parent_group_id, env, edgerc_file, and section_name.
+Trims any leading or trailing spaces from group_name_segment, group_prefix, and parent_group_name.
+Sets the default parent_group_id based on the env parameter (DEV or PROD).
