@@ -1,0 +1,62 @@
+Example Command Line Executions:
+Creating a group with the name segment TeSt for all regions in the DEV environment:
+
+bash
+Copy code
+python script.py "TeSt" --env=DEV
+This will create the following structure:
+KSSS-DDoS-KSD-TEST
+KSSS-DDoS-KSD-TEST-APAC
+KSSS-DDoS-KSD-TEST-APAC-PreProd
+KSSS-DDoS-KSD-TEST-APAC-Prod
+KSSS-DDoS-KSD-TEST-EMEA
+KSSS-DDoS-KSD-TEST-EMEA-PreProd
+KSSS-DDoS-KSD-TEST-EMEA-Prod
+KSSS-DDoS-KSD-TEST-AMER
+KSSS-DDoS-KSD-TEST-AMER-PreProd
+KSSS-DDoS-KSD-TEST-AMER-Prod
+Creating a group with the name segment example only for the APAC and EMEA regions in the PROD environment:
+
+bash
+Copy code
+python script.py "example" --env=PROD --regions APAC EMEA
+This will create the following structure:
+KSSS-DDoS-KSD-EXAMPLE
+KSSS-DDoS-KSD-EXAMPLE-APAC
+KSSS-DDoS-KSD-EXAMPLE-APAC-PreProd
+KSSS-DDoS-KSD-EXAMPLE-APAC-Prod
+KSSS-DDoS-KSD-EXAMPLE-EMEA
+KSSS-DDoS-KSD-EXAMPLE-EMEA-PreProd
+KSSS-DDoS-KSD-EXAMPLE-EMEA-Prod
+Creating a group with the name segment security for all regions using a specific parent group ID in the DEV environment:
+
+bash
+Copy code
+python script.py "security" --env=DEV --parent_group_id=199633
+This will create the following structure:
+KSSS-DDoS-KSD-SECURITY
+KSSS-DDoS-KSD-SECURITY-APAC
+KSSS-DDoS-KSD-SECURITY-APAC-PreProd
+KSSS-DDoS-KSD-SECURITY-APAC-Prod
+KSSS-DDoS-KSD-SECURITY-EMEA
+KSSS-DDoS-KSD-SECURITY-EMEA-PreProd
+KSSS-DDoS-KSD-SECURITY-EMEA-Prod
+KSSS-DDoS-KSD-SECURITY-AMER
+KSSS-DDoS-KSD-SECURITY-AMER-PreProd
+KSSS-DDoS-KSD-SECURITY-AMER-Prod
+Creating a group with the name segment global for the AMER region using a specific parent group name in the PROD environment:
+
+bash
+Copy code
+python script.py "global" --env=PROD --parent_group_name="Main Street Corporation" --regions AMER
+This will create the following structure:
+KSSS-DDoS-KSD-GLOBAL
+KSSS-DDoS-KSD-GLOBAL-AMER
+KSSS-DDoS-KSD-GLOBAL-AMER-PreProd
+KSSS-DDoS-KSD-GLOBAL-AMER-Prod
+Summary:
+Group Name Segment: Passed as the first positional argument and used to construct the full group name.
+Regions: Specified with the --regions option, allowing for the creation of subgroups by region.
+Environment: Defined by the --env option, affecting the default parent group ID.
+Parent Group: Specified either by --parent_group_name or --parent_group_id, with ID taking precedence if both are provided.
+These command examples show how flexible and configurable the script is for managing group structures within Akamai.
