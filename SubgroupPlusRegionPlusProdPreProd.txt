@@ -126,12 +126,12 @@ def ensure_subgroups(session, base_url, parent_group, region):
         ensure_subgroup(session, base_url, region_group_id, f"{region_group_name}-Prod")
 
 # Function to ensure a subgroup exists under a parent group
-def ensure_subgroup(session, base_url, parent_group_id, subgroup_name):
-    subgroup_exists, subgroup_id = check_group_exists_under_parent(parent_group_id, subgroup_name)
+def ensure_subgroup(session, base_url, parent_group, subgroup_name):
+    subgroup_exists, subgroup_id = check_group_exists_under_parent(parent_group, subgroup_name)
     if subgroup_exists:
         print(f"Subgroup '{subgroup_name}' already exists with groupId: {subgroup_id}")
     else:
-        create_group(session, base_url, subgroup_name, parent_group_id)
+        create_group(session, base_url, subgroup_name, parent_group.get('groupId'))
 
 # Main logic
 def main():
@@ -164,7 +164,7 @@ def main():
     print(f"Constructed Group Name: {group_name}")
 
     # Determine default parent group ID based on environment
-    default_parent_group_id = 199633 if args.env == "DEV" else 1234567
+    default_parent_group_id = 185773
 
     # Determine which parent group ID to use
     if args.parent_group_id:
