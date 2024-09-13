@@ -68,7 +68,7 @@ def check_group_exists(session, base_url, group_name, parent_group_name=None, pa
             parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
             if parent_group:
                 group_exists, existing_group_id = check_group_exists_under_parent(parent_group, group_name)
-                return group_exists, existing_group_id, parent_group.get('groupName')
+                return group_exists, existing_group_id, parent_group
             else:
                 return None, None, None
         else:
@@ -109,16 +109,16 @@ def create_group(session, base_url, group_name, parent_group_id):
         return None
 
 # Function to check and create missing subgroups
-def ensure_subgroups(session, base_url, parent_group_name, parent_group_id, region):
-    region_group_name = f"{parent_group_name}-{region}"
+def ensure_subgroups(session, base_url, parent_group, region):
+    region_group_name = f"{parent_group.get('groupName')}-{region}"
     
     # Check if the region group exists
-    region_group_exists, region_group_id = check_group_exists_under_parent(parent_group_id, region_group_name)
+    region_group_exists, region_group_id = check_group_exists_under_parent(parent_group, region_group_name)
     if region_group_exists:
         print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
     else:
         # Create the region group if it doesn't exist
-        region_group_id = create_group(session, base_url, region_group_name, parent_group_id)
+        region_group_id = create_group(session, base_url, region_group_name, parent_group.get('groupId'))
     
     # If region group exists or is created, ensure PreProd and Prod subgroups are created
     if region_group_id:
@@ -178,7 +178,7 @@ def main():
     edgerc_file = os.path.expanduser(args.edgerc_file)
     session, base_url = setup_session(edgerc_file, args.section_name)
     
-    group_exists, existing_group_id, resolved_parent_group_name = check_group_exists(
+    group_exists, existing_group_id, resolved_parent_group = check_group_exists(
         session, base_url, group_name, args.parent_group_name, resolved_parent_group_id
     )
     
@@ -188,11 +188,11 @@ def main():
         new_group_id = create_group(session, base_url, group_name, resolved_parent_group_id)
         if new_group_id:
             for region in args.regions:
-                ensure_subgroups(session, base_url, group_name, new_group_id, region)
+                ensure_subgroups(session, base_url, resolved_parent_group, region)
     else:
-        print(f"Group '{group_name}' already exists under parent group '{resolved_parent_group_name}' with groupId '{existing_group_id}'. Checking for missing subgroups...")
+        print(f"Group '{group_name}' already exists under parent group '{resolved_parent_group.get('groupName')}' with groupId '{existing_group_id}'. Checking for missing subgroups...")
         for region in args.regions:
-            ensure_subgroups(session, base_url, group_name, existing_group_id, region)
+            ensure_subgroups(session, base_url, resolved_parent_group, region)
 
 if __name__ == "__main__":
     main()
