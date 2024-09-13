@@ -157,6 +157,9 @@ def main():
 
     args = parser.parse_args()
 
+    edgerc_file = os.path.expanduser(args.edgerc_file)
+    session, base_url = setup_session(edgerc_file, args.section_name)
+    
     # Debugging output: Print the parameters being used
     print("Parameters being used:")
     print(f"Group Name Segment: {args.group_name_segment}")
@@ -190,9 +193,6 @@ def main():
             return
     else:
         resolved_parent_group_id = default_parent_group_id
-
-    edgerc_file = os.path.expanduser(args.edgerc_file)
-    session, base_url = setup_session(edgerc_file, args.section_name)
     
     group_exists, existing_group_id, resolved_parent_group = check_group_exists(
         session, base_url, group_name, None, resolved_parent_group_id
