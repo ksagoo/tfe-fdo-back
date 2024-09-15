@@ -1,0 +1,153 @@
+"""
+===================================================================================
+                                Akamai Access Group Management Script
+===================================================================================
+Script Name:
+    Akamai Access Group Management Script
+
+Description:
+    This script manages the creation of Akamai access groups. It checks if a group 
+    exists under a specified parent group and creates it if it does not exist.
+    The script also allows the creation of regional subgroups (APAC, EMEA, AMER) 
+    and their respective Prod and PreProd subgroups based on the specified levels.
+
+Parameters:
+    group_name_segment (required)      : The name segment for the group to create.
+    --group_prefix                     : Prefix for the group name. Default is 'HSBC-DDoS-KSD'.
+    --regions                          : Regions for subgroups (e.g., APAC,EMEA,AMER). Default is all three.
+    --parent_group_name                : The name of the parent group. Provide either this or --parent_group_id.
+    --parent_group_id                  : The numeric ID of the parent group. Provide either this or --parent_group_name.
+    --env                              : The environment (DEV or PROD). Default is DEV.
+    --edgerc_file                      : Path to the .edgerc file. Default is '~/.edgerc'.
+    --section_name                     : Section name in the .edgerc file. Default is 'default'.
+    --levels                           : Levels to create (1, 2, or 3). Default is 3.
+
+Usage Examples:
+    - To create only the top-level group:
+        python script.py "Segment" --levels=1
+    
+    - To create top-level and regional groups:
+        python script.py "Segment" --levels=2
+    
+    - To create all levels (default):
+        python script.py "Segment" --levels=3
+    
+    - To create a group in the PROD environment using a specific parent group ID:
+        python script.py "Segment" --env=PROD --parent_group_id=1234567
+
+    - To create a group with a custom prefix in the DEV environment:
+        python script.py "Segment" --group_prefix="HSBC-DDoS-KSD" --env=DEV
+
+===================================================================================
+"""
+
+import argparse
+import requests
+from akamai.edgegrid import EdgeGridAuth
+from urllib.parse import urljoin
+
+def setup_session(edgerc_file, section_name):
+    session = requests.Session()
+    session.auth = EdgeGridAuth.from_edgerc(edgerc_file, section_name)
+    
+    with open(edgerc_file) as f:
+        for line in f:
+            if line.startswith("host"):
+                base_url = f"https://{line.split('=')[1].strip()}/"
+                break
+    
+    return session, base_url
+
+def find_group_id_by_name(session, base_url, parent_group_name):
+    response = session.get(urljoin(base_url, "/identity-management/v3/user-admin/groups"))
+    groups = response.json()
+    
+    for group in groups:
+        if group['groupName'] == parent_group_name:
+            return group['groupId']
+    
+    return None
+
+def check_group_exists(session, base_url, group_name, parent_group_id=None):
+    response = session.get(urljoin(base_url, "/identity-management/v3/user-admin/groups"))
+    groups = response.json()
+    
+    for group in groups:
+        if group['groupName'] == group_name and group['groupId'] == parent_group_id:
+            return True, group['groupId'], parent_group_id
+    
+    return False, None, None
+
+def create_group(session, base_url, group_name, parent_group_id):
+    url = urljoin(base_url, f"/identity-management/v3/user-admin/groups/{parent_group_id}")
+    payload = {"groupName": group_name}
+    response = session.post(url, json=payload)
+    
+    if response.status_code == 201:
+        new_group_id = response.json()['groupId']
+        print(f"Created group '{group_name}' with ID {new_group_id}")
+        return new_group_id
+    else:
+        print(f"Failed to create group: {response.status_code}")
+        return None
+
+def ensure_subgroups(session, base_url, parent_group_id, group_name):
+    exists, group_id, _ = check_group_exists(session, base_url, group_name, parent_group_id)
+    if not exists:
+        print(f"Creating subgroup '{group_name}' under parent ID {parent_group_id}")
+        create_group(session, base_url, group_name, parent_group_id)
+    else:
+        print(f"Subgroup '{group_name}' already exists with ID {group_id}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Akamai Access Group Management Script")
+    parser.add_argument("group_name_segment", help="The name segment for the group to create")
+    parser.add_argument("--group_prefix", help="Prefix for the group name", default="HSBC-DDoS-KSD")
+    parser.add_argument("--regions", help="Regions for subgroups (e.g., APAC,EMEA,AMER)", default="APAC,EMEA,AMER")
+    parser.add_argument("--parent_group_name", help="Name of the parent group")
+    parser.add_argument("--parent_group_id", help="ID of the parent group")
+    parser.add_argument("--env", help="Environment (DEV or PROD)", default="DEV")
+    parser.add_argument("--edgerc_file", help="Path to the .edgerc file", default="~/.edgerc")
+    parser.add_argument("--section_name", help="Section name in the .edgerc file", default="default")
+    parser.add_argument("--levels", help="Levels to create (1, 2, or 3)", type=int, default=3)
+    
+    args = parser.parse_args()
+
+    session, base_url = setup_session(args.edgerc_file, args.section_name)
+    
+    if args.parent_group_id:
+        parent_group_id = args.parent_group_id
+    elif args.parent_group_name:
+        parent_group_id = find_group_id_by_name(session, base_url, args.parent_group_name)
+    else:
+        parent_group_id = 185773 if args.env == "DEV" else 1234567
+
+    group_name = f"{args.group_prefix}-{args.group_name_segment}".upper()
+
+    group_exists, existing_group_id, _ = check_group_exists(session, base_url, group_name, parent_group_id=parent_group_id)
+    
+    if not group_exists:
+        if args.levels >= 1:
+            print(f"Creating top-level group: {group_name}")
+            new_group_id = create_group(session, base_url, group_name, parent_group_id)
+        
+        if args.levels >= 2:
+            regions = args.regions.split(",")
+            for region in regions:
+                region_group_name = f"{group_name}-{region}".upper()
+                print(f"Creating regional subgroup: {region_group_name}")
+                ensure_subgroups(session, base_url, new_group_id, region_group_name)
+        
+        if args.levels == 3:
+            for region in regions:
+                region_group_name = f"{group_name}-{region}".upper()
+                region_group_id = find_group_id_by_name(session, base_url, region_group_name)
+                if region_group_id:
+                    print(f"Creating Prod and PreProd subgroups under: {region_group_name}")
+                    ensure_subgroups(session, base_url, region_group_id, f"{region_group_name}-Prod")
+                    ensure_subgroups(session, base_url, region_group_id, f"{region_group_name}-PreProd")
+    else:
+        print(f"Group {group_name} already exists with ID: {existing_group_id}")
+
+if __name__ == "__main__":
+    main()
