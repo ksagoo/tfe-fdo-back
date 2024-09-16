@@ -164,7 +164,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
     # Level 2: Regional Groups
     for region in regions:
         region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
-        region_group_exists, region_group_id, parent_group = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
+        region_group_exists, region_group_id, _ = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
         
         if region_group_exists:
             print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
