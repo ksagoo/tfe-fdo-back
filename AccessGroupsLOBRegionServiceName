@@ -170,22 +170,24 @@ def ensure_subgroups(session, base_url, parent_group_id, lob, region, country_se
         # Level 2: Region Group
         region_group_name = f"{parent_group.get('groupName')}-{region.upper()}"
         region_group_exists, region_group_id = check_group_exists_under_parent(parent_group, region_group_name)
-        if not region_group_exists:
-            region_group_id = create_group(session, base_url, region_group_name, parent_group_id)
-        else:
+        if region_group_exists:
             print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
-
-        # Level 3: Service/Country Group
-        service_group_name = f"{region_group_name}-{country_servicename}"
-        service_group_exists, service_group_id = check_group_exists_under_parent(parent_group, service_group_name)
-        if not service_group_exists:
-            service_group_id = create_group(session, base_url, service_group_name, region_group_id)
         else:
-            print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
+            region_group_id = create_group(session, base_url, region_group_name, parent_group_id)
 
-        # Level 4: NonProd and Prod subgroups
-        ensure_subgroup(session, base_url, service_group_id, f"{service_group_name}-NonProd")
-        ensure_subgroup(session, base_url, service_group_id, f"{service_group_name}-Prod")
+        if region_group_id and not region_group_exists:
+            # Level 3: Service/Country Group
+            service_group_name = f"{region_group_name}-{country_servicename}"
+            service_group_exists, service_group_id = check_group_exists_under_parent(parent_group, service_group_name)
+            if service_group_exists:
+                print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
+            else:
+                service_group_id = create_group(session, base_url, service_group_name, region_group_id)
+
+            if service_group_id and not service_group_exists:
+                # Level 4: NonProd and Prod subgroups
+                ensure_subgroup(session, base_url, service_group_id, f"{service_group_name}-NonProd")
+                ensure_subgroup(session, base_url, service_group_id, f"{service_group_name}-Prod")
     else:
         print(f"Failed to fetch parent group details for groupId: {parent_group_id}")
 
