@@ -25,7 +25,7 @@ Parameters:
 
 Usage:
     - To create only the top-level group:
-        python script.py "LOB" "CountryServiceName" --levels=1
+        python script.py "LOB" --levels=1
 
     - To create up to regional subgroups:
         python script.py "LOB" "CountryServiceName" --levels=2
