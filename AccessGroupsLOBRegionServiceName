@@ -8,9 +8,7 @@ Script Name:
 Description:
     This script manages the creation of Akamai access groups. It checks if a group 
     exists under a specified parent group and creates it if it does not exist. The 
-    script also supports the creation of regional subgroups (APAC, EMEA, AMER) under 
-    the newly created group. Additionally, `NonProd` and `Prod` subgroups are 
-    automatically created under each regional subgroup, based on the specified level.
+    script supports creating up to four levels of groups based on the specified level.
 
 Parameters:
     lob (required)                 : Line of Business, e.g., TEST01.
@@ -45,7 +43,7 @@ Usage:
         python script.py "LOB" "CountryServiceName" --env=PROD --parent_group_id=1234567
 
 Notes:
-    - Under each service-level subgroup, `NonProd` and `Prod` subgroups are automatically created.
+    - Each level is checked before creation to avoid duplicating existing groups.
 
 ===================================================================================
 """
@@ -160,36 +158,25 @@ def create_group(session, base_url, group_name, parent_group_id):
         print(f"Error during group creation: {e}")
         return None
 
-# Function to check and create missing subgroups
-def ensure_subgroups(session, base_url, parent_group_id, lob, region, country_servicename):
-    parent_group_url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
-    response = session.get(parent_group_url)
-    if response.status_code == 200:
-        parent_group = response.json()
-
-        # Level 2: Region Group
-        region_group_name = f"{parent_group.get('groupName')}-{region.upper()}"
-        region_group_exists, region_group_id = check_group_exists_under_parent(parent_group, region_group_name)
-        if region_group_exists:
-            print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
-        else:
-            region_group_id = create_group(session, base_url, region_group_name, parent_group_id)
-
-        if region_group_id and not region_group_exists:
-            # Level 3: Service/Country Group
-            service_group_name = f"{region_group_name}-{country_servicename}"
-            service_group_exists, service_group_id = check_group_exists_under_parent(parent_group, service_group_name)
-            if service_group_exists:
-                print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
-            else:
-                service_group_id = create_group(session, base_url, service_group_name, region_group_id)
-
-            if service_group_id and not service_group_exists:
-                # Level 4: NonProd and Prod subgroups
-                ensure_subgroup(session, base_url, service_group_id, f"{service_group_name}-NonProd")
-                ensure_subgroup(session, base_url, service_group_id, f"{service_group_name}-Prod")
-    else:
-        print(f"Failed to fetch parent group details for groupId: {parent_group_id}")
+# Function to ensure subgroups are created based on the specified level
+def ensure_subgroups(session, base_url, top_level_group_id, lob, region, country_servicename, level):
+    # Level 2: Regional Group
+    region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
+    region_group_exists, region_group_id = check_group_exists_under_parent({"subGroups": [{"groupName": top_level_group_name, "groupId": top_level_group_id}]}, region_group_name)
+    if not region_group_exists and level >= 2:
+        region_group_id = create_group(session, base_url, region_group_name, top_level_group_id)
+    
+    if region_group_id and level >= 3:
+        # Level 3: Service/Country Group
+        service_group_name = f"{region_group_name}-{country_servicename}"
+        service_group_exists, service_group_id = check_group_exists_under_parent({"subGroups": [{"groupName": region_group_name, "groupId": region_group_id}]}, service_group_name)
+        if not service_group_exists:
+            service_group_id = create_group(session, base_url, service_group_name, region_group_id)
+        
+        if service_group_id and level == 4:
+            # Level 4: NonProd and Prod Subgroups
+            ensure_subgroup(session, base_url, service_group_id, f"{service_group_name}-NonProd")
+            ensure_subgroup(session, base_url, service_group_id, f"{service_group_name}-Prod")
 
 # Function to ensure a subgroup exists under a parent group
 def ensure_subgroup(session, base_url, parent_group_id, subgroup_name):
@@ -280,14 +267,14 @@ def main():
     elif not group_exists:
         if args.levels >= 1:
             top_level_group_id = create_group(session, base_url, top_level_group_name, resolved_parent_group_id)
-        if args.levels >= 2:
+        if args.levels >= 2 and top_level_group_id:
             for region in regions:
-                ensure_subgroups(session, base_url, top_level_group_id, lob, region, country_servicename)
+                ensure_subgroups(session, base_url, top_level_group_id, lob, region, country_servicename, args.levels)
     else:
         print(f"Group '{top_level_group_name}' already exists under parent group '{resolved_parent_group.get('groupName')}' with groupId '{existing_group_id}'.")
         if args.levels >= 2:
             for region in regions:
-                ensure_subgroups(session, base_url, existing_group_id, lob, region, country_servicename)
+                ensure_subgroups(session, base_url, existing_group_id, lob, region, country_servicename, args.levels)
 
 if __name__ == "__main__":
     main()
