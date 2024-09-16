@@ -168,7 +168,7 @@ def ensure_subgroups(session, base_url, parent_group_id, lob, region, country_se
         parent_group = response.json()
 
         # Level 2: Region Group
-        region_group_name = f"{parent_group.get('groupName')}-{region}"
+        region_group_name = f"{parent_group.get('groupName')}-{region.upper()}"
         region_group_exists, region_group_id = check_group_exists_under_parent(parent_group, region_group_name)
         if not region_group_exists:
             region_group_id = create_group(session, base_url, region_group_name, parent_group_id)
@@ -220,11 +220,12 @@ def main():
 
     args = parser.parse_args()
 
-    # Trim any leading or trailing whitespace from the arguments
-    lob = args.lob.strip()
+    # Trim and uppercase relevant inputs
+    lob = args.lob.strip().upper()
     country_servicename = args.country_servicename.strip()
     group_prefix = args.group_prefix.strip()
     parent_group_name = args.parent_group_name.strip() if args.parent_group_name else None
+    regions = [region.strip().upper() for region in args.regions]  # Ensure regions are uppercase
 
     edgerc_file = os.path.expanduser(args.edgerc_file)
     session, base_url = setup_session(edgerc_file, args.section_name)
@@ -234,7 +235,7 @@ def main():
     print(f"LOB: {lob}")
     print(f"Country/Service Name: {country_servicename}")
     print(f"Group Prefix: {group_prefix}")
-    print(f"Regions: {args.regions}")
+    print(f"Regions: {regions}")
     print(f"Parent Group Name: {parent_group_name}")
     print(f"Parent Group ID: {args.parent_group_id}")
     print(f"Environment: {args.env}")
@@ -278,12 +279,12 @@ def main():
         if args.levels >= 1:
             top_level_group_id = create_group(session, base_url, top_level_group_name, resolved_parent_group_id)
         if args.levels >= 2:
-            for region in args.regions:
+            for region in regions:
                 ensure_subgroups(session, base_url, top_level_group_id, lob, region, country_servicename)
     else:
         print(f"Group '{top_level_group_name}' already exists under parent group '{resolved_parent_group.get('groupName')}' with groupId '{existing_group_id}'.")
         if args.levels >= 2:
-            for region in args.regions:
+            for region in regions:
                 ensure_subgroups(session, base_url, existing_group_id, lob, region, country_servicename)
 
 if __name__ == "__main__":
