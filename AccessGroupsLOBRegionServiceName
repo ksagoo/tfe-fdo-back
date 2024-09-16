@@ -164,7 +164,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
     # Level 2: Regional Groups
     for region in regions:
         region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
-        region_group_exists, region_group_id, _ = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
+        region_group_exists, region_group_id, parent_group = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
         
         if region_group_exists:
             print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
@@ -176,7 +176,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
         # Proceed to Level 3: Service/Country Group only if required
         if region_group_id and level >= 3:
             service_group_name = f"{region_group_name}-{country_servicename}"
-            service_group_exists, service_group_id, _ = check_group_exists(session, base_url, service_group_name, None, region_group_id)
+            service_group_exists, service_group_id, service_group = check_group_exists(session, base_url, service_group_name, None, region_group_id)
             if service_group_exists:
                 print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
             elif not service_group_exists:
@@ -187,13 +187,12 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
             # Proceed to Level 4: NonProd and Prod Subgroups only if required
             if service_group_id and level == 4:
                 subgroups_to_create = [f"{service_group_name}-NonProd", f"{service_group_name}-Prod"]
-                existing_subgroups = {subgroup['groupName']: subgroup['groupId'] for subgroup in _["subGroups"]}
+                existing_subgroups = {subgroup['groupName']: subgroup['groupId'] for subgroup in service_group.get("subGroups", [])}
 
                 for subgroup_name in subgroups_to_create:
                     if subgroup_name in existing_subgroups:
                         print(f"Subgroup '{subgroup_name}' already exists with groupId: {existing_subgroups[subgroup_name]}")
                     else:
-                        print(f"Creating subgroup '{subgroup_name}' under service group '{service_group_name}'...")
                         created_subgroup_id = create_group(session, base_url, subgroup_name, service_group_id)
                         if created_subgroup_id:
                             print(f"Subgroup '{subgroup_name}' created successfully with groupId: {created_subgroup_id}")
