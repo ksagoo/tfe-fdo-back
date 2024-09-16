@@ -128,41 +128,11 @@ def check_group_exists(session, base_url, group_name, parent_group_name=None, pa
         print(f"Error during group existence check: {e}")
         return None, None, None
 
-# Function to create a new group
-def create_group(session, base_url, group_name, parent_group_id):
-    try:
-        url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
-        print(f"Creating group at URL: {url}")
-        headers = {
-            "accept": "application/json",
-            "content-type": "application/json"
-        }
-        payload = {
-            "groupName": group_name
-        }
-        
-        response = session.post(url, json=payload, headers=headers)
-        
-        if response.status_code == 201:
-            created_group = response.json()
-            group_id = created_group.get('groupId')
-            print(f"Group '{group_name}' created successfully with groupId: {group_id}")
-            return group_id
-        elif response.status_code == 409:
-            print(f"Group '{group_name}' already exists.")
-            return None
-        else:
-            print(f"Failed to create group: {response.status_code} - {response.text}")
-            return None
-    except Exception as e:
-        print(f"Error during group creation: {e}")
-        return None
-
 # Function to ensure subgroups are created based on the specified level
-def ensure_subgroups(session, base_url, top_level_group_id, lob, region, country_servicename, level):
+def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, region, country_servicename, level):
     # Level 2: Regional Group
     region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
-    region_group_exists, region_group_id = check_group_exists_under_parent({"subGroups": [{"groupName": top_level_group_name, "groupId": top_level_group_id}]}, region_group_name)
+    region_group_exists, region_group_id = check_group_exists_under_parent({"subGroups": [{"groupName": region_group_name, "groupId": top_level_group_id}]}, region_group_name)
     if not region_group_exists and level >= 2:
         region_group_id = create_group(session, base_url, region_group_name, top_level_group_id)
     
@@ -269,12 +239,12 @@ def main():
             top_level_group_id = create_group(session, base_url, top_level_group_name, resolved_parent_group_id)
         if args.levels >= 2 and top_level_group_id:
             for region in regions:
-                ensure_subgroups(session, base_url, top_level_group_id, lob, region, country_servicename, args.levels)
+                ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, region, country_servicename, args.levels)
     else:
         print(f"Group '{top_level_group_name}' already exists under parent group '{resolved_parent_group.get('groupName')}' with groupId '{existing_group_id}'.")
         if args.levels >= 2:
             for region in regions:
-                ensure_subgroups(session, base_url, existing_group_id, lob, region, country_servicename, args.levels)
+                ensure_subgroups(session, base_url, group_prefix, existing_group_id, lob, region, country_servicename, args.levels)
 
 if __name__ == "__main__":
     main()
