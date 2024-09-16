@@ -162,7 +162,6 @@ def create_group(session, base_url, group_name, parent_group_id):
 # Function to ensure subgroups are created based on the specified level
 def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, level):
     # Level 2: Regional Groups
-    regions_to_create = []
     for region in regions:
         region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
         region_group_exists, region_group_id, _ = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
@@ -172,10 +171,8 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
             region_group_id = create_group(session, base_url, region_group_name, top_level_group_id)
             if region_group_id:
                 print(f"Region group '{region_group_name}' created with groupId: {region_group_id}")
-            regions_to_create.append((region_group_name, region_group_id))
 
-    # Level 3: Service/Country Group
-    for region_group_name, region_group_id in regions_to_create:
+        # Level 3: Service/Country Group
         if region_group_id and level >= 3:
             service_group_name = f"{region_group_name}-{country_servicename}"
             service_group_exists, service_group_id, service_group = check_group_exists(session, base_url, service_group_name, None, region_group_id)
@@ -186,8 +183,8 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                 if service_group_id:
                     print(f"Service/Country group '{service_group_name}' created with groupId: {service_group_id}")
 
+            # Level 4: NonProd and Prod Subgroups
             if service_group_id and level == 4:
-                # Level 4: NonProd and Prod Subgroups
                 subgroups_to_create = [f"{service_group_name}-NonProd", f"{service_group_name}-Prod"]
                 existing_subgroups = {subgroup['groupName']: subgroup['groupId'] for subgroup in service_group.get("subGroups", [])}
 
