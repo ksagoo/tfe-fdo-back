@@ -95,9 +95,10 @@ def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=Non
 
 # Function to check if a group exists directly under the found parent group
 def check_group_exists_under_parent(parent_group, group_name):
-    for subgroup in parent_group.get("subGroups", []):
-        if subgroup.get("groupName") == group_name:
-            return True, subgroup.get('groupId')
+    if isinstance(parent_group, dict):
+        for subgroup in parent_group.get("subGroups", []):
+            if subgroup.get("groupName") == group_name:
+                return True, subgroup.get('groupId')
     return False, None
 
 # Function to check if a group already exists under the specified parent group
@@ -171,12 +172,13 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
     if region_group_id and level >= 3:
         # Level 3: Service/Country Group
         service_group_name = f"{region_group_name}-{country_servicename}"
-        service_group_exists, service_group_id, _ = check_group_exists(session, base_url, service_group_name, None, region_group_id)
+        service_group_exists, service_group_id, service_group = check_group_exists(session, base_url, service_group_name, None, region_group_id)
         if service_group_exists:
             print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
         elif not service_group_exists:
             service_group_id = create_group(session, base_url, service_group_name, region_group_id)
-        
+            service_group = find_group_by_name_or_id([{"groupId": region_group_id, "subGroups": []}], service_group_name=service_group_name)
+
         if service_group_id and level == 4:
             # Level 4: NonProd and Prod Subgroups
             nonprod_group_name = f"{service_group_name}-NonProd"
@@ -184,13 +186,13 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
 
             print(f"Checking for NonProd and Prod subgroups under '{service_group_name}'...")
 
-            nonprod_exists, nonprod_id = check_group_exists_under_parent(service_group_name, nonprod_group_name)
+            nonprod_exists, nonprod_id = check_group_exists_under_parent(service_group, nonprod_group_name)
             if nonprod_exists:
                 print(f"Subgroup '{nonprod_group_name}' already exists with groupId: {nonprod_id}")
             else:
                 ensure_subgroup(session, base_url, service_group_id, nonprod_group_name)
 
-            prod_exists, prod_id = check_group_exists_under_parent(service_group_name, prod_group_name)
+            prod_exists, prod_id = check_group_exists_under_parent(service_group, prod_group_name)
             if prod_exists:
                 print(f"Subgroup '{prod_group_name}' already exists with groupId: {prod_id}")
             else:
