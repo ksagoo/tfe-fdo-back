@@ -193,15 +193,6 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                     if created_subgroup_id:
                         print(f"Subgroup '{subgroup_name}' created successfully with groupId: {created_subgroup_id}")
 
-# Function to ensure a subgroup exists under a parent group
-def ensure_subgroup(session, base_url, parent_group_id, subgroup_name):
-    subgroup_exists, subgroup_id, _ = check_group_exists(session, base_url, subgroup_name, None, parent_group_id)
-    if subgroup_exists:
-        print(f"Subgroup '{subgroup_name}' already exists with groupId: {subgroup_id}")
-    else:
-        print(f"Creating subgroup '{subgroup_name}' under parent group ID '{parent_group_id}'...")
-        create_group(session, base_url, subgroup_name, parent_group_id)
-
 # Main logic
 def main():
     parser = argparse.ArgumentParser(description="Create an Akamai Access Group if it doesn't already exist.")
