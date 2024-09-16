@@ -177,7 +177,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
             print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
         elif not service_group_exists:
             service_group_id = create_group(session, base_url, service_group_name, region_group_id)
-            service_group = find_group_by_name_or_id([{"groupId": region_group_id, "subGroups": []}], service_group_name=service_group_name)
+            service_group = find_group_by_name_or_id([{"groupId": region_group_id, "subGroups": [{"groupId": service_group_id, "groupName": service_group_name}]}], parent_group_id=service_group_id)
 
         if service_group_id and level == 4:
             # Level 4: NonProd and Prod Subgroups
