@@ -182,11 +182,11 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
         if service_group_id and level == 4:
             # Level 4: NonProd and Prod Subgroups
             subgroups_to_create = [f"{service_group_name}-NonProd", f"{service_group_name}-Prod"]
+            existing_subgroups = {subgroup['groupName']: subgroup['groupId'] for subgroup in service_group.get("subGroups", [])}
 
             for subgroup_name in subgroups_to_create:
-                subgroup_exists, subgroup_id = check_group_exists_under_parent(service_group, subgroup_name)
-                if subgroup_exists:
-                    print(f"Subgroup '{subgroup_name}' already exists with groupId: {subgroup_id}")
+                if subgroup_name in existing_subgroups:
+                    print(f"Subgroup '{subgroup_name}' already exists with groupId: {existing_subgroups[subgroup_name]}")
                 else:
                     print(f"Creating subgroup '{subgroup_name}' under service group '{service_group_name}'...")
                     created_subgroup_id = create_group(session, base_url, subgroup_name, service_group_id)
