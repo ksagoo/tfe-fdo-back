@@ -162,7 +162,7 @@ def create_group(session, base_url, group_name, parent_group_id):
 def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, region, country_servicename, level):
     # Level 2: Regional Group
     region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
-    region_group_exists, region_group_id = check_group_exists_under_parent({"groupId": top_level_group_id, "subGroups": []}, region_group_name)
+    region_group_exists, region_group_id = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
     if region_group_exists:
         print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
     elif not region_group_exists and level >= 2:
@@ -171,7 +171,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
     if region_group_id and level >= 3:
         # Level 3: Service/Country Group
         service_group_name = f"{region_group_name}-{country_servicename}"
-        service_group_exists, service_group_id = check_group_exists_under_parent({"groupId": region_group_id, "subGroups": []}, service_group_name)
+        service_group_exists, service_group_id = check_group_exists(session, base_url, service_group_name, None, region_group_id)
         if service_group_exists:
             print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
         elif not service_group_exists:
@@ -184,7 +184,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
 
 # Function to ensure a subgroup exists under a parent group
 def ensure_subgroup(session, base_url, parent_group_id, subgroup_name):
-    subgroup_exists, subgroup_id = check_group_exists_under_parent({"groupId": parent_group_id, "subGroups": []}, subgroup_name)
+    subgroup_exists, subgroup_id = check_group_exists(session, base_url, subgroup_name, None, parent_group_id)
     if subgroup_exists:
         print(f"Subgroup '{subgroup_name}' already exists with groupId: {subgroup_id}")
     else:
@@ -270,7 +270,7 @@ def main():
     else:
         if args.levels >= 1:
             top_level_group_id = create_group(session, base_url, top_level_group_name, resolved_parent_group_id)
-            if args.levels >= 2:
+            if top_level_group_id and args.levels >= 2:
                 for region in regions:
                     ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, region, country_servicename, args.levels)
 
