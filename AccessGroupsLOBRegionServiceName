@@ -200,4 +200,76 @@ def main():
     parser = argparse.ArgumentParser(description="Create an Akamai Access Group if it doesn't already exist.")
     parser.add_argument("lob", help="Line of Business, e.g., TEST01.")
     parser.add_argument("country_servicename", help="Country or Service Name, e.g., AkamaiDevOps.")
-    parser.add_argument("--group_prefix", default="HSBC-D
+    parser.add_argument("--group_prefix", default="HSBC-DDoS-KSD", help="The prefix for the group name. Default is 'HSBC-DDoS-KSD'.")
+    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER", "Global"], default=["APAC", "EMEA", "AMER", "Global"], 
+                        help="Regions for which subgroups will be created (APAC, EMEA, AMER, Global).")
+    parser.add_argument("--parent_group_name", help="The name of the parent group. Provide either this or --parent_group_id.")
+    parser.add_argument("--parent_group_id", type=int, help="The numeric ID of the parent group. Provide either this or --parent_group_name.")
+    parser.add_argument("--env", choices=["DEV", "PROD"], default="DEV", help="The environment (DEV or PROD). Default is DEV.")
+    parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
+    parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
+    parser.add_argument("--levels", help="Levels to create (1, 2, 3, or 4)", type=int, default=4)
+
+    args = parser.parse_args()
+
+    lob = args.lob.strip().upper()
+    country_servicename = args.country_servicename.strip()
+    group_prefix = args.group_prefix.strip()
+    parent_group_name = args.parent_group_name.strip() if args.parent_group_name else None
+    regions = [region.strip().capitalize() if region.lower() == 'global' else region.strip().upper() for region in args.regions]
+
+    edgerc_file = os.path.expanduser(args.edgerc_file)
+    session, base_url = setup_session(edgerc_file, args.section_name)
+    
+    print("Parameters being used:")
+    print(f"LOB: {lob}")
+    print(f"Country/Service Name: {country_servicename}")
+    print(f"Group Prefix: {group_prefix}")
+    print(f"Regions: {regions}")
+    print(f"Parent Group Name: {parent_group_name}")
+    print(f"Parent Group ID: {args.parent_group_id}")
+    print(f"Environment: {args.env}")
+    print(f"EdgeRC File: {args.edgerc_file}")
+    print(f"Section Name: {args.section_name}")
+    print(f"Selected Level: {args.levels}")
+
+    if args.env == "DEV":
+        default_parent_group_id = 185773
+    else:
+        default_parent_group_id = 1234567
+
+    top_level_group_name = f"{group_prefix}-{lob}"
+    print(f"Constructed Top-Level Group Name: {top_level_group_name}")
+
+    if args.parent_group_id:
+        resolved_parent_group_id = args.parent_group_id
+    elif parent_group_name:
+        group_exists, existing_group_id, resolved_parent_group, _ = check_group_exists(
+            session, base_url, "", parent_group_name, None
+        )
+        if not group_exists and resolved_parent_group is not None:
+            resolved_parent_group_id = resolved_parent_group.get('groupId')
+        else:
+            print(f"Error: Could not resolve parent group name '{parent_group_name}' to an ID. Exiting.")
+            return
+    else:
+        resolved_parent_group_id = default_parent_group_id
+    
+    group_exists, existing_group_id, resolved_parent_group, _ = check_group_exists(
+        session, base_url, top_level_group_name, None, resolved_parent_group_id
+    )
+    
+    if group_exists is None:
+        print("Error checking group existence. Exiting without creating the group.")
+    elif group_exists:
+        print(f"Group '{top_level_group_name}' already exists under parent group '{resolved_parent_group.get('groupName')}' with groupId '{existing_group_id}'.")
+        if args.levels >= 2:
+            ensure_subgroups(session, base_url, group_prefix, existing_group_id, lob, regions, country_servicename, args.levels)
+    else:
+        if args.levels >= 1:
+            top_level_group_id = create_group(session, base_url, top_level_group_name, resolved_parent_group_id)
+            if top_level_group_id and args.levels >= 2:
+                ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, args.levels)
+
+if __name__ == "__main__":
+    main()
