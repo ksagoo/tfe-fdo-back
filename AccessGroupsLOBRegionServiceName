@@ -14,8 +14,8 @@ Parameters:
     lob (required)                 : Line of Business, e.g., TEST01.
     country_servicename (required) : Country or Service Name, e.g., AkamaiDevOps.
     --group_prefix                 : The prefix for the group name. Default is 'HSBC-DDoS-KSD'.
-    --regions                      : Regions for which subgroups will be created (APAC, EMEA, AMER). 
-                                     Default is all three: APAC, EMEA, AMER.
+    --regions                      : Regions for which subgroups will be created (APAC, EMEA, AMER, Global). 
+                                     Default is all four: APAC, EMEA, AMER, Global.
     --parent_group_name            : The name of the parent group. Provide either this or --parent_group_id.
     --parent_group_id              : The numeric ID of the parent group. Provide either this or --parent_group_name.
     --env                          : The environment (DEV or PROD). Default is DEV.
@@ -115,9 +115,6 @@ def check_group_exists(session, base_url, group_name, parent_group_name=None, pa
         else:
             print(f"Failed to fetch groups: {response.status_code} - {response.text}")
             return None, None, None, None
-    except Exception as e:
-        print(f"Error during group existence check: {e}")
-        return None, None, None, None
 
 def create_group(session, base_url, group_name, parent_group_id):
     try:
@@ -151,7 +148,11 @@ def create_group(session, base_url, group_name, parent_group_id):
 def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, level):
     all_subgroups_exist = True
     for region in regions:
-        region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
+        if region == 'Global':
+            region_group_name = f"{group_prefix}-{lob}-Global"
+        else:
+            region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
+        
         region_group_exists, region_group_id, parent_group, region_group = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
         
         if not region_group_exists:
@@ -190,8 +191,8 @@ def main():
     parser.add_argument("lob", help="Line of Business, e.g., TEST01.")
     parser.add_argument("country_servicename", help="Country or Service Name, e.g., AkamaiDevOps.")
     parser.add_argument("--group_prefix", default="HSBC-DDoS-KSD", help="The prefix for the group name. Default is 'HSBC-DDoS-KSD'.")
-    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER"], default=["APAC", "EMEA", "AMER"], 
-                        help="Regions for which subgroups will be created (APAC, EMEA, AMER).")
+    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER", "Global"], default=["APAC", "EMEA", "AMER", "Global"], 
+                        help="Regions for which subgroups will be created (APAC, EMEA, AMER, Global).")
     parser.add_argument("--parent_group_name", help="The name of the parent group. Provide either this or --parent_group_id.")
     parser.add_argument("--parent_group_id", type=int, help="The numeric ID of the parent group. Provide either this or --parent_group_name.")
     parser.add_argument("--env", choices=["DEV", "PROD"], default="DEV", help="The environment (DEV or PROD). Default is DEV.")
@@ -205,7 +206,7 @@ def main():
     country_servicename = args.country_servicename.strip()
     group_prefix = args.group_prefix.strip()
     parent_group_name = args.parent_group_name.strip() if args.parent_group_name else None
-    regions = [region.strip().upper() for region in args.regions]
+    regions = [region.strip().capitalize() if region.lower() == 'global' else region.strip().upper() for region in args.regions]
 
     edgerc_file = os.path.expanduser(args.edgerc_file)
     session, base_url = setup_session(edgerc_file, args.section_name)
