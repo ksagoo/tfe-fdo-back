@@ -1,53 +1,3 @@
-"""
-===================================================================================
-                                Akamai Access Group Management Script
-===================================================================================
-Script Name:
-    Akamai Access Group Management Script
-
-Description:
-    This script manages the creation of Akamai access groups. It checks if a group 
-    exists under a specified parent group and creates it if it does not exist. The 
-    script supports creating up to four levels of groups based on the specified level.
-
-Parameters:
-    lob (required)                 : Line of Business, e.g., TEST01.
-    country_servicename (required) : Country or Service Name, e.g., AkamaiDevOps.
-    --group_prefix                 : The prefix for the group name. Default is 'HSBC-DDoS-KSD'.
-    --regions                      : Regions for which subgroups will be created (APAC, EMEA, AMER). 
-                                     Default is all three: APAC, EMEA, AMER.
-    --parent_group_name            : The name of the parent group. Provide either this or --parent_group_id.
-    --parent_group_id              : The numeric ID of the parent group. Provide either this or --parent_group_name.
-    --env                          : The environment (DEV or PROD). Default is DEV.
-    --edgerc_file                  : Path to the .edgerc file. Default is '~/.edgerc'.
-    --section_name                 : Section name in the .edgerc file. Default is 'default'.
-    --levels                       : Levels to create (1, 2, 3, or 4). Default is 4.
-
-Usage:
-    - To create only the top-level group:
-        python script.py "LOB" --levels=1
-
-    - To create up to regional subgroups:
-        python script.py "LOB" "CountryServiceName" --levels=2
-
-    - To create up to service-level subgroups:
-        python script.py "LOB" "CountryServiceName" --levels=3
-
-    - To create all levels (default):
-        python script.py "LOB" "CountryServiceName" --levels=4
-
-    - To create a group in the DEV environment with a default parent group ID:
-        python script.py "LOB" "CountryServiceName" --env=DEV
-
-    - To create a group in the PROD environment using a specific parent group ID:
-        python script.py "LOB" "CountryServiceName" --env=PROD --parent_group_id=1234567
-
-Notes:
-    - Each level is checked before creation to avoid duplicating existing groups.
-
-===================================================================================
-"""
-
 import os
 import argparse
 import requests
@@ -55,7 +5,6 @@ from akamai.edgegrid import EdgeGridAuth, EdgeRc
 from urllib.parse import urljoin
 import json
 
-# Function to load EdgeRc and set up authentication
 def setup_session(edgerc_file, section_name):
     try:
         edgerc = EdgeRc(edgerc_file)
@@ -63,12 +12,6 @@ def setup_session(edgerc_file, section_name):
         client_token = edgerc.get(section_name, 'client_token')
         client_secret = edgerc.get(section_name, 'client_secret')
         access_token = edgerc.get(section_name, 'access_token')
-        
-        # Debugging output
-        print(f"Base URL: {base_url}")
-        print(f"Client Token: {client_token}")
-        print(f"Client Secret: {client_secret}")
-        print(f"Access Token: {access_token}")
         
         session = requests.Session()
         session.auth = EdgeGridAuth(
@@ -82,7 +25,6 @@ def setup_session(edgerc_file, section_name):
         print(f"Error reading .edgerc file: {e}")
         exit(1)
 
-# Recursive function to find the group by name or ID anywhere in the hierarchy
 def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=None):
     for group in groups:
         if (parent_group_name and group.get("groupName") == parent_group_name) or (parent_group_id and group.get("groupId") == parent_group_id):
@@ -93,29 +35,20 @@ def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=Non
                 return found_group
     return None
 
-# Function to check if a group exists directly under the found parent group
 def check_group_exists_under_parent(parent_group, group_name):
-    if isinstance(parent_group, dict):
-        for subgroup in parent_group.get("subGroups", []):
-            if subgroup.get("groupName") == group_name:
-                return True, subgroup.get('groupId')
+    for subgroup in parent_group.get("subGroups", []):
+        if subgroup.get("groupName") == group_name:
+            return True, subgroup.get('groupId')
     return False, None
 
-# Function to check if a group already exists under the specified parent group
 def check_group_exists(session, base_url, group_name, parent_group_name=None, parent_group_id=None):
     try:
         url = urljoin(base_url, "identity-management/v3/user-admin/groups")
-        print(f"Checking group existence at URL: {url}")
         headers = {"accept": "application/json"}
         response = session.get(url, headers=headers)
 
         if response.status_code == 200:
             groups = response.json()
-            
-            # Debugging output
-            print("Complete JSON response of groups:")
-            print(json.dumps(groups, indent=4))
-
             parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
             if parent_group:
                 group_exists, existing_group_id = check_group_exists_under_parent(parent_group, group_name)
@@ -129,11 +62,9 @@ def check_group_exists(session, base_url, group_name, parent_group_name=None, pa
         print(f"Error during group existence check: {e}")
         return None, None, None
 
-# Function to create a new group
 def create_group(session, base_url, group_name, parent_group_id):
     try:
         url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
-        print(f"Creating group at URL: {url}")
         headers = {
             "accept": "application/json",
             "content-type": "application/json"
@@ -159,12 +90,10 @@ def create_group(session, base_url, group_name, parent_group_id):
         print(f"Error during group creation: {e}")
         return None
 
-# Function to ensure subgroups are created based on the specified level
 def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, level):
-    # Level 2: Regional Groups
     for region in regions:
         region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
-        region_group_exists, region_group_id, _ = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
+        region_group_exists, region_group_id, parent_group = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
         
         if region_group_exists:
             print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
@@ -173,7 +102,6 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
             if region_group_id:
                 print(f"Region group '{region_group_name}' created with groupId: {region_group_id}")
 
-        # Proceed to Level 3: Service/Country Group only if required
         if region_group_id and level >= 3:
             service_group_name = f"{region_group_name}-{country_servicename}"
             service_group_exists, service_group_id, service_group = check_group_exists(session, base_url, service_group_name, None, region_group_id)
@@ -184,7 +112,6 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                 if service_group_id:
                     print(f"Service/Country group '{service_group_name}' created with groupId: {service_group_id}")
 
-            # Proceed to Level 4: NonProd and Prod Subgroups only if required
             if service_group_id and level == 4:
                 subgroups_to_create = [f"{service_group_name}-NonProd", f"{service_group_name}-Prod"]
                 existing_subgroups = {subgroup['groupName']: subgroup['groupId'] for subgroup in service_group.get("subGroups", [])}
@@ -197,7 +124,6 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                         if created_subgroup_id:
                             print(f"Subgroup '{subgroup_name}' created successfully with groupId: {created_subgroup_id}")
 
-# Main logic
 def main():
     parser = argparse.ArgumentParser(description="Create an Akamai Access Group if it doesn't already exist.")
     parser.add_argument("lob", help="Line of Business, e.g., TEST01.")
@@ -214,17 +140,15 @@ def main():
 
     args = parser.parse_args()
 
-    # Trim and uppercase relevant inputs
     lob = args.lob.strip().upper()
     country_servicename = args.country_servicename.strip()
     group_prefix = args.group_prefix.strip()
     parent_group_name = args.parent_group_name.strip() if args.parent_group_name else None
-    regions = [region.strip().upper() for region in args.regions]  # Ensure regions are uppercase
+    regions = [region.strip().upper() for region in args.regions]
 
     edgerc_file = os.path.expanduser(args.edgerc_file)
     session, base_url = setup_session(edgerc_file, args.section_name)
     
-    # Debugging output: Print the parameters being used
     print("Parameters being used:")
     print(f"LOB: {lob}")
     print(f"Country/Service Name: {country_servicename}")
@@ -235,23 +159,19 @@ def main():
     print(f"Environment: {args.env}")
     print(f"EdgeRC File: {args.edgerc_file}")
     print(f"Section Name: {args.section_name}")
-    print(f"Selected Level: {args.levels}")  # Print out the selected level
+    print(f"Selected Level: {args.levels}")
 
-    # Set default parent group ID based on environment
     if args.env == "DEV":
         default_parent_group_id = 185773
-    else:  # PROD
+    else:
         default_parent_group_id = 1234567
 
-    # Construct group names
     top_level_group_name = f"{group_prefix}-{lob}"
     print(f"Constructed Top-Level Group Name: {top_level_group_name}")
 
-    # Determine which parent group ID to use
     if args.parent_group_id:
         resolved_parent_group_id = args.parent_group_id
     elif parent_group_name:
-        # Resolve the parent group name to an ID
         group_exists, existing_group_id, resolved_parent_group = check_group_exists(
             session, base_url, "", parent_group_name, None
         )
