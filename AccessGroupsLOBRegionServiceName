@@ -86,35 +86,43 @@ def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=Non
     return None
 
 def check_group_exists_under_parent(parent_group, group_name):
-    for subgroup in parent_group.get("subGroups", []):
-        if subgroup.get("groupName") == group_name:
-            return True, subgroup.get('groupId')
-    return False, None
+    if isinstance(parent_group, dict):
+        for subgroup in parent_group.get("subGroups", []):
+            if subgroup.get("groupName") == group_name:
+                return True, subgroup.get('groupId'), subgroup
+    return False, None, None
 
 def check_group_exists(session, base_url, group_name, parent_group_name=None, parent_group_id=None):
     try:
         url = urljoin(base_url, "identity-management/v3/user-admin/groups")
+        print(f"Checking group existence at URL: {url}")
         headers = {"accept": "application/json"}
         response = session.get(url, headers=headers)
 
         if response.status_code == 200:
             groups = response.json()
+            
+            # Debugging output
+            print("Complete JSON response of groups:")
+            print(json.dumps(groups, indent=4))
+
             parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
             if parent_group:
-                group_exists, existing_group_id = check_group_exists_under_parent(parent_group, group_name)
-                return group_exists, existing_group_id, parent_group
+                group_exists, existing_group_id, existing_group = check_group_exists_under_parent(parent_group, group_name)
+                return group_exists, existing_group_id, parent_group, existing_group
             else:
-                return None, None, None
+                return None, None, None, None
         else:
             print(f"Failed to fetch groups: {response.status_code} - {response.text}")
-            return None, None, None
+            return None, None, None, None
     except Exception as e:
         print(f"Error during group existence check: {e}")
-        return None, None, None
+        return None, None, None, None
 
 def create_group(session, base_url, group_name, parent_group_id):
     try:
         url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{parent_group_id}")
+        print(f"Creating group at URL: {url}")
         headers = {
             "accept": "application/json",
             "content-type": "application/json"
@@ -143,7 +151,7 @@ def create_group(session, base_url, group_name, parent_group_id):
 def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, level):
     for region in regions:
         region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
-        region_group_exists, region_group_id, parent_group = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
+        region_group_exists, region_group_id, parent_group, region_group = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
         
         if region_group_exists:
             print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
@@ -154,7 +162,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
 
         if region_group_id and level >= 3:
             service_group_name = f"{region_group_name}-{country_servicename}"
-            service_group_exists, service_group_id, service_group = check_group_exists(session, base_url, service_group_name, None, region_group_id)
+            service_group_exists, service_group_id, _, service_group = check_group_exists(session, base_url, service_group_name, None, region_group_id)
             if service_group_exists:
                 print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
             elif not service_group_exists:
@@ -222,7 +230,7 @@ def main():
     if args.parent_group_id:
         resolved_parent_group_id = args.parent_group_id
     elif parent_group_name:
-        group_exists, existing_group_id, resolved_parent_group = check_group_exists(
+        group_exists, existing_group_id, resolved_parent_group, _ = check_group_exists(
             session, base_url, "", parent_group_name, None
         )
         if not group_exists and resolved_parent_group is not None:
@@ -233,7 +241,7 @@ def main():
     else:
         resolved_parent_group_id = default_parent_group_id
     
-    group_exists, existing_group_id, resolved_parent_group = check_group_exists(
+    group_exists, existing_group_id, resolved_parent_group, _ = check_group_exists(
         session, base_url, top_level_group_name, None, resolved_parent_group_id
     )
     
