@@ -119,9 +119,6 @@ def check_group_exists(session, base_url, group_name, parent_group_name=None, pa
         else:
             print(f"Failed to fetch groups: {response.status_code} - {response.text}")
             return None, None, None, None
-    except Exception as e:
-        print(f"Error during group existence check: {e}")
-        return None, None, None, None
 
 # Function to create a new group under the specified parent group
 def create_group(session, base_url, group_name, parent_group_id):
@@ -181,7 +178,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                     if service_group_id:
                         print(f"Service/Country group '{service_group_name}' created with groupId: {service_group_id}")
 
-            if service_group_id and level == 4:
+            if service_group_id and service_group and level == 4:
                 subgroups_to_create = [f"{service_group_name}-NonProd", f"{service_group_name}-Prod"]
                 existing_subgroups = {subgroup['groupName']: subgroup['groupId'] for subgroup in service_group.get("subGroups", [])}
 
