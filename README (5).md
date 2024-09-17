@@ -92,6 +92,3 @@ If you encounter any issues, ensure that:
 - The `.edgerc` file is correctly configured and accessible.
 - The specified parent group exists if using `--parent_group_name`.
 - The environment is set correctly (DEV or PROD).
-
-## License
-This script is licensed under the MIT License.
