@@ -37,9 +37,9 @@ python script.py "LOB" "CountryServiceName" [options]
    python script.py "LOB" --levels=1
    ```
 
-2. **Create up to regional subgroups:**
+2. **Create up to regional subgroups (if --regions not specified then created for all i.e. APAC, EMEA, AMMER & Global:**
    ```bash
-   python script.py "LOB" "CountryServiceName" --levels=2
+   python script.py "LOB" "CountryServiceName" --regions APAC --levels=2
    ```
 
 3. **Create up to service-level subgroups:**
