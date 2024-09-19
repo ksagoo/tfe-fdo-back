@@ -156,6 +156,8 @@ def create_group(session, base_url, group_name, parent_group_id):
 # Function to ensure subgroups are created based on the specified level
 def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, level):
     all_subgroups_exist = True
+    country_servicename_lower = country_servicename.lower()  # Convert country_servicename to lowercase for case-insensitive checks
+
     for region in regions:
         if region.lower() == 'global':
             region_group_name = f"{group_prefix}-{lob}-Global"
@@ -172,8 +174,17 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                     print(f"Region group '{region_group_name}' created with groupId: {region_group_id}")
 
         if region_group_id and level >= 3:
+            # Ensure service/country group is checked case-insensitively
             service_group_name = f"{region_group_name}-{country_servicename}"
             service_group_exists, service_group_id, _, service_group = check_group_exists(session, base_url, service_group_name, None, region_group_id)
+
+            # Check case-insensitive comparison for service/country group name
+            if not service_group_exists and service_group:
+                existing_service_groups = {subgroup['groupName'].lower(): subgroup['groupId'] for subgroup in region_group.get("subGroups", [])}
+                service_group_exists = country_servicename_lower in existing_service_groups
+                if service_group_exists:
+                    service_group_id = existing_service_groups[country_servicename_lower]
+
             if not service_group_exists:
                 all_subgroups_exist = False
                 if level >= 3:
