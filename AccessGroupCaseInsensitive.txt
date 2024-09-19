@@ -6,9 +6,16 @@ Script Name:
     Akamai Access Group Management Script
 
 Description:
-    This script manages the creation of Akamai access groups. It checks if a group 
-    exists under a specified parent group and creates it if it does not exist. The 
-    script supports creating up to four levels of groups based on the specified level.
+    This script automates the creation and management of access groups within the 
+    Akamai platform. It verifies if the specified group exists under a parent group, 
+    and if not, creates it. The script allows creating multiple levels of groups, 
+    with up to four levels: the top-level group, regional groups (APAC, EMEA, AMER, 
+    LATAM, Global), service/country subgroups, and Prod/NonProd subgroups. 
+
+    The script is designed to be flexible, allowing groups to be created under 
+    different parent groups (specified by name or ID), in both DEV and PROD 
+    environments. Additionally, it ensures no duplicate groups are created by 
+    checking the group hierarchy before adding new groups.
 
 Parameters:
     lob (required)                 : Line of Business, e.g., TEST01.
@@ -48,7 +55,6 @@ Notes:
 ===================================================================================
 """
 
-
 import os
 import argparse
 import requests
@@ -77,10 +83,10 @@ def setup_session(edgerc_file, section_name):
         print(f"Error reading .edgerc file: {e}")
         exit(1)
 
-# Function to recursively find a group by name or ID in the hierarchy
+# Recursive function to find the group by name or ID anywhere in the hierarchy
 def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=None):
     for group in groups:
-        if (parent_group_name and group.get("groupName") == parent_group_name) or (parent_group_id and group.get("groupId") == parent_group_id):
+        if (parent_group_name and group.get("groupName").lower() == parent_group_name.lower()) or (parent_group_id and group.get("groupId") == parent_group_id):
             return group
         if group.get("subGroups"):
             found_group = find_group_by_name_or_id(group.get("subGroups"), parent_group_name, parent_group_id)
@@ -91,9 +97,8 @@ def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=Non
 # Function to check if a group exists directly under the found parent group
 def check_group_exists_under_parent(parent_group, group_name):
     if isinstance(parent_group, dict):
-        # Convert both the group name and the name in the parent group to lowercase for case-insensitive comparison
         for subgroup in parent_group.get("subGroups", []):
-            if subgroup.get("groupName").lower() == group_name.lower():
+            if subgroup.get("groupName").lower() == group_name.lower():  # Case-insensitive check
                 return True, subgroup.get('groupId'), subgroup
     return False, None, None
 
@@ -152,11 +157,11 @@ def create_group(session, base_url, group_name, parent_group_id):
         print(f"Error during group creation: {e}")
         return None
 
-# Function to check and create missing subgroups
+# Function to ensure subgroups are created based on the specified level
 def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, level):
     all_subgroups_exist = True
     for region in regions:
-        if region == 'Global':
+        if region.lower() == 'global':
             region_group_name = f"{group_prefix}-{lob}-Global"
         else:
             region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
@@ -171,8 +176,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                     print(f"Region group '{region_group_name}' created with groupId: {region_group_id}")
 
         if region_group_id and level >= 3:
-            # Convert service name to lowercase for non-case-sensitive comparison
-            service_group_name = f"{region_group_name}-{country_servicename}".lower()
+            service_group_name = f"{region_group_name}-{country_servicename}"
             service_group_exists, service_group_id, _, service_group = check_group_exists(session, base_url, service_group_name, None, region_group_id)
             if not service_group_exists:
                 all_subgroups_exist = False
@@ -195,7 +199,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
     if all_subgroups_exist:
         print("All required subgroups already exist, no new subgroups needed.")
 
-# Main function to handle argument parsing and script execution
+# Coordinates the execution flow: parsing arguments, setting up the environment, and handling group creation
 def main():
     parser = argparse.ArgumentParser(description="Create an Akamai Access Group if it doesn't already exist.")
     parser.add_argument("lob", help="Line of Business, e.g., TEST01.")
@@ -212,7 +216,7 @@ def main():
 
     args = parser.parse_args()
 
-    # Trim and format inputs
+    # Trim and uppercase relevant inputs
     lob = args.lob.strip().upper()
     country_servicename = args.country_servicename.strip()
     group_prefix = args.group_prefix.strip()
@@ -241,6 +245,7 @@ def main():
     else:
         default_parent_group_id = 1234567
 
+    # Construct group names
     top_level_group_name = f"{group_prefix}-{lob}"
     print(f"Constructed Top-Level Group Name: {top_level_group_name}")
 
