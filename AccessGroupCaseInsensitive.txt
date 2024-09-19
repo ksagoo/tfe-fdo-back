@@ -157,6 +157,7 @@ def create_group(session, base_url, group_name, parent_group_id):
 def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, level):
     all_subgroups_exist = True
     country_servicename_lower = country_servicename.lower()  # Convert country_servicename to lowercase for case-insensitive checks
+    subgroups_created = False  # Flag to track if any new subgroups are created
 
     for region in regions:
         if region.lower() == 'global':
@@ -172,6 +173,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                 region_group_id = create_group(session, base_url, region_group_name, top_level_group_id)
                 if region_group_id:
                     print(f"Region group '{region_group_name}' created with groupId: {region_group_id}")
+                    subgroups_created = True
         else:
             print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
 
@@ -193,6 +195,7 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                     service_group_id = create_group(session, base_url, service_group_name, region_group_id)
                     if service_group_id:
                         print(f"Service/Country group '{service_group_name}' created with groupId: {service_group_id}")
+                        subgroups_created = True
             else:
                 print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
 
@@ -211,21 +214,12 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                         created_subgroup_id = create_group(session, base_url, subgroup_name, service_group_id)
                         if created_subgroup_id:
                             print(f"Subgroup '{subgroup_name}' created successfully with groupId: {created_subgroup_id}")
+                            subgroups_created = True
                     else:
                         print(f"Subgroup '{subgroup_name}' already exists with groupId: {existing_subgroups[subgroup_name.lower()]}")
 
-    if all_subgroups_exist:
-        print("All required subgroups already exist, no new subgroups needed.")
-
-    # Print a message for multiple subgroups creation or existence after processing all regions
     if subgroups_created:
         print("All required subgroups created successfully.")
-    elif all_subgroups_exist and not subgroups_created:
-        print("All required subgroups already exist, no new subgroups needed.")
-
-    # Print a message for multiple subgroups creation or existence after processing all regions
-    if subgroups_created:
-        print("All required subgroups have been created.")
     elif all_subgroups_exist and not subgroups_created:
         print("All required subgroups already exist, no new subgroups needed.")
 
