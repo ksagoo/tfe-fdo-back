@@ -172,15 +172,17 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
             subgroups_created = True
             print(f"Region group '{region_group_name}' created with groupId: {region_group_id}")
 
-        # Proceed only if region_group is not None
-        if region_group_id and region_group and level == 3:
+        # Proceed only if region_group_id exists (it should either exist from check or creation)
+        if region_group_id and level == 3:
             service_group_name = f"{region_group_name}-{country_servicename}"
 
-            # Check for case-insensitive match for the service group
+            # Initialize variables to track existence of the service group
             service_group_exists = False
             existing_service_group_id = None
-            matching_service_group_name = None  # To hold the service group name from Akamai JSON if found
-            if region_group.get("subGroups"):
+            matching_service_group_name = None
+
+            # Check for the existence of the service group if region_group is returned
+            if region_group and region_group.get("subGroups"):
                 for subgroup in region_group["subGroups"]:
                     if subgroup["groupName"].lower() == service_group_name.lower():
                         service_group_exists = True
@@ -188,8 +190,8 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                         matching_service_group_name = subgroup["groupName"]
                         break
 
+            # If service group exists, print the message; otherwise, create it
             if service_group_exists:
-                # Now return only the group name from the Akamai JSON output
                 print(f"Service/Country group '{matching_service_group_name}' already exists with groupId: {existing_service_group_id}")
             else:
                 service_group_id = create_group(session, base_url, service_group_name, region_group_id)
