@@ -14,8 +14,8 @@ Parameters:
     lob (required)                 : Line of Business, e.g., TEST01.
     country_servicename (required) : Country or Service Name, e.g., AkamaiDevOps.
     --group_prefix                 : The prefix for the group name. Default is 'HSBC-DDoS-KSD'.
-    --regions                      : Regions for which subgroups will be created (APAC, EMEA, AMER, Globa, LATAM). 
-                                     Default is all four: APAC, EMEA, AMER, Global, LATAM.
+    --regions                      : Regions for which subgroups will be created (APAC, EMEA, AMER, Global, LATAM). 
+                                     Default is all five: APAC, EMEA, AMER, Global, LATAM.
     --parent_group_name            : The name of the parent group. Provide either this or --parent_group_id.
     --parent_group_id              : The numeric ID of the parent group. Provide either this or --parent_group_name.
     --env                          : The environment (DEV or PROD). Default is DEV.
@@ -23,11 +23,31 @@ Parameters:
     --section_name                 : Section name in the .edgerc file. Default is 'default'.
     --levels                       : Levels to create (1, 2, 3, or 4). Default is 4.
 
+Usage:
+    - To create only the top-level group:
+        python script.py "LOB" --levels=1
+
+    - To create up to regional subgroups:
+        python script.py "LOB" "CountryServiceName" --levels=2
+
+    - To create up to service-level subgroups:
+        python script.py "LOB" "CountryServiceName" --levels=3
+
+    - To create all levels (default):
+        python script.py "LOB" "CountryServiceName" --levels=4
+
+    - To create a group in the DEV environment with a default parent group ID:
+        python script.py "LOB" "CountryServiceName" --env=DEV
+
+    - To create a group in the PROD environment using a specific parent group ID:
+        python script.py "LOB" "CountryServiceName" --env=PROD --parent_group_id=1234567
+
 Notes:
     - Each level is checked before creation to avoid duplicating existing groups.
 
 ===================================================================================
 """
+
 
 import os
 import argparse
