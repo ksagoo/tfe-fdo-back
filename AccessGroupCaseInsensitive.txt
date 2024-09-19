@@ -14,8 +14,8 @@ Parameters:
     lob (required)                 : Line of Business, e.g., TEST01.
     country_servicename (required) : Country or Service Name, e.g., AkamaiDevOps.
     --group_prefix                 : The prefix for the group name. Default is 'HSBC-DDoS-KSD'.
-    --regions                      : Regions for which subgroups will be created (APAC, EMEA, AMER, Global). 
-                                     Default is all four: APAC, EMEA, AMER, Global.
+    --regions                      : Regions for which subgroups will be created (APAC, EMEA, AMER, Globa, LATAM). 
+                                     Default is all four: APAC, EMEA, AMER, Global, LATAM.
     --parent_group_name            : The name of the parent group. Provide either this or --parent_group_id.
     --parent_group_id              : The numeric ID of the parent group. Provide either this or --parent_group_name.
     --env                          : The environment (DEV or PROD). Default is DEV.
