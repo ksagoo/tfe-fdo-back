@@ -256,4 +256,5 @@ def main():
             if top_level_group_id and args.levels >= 2:
                 ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, args.levels)
 
-        
+ if __name__ == "__main__":
+    main()       
