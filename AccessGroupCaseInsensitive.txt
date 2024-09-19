@@ -220,6 +220,12 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
 
     # Print a message for multiple subgroups creation or existence after processing all regions
     if subgroups_created:
+        print("All required subgroups created successfully.")
+    elif all_subgroups_exist and not subgroups_created:
+        print("All required subgroups already exist, no new subgroups needed.")
+
+    # Print a message for multiple subgroups creation or existence after processing all regions
+    if subgroups_created:
         print("All required subgroups have been created.")
     elif all_subgroups_exist and not subgroups_created:
         print("All required subgroups already exist, no new subgroups needed.")
