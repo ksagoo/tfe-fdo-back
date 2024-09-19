@@ -156,7 +156,6 @@ def create_group(session, base_url, group_name, parent_group_id):
 # Function to ensure subgroups are created based on the specified level
 def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, level):
     all_subgroups_exist = True
-    country_servicename_lower = country_servicename.lower()  # Convert country_servicename to lowercase for case-insensitive checks
     subgroups_created = False  # Flag to track if any new subgroups are created
 
     for region in regions:
@@ -167,60 +166,38 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
 
         region_group_exists, region_group_id, parent_group, region_group = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
 
-        if not region_group_exists:
-            all_subgroups_exist = False
-            if level >= 2:
-                region_group_id = create_group(session, base_url, region_group_name, top_level_group_id)
-                if region_group_id:
-                    print(f"Region group '{region_group_name}' created with groupId: {region_group_id}")
-                    subgroups_created = True
-        else:
-            print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
+        if not region_group_exists and level >= 2:
+            region_group_id = create_group(session, base_url, region_group_name, top_level_group_id)
+            subgroups_created = True
+            print(f"Region group '{region_group_name}' created with groupId: {region_group_id}")
 
-        if region_group_id and level >= 3:
-            # Ensure service/country group is checked case-insensitively
+        if region_group_id and level == 3:
             service_group_name = f"{region_group_name}-{country_servicename}"
-            service_group_exists, service_group_id, _, service_group = check_group_exists(session, base_url, service_group_name, None, region_group_id)
 
-            # Check case-insensitive comparison for service/country group name
-            if not service_group_exists and service_group:
-                existing_service_groups = {subgroup['groupName'].lower(): subgroup['groupId'] for subgroup in region_group.get("subGroups", [])}
-                service_group_exists = country_servicename_lower in existing_service_groups
-                if service_group_exists:
-                    service_group_id = existing_service_groups[country_servicename_lower]
+            # Check for case-insensitive match
+            service_group_exists = False
+            existing_service_group_id = None
+            matching_service_group_name = None  # To hold the service group name from Akamai JSON if found
+            if region_group.get("subGroups"):
+                for subgroup in region_group["subGroups"]:
+                    if subgroup["groupName"].lower() == service_group_name.lower():
+                        service_group_exists = True
+                        existing_service_group_id = subgroup["groupId"]
+                        matching_service_group_name = subgroup["groupName"]
+                        break
 
-            if not service_group_exists:
-                all_subgroups_exist = False
-                if level >= 3:
-                    service_group_id = create_group(session, base_url, service_group_name, region_group_id)
-                    if service_group_id:
-                        print(f"Service/Country group '{service_group_name}' created with groupId: {service_group_id}")
-                        subgroups_created = True
+            if service_group_exists:
+                # Now return only the group name from the Akamai JSON output
+                print(f"Service/Country group '{matching_service_group_name}' already exists with groupId: {existing_service_group_id}")
             else:
-                print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
-
-            # Ensure NonProd and Prod subgroups creation at level 4
-            if service_group_id and level == 4:
-                subgroups_to_create = [f"{service_group_name}-NonProd", f"{service_group_name}-Prod"]
-                existing_subgroups = {}
-
-                # If the service_group exists and has subgroups, collect existing ones
-                if service_group:
-                    existing_subgroups = {subgroup['groupName'].lower(): subgroup['groupId'] for subgroup in service_group.get("subGroups", [])}
-
-                for subgroup_name in subgroups_to_create:
-                    if subgroup_name.lower() not in existing_subgroups:
-                        all_subgroups_exist = False
-                        created_subgroup_id = create_group(session, base_url, subgroup_name, service_group_id)
-                        if created_subgroup_id:
-                            print(f"Subgroup '{subgroup_name}' created successfully with groupId: {created_subgroup_id}")
-                            subgroups_created = True
-                    else:
-                        print(f"Subgroup '{subgroup_name}' already exists with groupId: {existing_subgroups[subgroup_name.lower()]}")
+                service_group_id = create_group(session, base_url, service_group_name, region_group_id)
+                if service_group_id:
+                    subgroups_created = True
+                    print(f"Service/Country group '{service_group_name}' created with groupId: {service_group_id}")
 
     if subgroups_created:
         print("All required subgroups created successfully.")
-    elif all_subgroups_exist and not subgroups_created:
+    elif all_subgroups_exist:
         print("All required subgroups already exist, no new subgroups needed.")
 
 # Coordinates the execution flow: parsing arguments, setting up the environment, and handling group creation
