@@ -174,6 +174,8 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                 if region_group_id:
                     print(f"Region group '{region_group_name}' created with groupId: {region_group_id}")
                     subgroups_created = True
+        else:
+            print(f"Region group '{region_group_name}' already exists with groupId: {region_group_id}")
 
         if region_group_id and level >= 3:
             # Ensure service/country group is checked case-insensitively
@@ -194,6 +196,8 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                     if service_group_id:
                         print(f"Service/Country group '{service_group_name}' created with groupId: {service_group_id}")
                         subgroups_created = True
+            else:
+                print(f"Service/Country group '{service_group_name}' already exists with groupId: {service_group_id}")
 
             # Ensure NonProd and Prod subgroups creation at level 4
             if service_group_id and level == 4:
@@ -211,8 +215,10 @@ def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, r
                         if created_subgroup_id:
                             print(f"Subgroup '{subgroup_name}' created successfully with groupId: {created_subgroup_id}")
                             subgroups_created = True
+                    else:
+                        print(f"Subgroup '{subgroup_name}' already exists with groupId: {existing_subgroups[subgroup_name.lower()]}")
 
-    # Print a single message if all subgroups already exist
+    # Print a single message if all subgroups already exist and no subgroups were created
     if all_subgroups_exist and not subgroups_created:
         print("All required subgroups already exist, no new subgroups needed.")
 
