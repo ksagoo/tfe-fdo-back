@@ -78,8 +78,12 @@ def setup_session(edgerc_file, section_name):
 
 # Recursive function to find the group by name or ID anywhere in the hierarchy
 def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=None):
+    # Convert parent group name to lowercase for case-insensitive comparison
+    parent_group_name_lower = parent_group_name.lower() if parent_group_name else None
+    
     for group in groups:
-        if (parent_group_name and group.get("groupName") == parent_group_name) or (parent_group_id and group.get("groupId") == parent_group_id):
+        # Compare parent group name in a case-insensitive manner
+        if (parent_group_name_lower and group.get("groupName").lower() == parent_group_name_lower) or (parent_group_id and group.get("groupId") == parent_group_id):
             return group
         if group.get("subGroups"):
             found_group = find_group_by_name_or_id(group.get("subGroups"), parent_group_name, parent_group_id)
