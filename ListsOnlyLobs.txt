@@ -107,8 +107,10 @@ def get_top_level_groups(session, base_url, group_prefix, parent_group_id):
                 if group.get('parentGroupId') == parent_group_id and group.get('groupName', '').startswith(group_prefix):
                     top_level_groups.append(group.get('groupName'))
 
-            print("Filtered top-level groups after applying prefix and parent group filter:")  # Debug output
+            # Debugging output before LOB extraction
+            print("Top-level groups matching the prefix and parentGroupId filter:")
             print(top_level_groups)
+            
             return top_level_groups
         else:
             print(f"Failed to fetch groups: {response.status_code} - {response.text}")
@@ -172,11 +174,9 @@ def main():
     top_level_groups = get_top_level_groups(session, base_url, args.group_prefix, resolved_parent_group_id)
 
     # Extract LOB portions from group names
-    lob_list = [extract_lob(group_name, args.group_prefix) for group_name in top_level_groups]
-    
-    # Output the result
-    if lob_list:
-        print("Top-level LOB portions:")
+    if top_level_groups:
+        print("Top-level LOB portions:")  # Message before LOB extraction
+        lob_list = [extract_lob(group_name, args.group_prefix) for group_name in top_level_groups]
         for lob in lob_list:
             print(lob)
     else:
