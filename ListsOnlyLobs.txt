@@ -99,11 +99,16 @@ def get_top_level_groups(session, base_url, group_prefix, parent_group_name=None
 
         if response.status_code == 200:
             groups = response.json()
+            print("Raw groups data received from Akamai API:")
+            print(json.dumps(groups, indent=4))  # Debug: Print the full list of groups retrieved
+
             top_level_groups = []
             for group in groups:
                 if group.get('parentGroupId') == parent_group_id and group.get('groupName', '').startswith(group_prefix):
                     top_level_groups.append(group.get('groupName'))
 
+            print("Filtered top-level groups after applying prefix and parent group filter:")  # Debug output
+            print(top_level_groups)
             return top_level_groups
         else:
             print(f"Failed to fetch groups: {response.status_code} - {response.text}")
@@ -170,9 +175,12 @@ def main():
     lob_list = [extract_lob(group_name, args.group_prefix) for group_name in top_level_groups]
     
     # Output the result
-    print("Top-level LOB portions:")
-    for lob in lob_list:
-        print(lob)
+    if lob_list:
+        print("Top-level LOB portions:")
+        for lob in lob_list:
+            print(lob)
+    else:
+        print("No top-level groups found.")
 
 if __name__ == "__main__":
     main()
