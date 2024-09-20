@@ -20,6 +20,7 @@ Parameters:
     --edgerc_file       : Path to the .edgerc file. Default is '~/.edgerc'.
     --section_name      : Section name in the .edgerc file. Default is 'default'.
     --format            : The output format, either 'list' or 'json'. Default is 'list'.
+    --output            : Output to 'stdout' (default) or 'file' (saves to .txt or .json file).
 
 Usage:
     - To list top-level groups in the DEV environment with the default parent group ID:
@@ -30,6 +31,9 @@ Usage:
 
     - To list top-level groups using a parent group name and filter by custom group prefix:
         python script.py --parent_group_name="Main Street Corporation" --group_prefix="CustomPrefix"
+
+    - To save the output to a file:
+        python script.py --env=DEV --output=file
 ===================================================================================
 """
 
@@ -69,7 +73,7 @@ def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=Non
     return None
 
 # Function to list top-level groups filtered by group_prefix and output the LOB part
-def list_top_level_groups(session, base_url, group_prefix, parent_group_name=None, parent_group_id=None, output_format="list"):
+def list_top_level_groups(session, base_url, group_prefix, parent_group_name=None, parent_group_id=None, output_format="list", output="stdout"):
     try:
         url = urljoin(base_url, "identity-management/v3/user-admin/groups")
         headers = {"accept": "application/json"}
@@ -89,13 +93,25 @@ def list_top_level_groups(session, base_url, group_prefix, parent_group_name=Non
                         lob_part = subgroup['groupName'].replace(group_prefix + "-", "", 1)
                         lob_list.append(lob_part)
 
-                # Output based on the specified format
-                if output_format == "json":
-                    print(json.dumps(lob_list, indent=4))
+                # Handle output to stdout or file
+                if output == "file":
+                    if output_format == "json":
+                        with open("lobs.json", "w") as json_file:
+                            json.dump(lob_list, json_file, indent=4)
+                        print("LOBs have been written to lobs.json")
+                    else:
+                        with open("lobs.txt", "w") as txt_file:
+                            for lob in lob_list:
+                                txt_file.write(f"{lob}\n")
+                        print("LOBs have been written to lobs.txt")
                 else:
-                    print("Top-level LOB portions:")
-                    for lob in lob_list:
-                        print(f" - {lob}")
+                    # Output to stdout based on the format
+                    if output_format == "json":
+                        print(json.dumps(lob_list, indent=4))
+                    else:
+                        print("Top-level LOB portions:")
+                        for lob in lob_list:
+                            print(f" - {lob}")
 
             else:
                 print(f"Error: Parent group not found with name '{parent_group_name}' or ID '{parent_group_id}'.")
@@ -114,6 +130,7 @@ def main():
     parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
     parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
     parser.add_argument("--format", choices=["list", "json"], default="list", help="The output format, either 'list' or 'json'. Default is 'list'.")
+    parser.add_argument("--output", choices=["stdout", "file"], default="stdout", help="Output to 'stdout' (default) or 'file' (saves to .txt or .json file).")
 
     args = parser.parse_args()
 
@@ -135,7 +152,7 @@ def main():
         resolved_parent_group_id = default_parent_group_id
 
     # List the top-level groups under the parent group, filtered by group_prefix
-    list_top_level_groups(session, base_url, args.group_prefix, args.parent_group_name, resolved_parent_group_id, args.format)
+    list_top_level_groups(session, base_url, args.group_prefix, args.parent_group_name, resolved_parent_group_id, args.format, args.output)
 
 if __name__ == "__main__":
     main()
