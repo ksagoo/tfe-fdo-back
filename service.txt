@@ -10,6 +10,7 @@ Description:
     for a specified top-level group in the Akamai platform. It uses --env to set 
     the default parent_group_id based on whether it's running in DEV or PROD environment, 
     or it can resolve a parent group dynamically using the provided --parent_group_name. 
+    The script only processes top-level groups that contain the specified --group_prefix.
 
 Parameters:
     --env               : The environment (DEV or PROD). Default is DEV.
@@ -68,7 +69,7 @@ def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=Non
             return group
     return None
 
-# Function to list country/service groups under regional groups, filtering by group_prefix
+# Function to list country/service groups under regional groups, filtered by group_prefix
 def list_country_service_groups(session, base_url, group_prefix, parent_group_name=None, parent_group_id=None):
     try:
         url = urljoin(base_url, "identity-management/v3/user-admin/groups")
@@ -85,15 +86,15 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
                 country_service_output = {}
                 print(f"Top-level group: '{parent_group.get('groupName')}'")
 
-                for region_group in parent_group.get("subGroups", []):
-                    # Only consider groups that match the group_prefix
-                    if region_group.get("groupName").startswith(group_prefix):
-                        region_name = region_group.get("groupName").replace(group_prefix + "-", "")
-                        country_service_output[region_name] = []
+                for top_level_group in parent_group.get("subGroups", []):
+                    if top_level_group["groupName"].startswith(group_prefix):
+                        for region_group in top_level_group.get("subGroups", []):
+                            region_name = region_group.get("groupName").replace(group_prefix + "-", "")
+                            country_service_output[region_name] = []
 
-                        for service_group in region_group.get("subGroups", []):
-                            country_service_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "")
-                            country_service_output[region_name].append(country_service_name)
+                            for service_group in region_group.get("subGroups", []):
+                                country_service_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "")
+                                country_service_output[region_name].append(country_service_name)
 
                 return country_service_output
             else:
