@@ -78,7 +78,7 @@ def setup_session(edgerc_file, section_name):
 
 
 # Function to retrieve top-level groups under a specified parent group
-def get_top_level_groups(session, base_url, group_prefix, parent_group_name=None, parent_group_id=None):
+def get_top_level_groups(session, base_url, group_prefix, parent_group_id):
     """
     Retrieves a list of top-level groups under a specified parent group, filtered by the group prefix.
 
@@ -86,8 +86,7 @@ def get_top_level_groups(session, base_url, group_prefix, parent_group_name=None
         session (requests.Session): The session object configured for API communication.
         base_url (str): The base URL of the Akamai API.
         group_prefix (str): The prefix to filter the group names.
-        parent_group_name (str, optional): The name of the parent group (optional).
-        parent_group_id (int, optional): The ID of the parent group (optional).
+        parent_group_id (int): The ID of the parent group.
 
     Returns:
         top_level_groups (list): A list of top-level group names filtered by the prefix.
@@ -104,6 +103,7 @@ def get_top_level_groups(session, base_url, group_prefix, parent_group_name=None
 
             top_level_groups = []
             for group in groups:
+                # Check if the group is a top-level group and if it matches the prefix
                 if group.get('parentGroupId') == parent_group_id and group.get('groupName', '').startswith(group_prefix):
                     top_level_groups.append(group.get('groupName'))
 
@@ -169,7 +169,7 @@ def main():
     session, base_url = setup_session(edgerc_file, args.section_name)
     
     # Get the list of top-level groups
-    top_level_groups = get_top_level_groups(session, base_url, args.group_prefix, args.parent_group_name, resolved_parent_group_id)
+    top_level_groups = get_top_level_groups(session, base_url, args.group_prefix, resolved_parent_group_id)
 
     # Extract LOB portions from group names
     lob_list = [extract_lob(group_name, args.group_prefix) for group_name in top_level_groups]
