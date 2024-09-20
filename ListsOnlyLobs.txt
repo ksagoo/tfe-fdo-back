@@ -1,3 +1,41 @@
+"""
+===================================================================================
+                                Akamai Top-Level Group Extraction Script
+===================================================================================
+Script Name:
+    Akamai Top-Level Group Extraction Script
+
+Description:
+    This script retrieves and lists top-level groups under a specified parent group 
+    in the Akamai platform. It filters groups based on a provided group prefix and 
+    extracts the Line of Business (LOB) portion of the group name. The script can 
+    work in both DEV and PROD environments and allows for flexible filtering via 
+    parent group ID, parent group name, or group prefix.
+
+Parameters:
+    --group_prefix (optional)     : The prefix for the group name. Default is 'HSBC-DDoS-KSD'.
+    --parent_group_name (optional): The name of the parent group. Provide either this or --parent_group_id.
+    --parent_group_id (optional)  : The numeric ID of the parent group. Provide either this or --parent_group_name.
+    --env (optional)              : The environment (DEV or PROD). Default is DEV.
+    --edgerc_file (optional)      : Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.
+    --section_name (optional)     : Section name in the .edgerc file. Default is 'default'.
+
+Usage:
+    - List top-level groups in the DEV environment with the default parent group ID:
+        python script.py --env=DEV
+
+    - List top-level groups in the PROD environment with a specific parent group ID:
+        python script.py --env=PROD --parent_group_id=1234567
+
+    - List top-level groups using a parent group name and filter by custom group prefix:
+        python script.py --parent_group_name="Main Street Corporation" --group_prefix="CustomPrefix"
+
+    - List top-level groups using the default HSBC-DDoS-KSD prefix in the DEV environment:
+        python script.py --env=DEV --group_prefix="HSBC-DDoS-KSD"
+
+===================================================================================
+"""
+
 import os
 import argparse
 import requests
@@ -5,8 +43,20 @@ from akamai.edgegrid import EdgeGridAuth, EdgeRc
 from urllib.parse import urljoin
 import json
 
+
 # Function to set up the session with EdgeRc for Akamai API authentication
 def setup_session(edgerc_file, section_name):
+    """
+    Sets up a session for communication with the Akamai API using credentials from the .edgerc file.
+    
+    Parameters:
+        edgerc_file (str): Path to the .edgerc file containing Akamai API credentials.
+        section_name (str): The section name within the .edgerc file to retrieve credentials from.
+
+    Returns:
+        session (requests.Session): A configured session object with authentication.
+        base_url (str): The base URL for the Akamai API.
+    """
     try:
         edgerc = EdgeRc(edgerc_file)
         base_url = f"https://{edgerc.get(section_name, 'host')}/"
@@ -26,8 +76,22 @@ def setup_session(edgerc_file, section_name):
         print(f"Error reading .edgerc file: {e}")
         exit(1)
 
-# Function to check if a group exists under the specified parent group
+
+# Function to retrieve top-level groups under a specified parent group
 def get_top_level_groups(session, base_url, group_prefix, parent_group_name=None, parent_group_id=None):
+    """
+    Retrieves a list of top-level groups under a specified parent group, filtered by the group prefix.
+
+    Parameters:
+        session (requests.Session): The session object configured for API communication.
+        base_url (str): The base URL of the Akamai API.
+        group_prefix (str): The prefix to filter the group names.
+        parent_group_name (str, optional): The name of the parent group (optional).
+        parent_group_id (int, optional): The ID of the parent group (optional).
+
+    Returns:
+        top_level_groups (list): A list of top-level group names filtered by the prefix.
+    """
     try:
         url = urljoin(base_url, "identity-management/v3/user-admin/groups")
         headers = {"accept": "application/json"}
@@ -48,12 +112,31 @@ def get_top_level_groups(session, base_url, group_prefix, parent_group_name=None
         print(f"Error during group retrieval: {e}")
         return []
 
-# Function to extract LOB from group name
+
+# Function to extract the Line of Business (LOB) from the group name
 def extract_lob(group_name, group_prefix):
+    """
+    Extracts the LOB portion from a group name by removing the prefix.
+
+    Parameters:
+        group_name (str): The full group name.
+        group_prefix (str): The prefix to remove from the group name.
+
+    Returns:
+        lob (str): The extracted LOB portion of the group name.
+    """
     return group_name.replace(f"{group_prefix}-", "")
 
-# Main logic
+
+# Main function to handle argument parsing and script execution
 def main():
+    """
+    The main function that coordinates the flow of the script, including session setup, 
+    top-level group retrieval, and LOB extraction.
+    
+    The script lists top-level groups under a specified parent group, filtering by group prefix, 
+    and outputs only the LOB portion of the group names.
+    """
     parser = argparse.ArgumentParser(description="List top-level groups under a parent group filtered by group prefix.")
     parser.add_argument("--group_prefix", default="HSBC-DDoS-KSD", help="The prefix for the group name. Default is 'HSBC-DDoS-KSD'.")
     parser.add_argument("--parent_group_name", help="The name of the parent group. Provide either this or --parent_group_id.")
