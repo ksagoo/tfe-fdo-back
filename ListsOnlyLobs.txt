@@ -98,18 +98,19 @@ def get_top_level_groups(session, base_url, group_prefix, parent_group_id):
 
         if response.status_code == 200:
             groups = response.json()
-            print("Raw groups data received from Akamai API:")
-            print(json.dumps(groups, indent=4))  # Debug: Print the full list of groups retrieved
-
             top_level_groups = []
             for group in groups:
                 # Check if the group is a top-level group and if it matches the prefix
                 if group.get('parentGroupId') == parent_group_id and group.get('groupName', '').startswith(group_prefix):
-                    top_level_groups.append(group.get('groupName'))
+                    top_level_groups.append({
+                        'group_name': group.get('groupName'),
+                        'group_id': group.get('groupId')
+                    })
 
-            # Debugging output before LOB extraction
-            print("Top-level groups matching the prefix and parentGroupId filter:")
-            print(top_level_groups)
+            # Debugging output
+            print("Top-level groups (name and ID) matching the prefix and parentGroupId filter:")
+            for group in top_level_groups:
+                print(f"Group Name: {group['group_name']}, Group ID: {group['group_id']}")
             
             return top_level_groups
         else:
@@ -175,8 +176,8 @@ def main():
 
     # Extract LOB portions from group names
     if top_level_groups:
-        print("Top-level LOB portions:")  # Message before LOB extraction
-        lob_list = [extract_lob(group_name, args.group_prefix) for group_name in top_level_groups]
+        print("\nTop-level LOB portions:")  # Message before LOB extraction
+        lob_list = [extract_lob(group['group_name'], args.group_prefix) for group in top_level_groups]
         for lob in lob_list:
             print(lob)
     else:
