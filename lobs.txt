@@ -1,17 +1,16 @@
 """
 ===================================================================================
-                                Akamai Access Group LOB Listing Script
+                                Akamai Access Group Listing Script with Group Prefix
 ===================================================================================
 Script Name:
-    Akamai Access Group LOB Listing Script
+    Akamai Access Group Listing Script with Group Prefix
 
 Description:
-    This script lists only the LOB portion of the top-level groups under a specified 
-    parent group in the Akamai platform. The script uses --env to set the default 
-    parent_group_id based on whether it's running in DEV or PROD environment, or it 
-    can resolve a parent group dynamically using the provided --parent_group_name. 
-    It also filters the top-level groups to only show those that begin with the 
-    specified --group_prefix, and extracts the LOB part from the group name.
+    This script lists all top-level groups under a specified parent group in the 
+    Akamai platform. The script uses --env to set the default parent_group_id based 
+    on whether it's running in DEV or PROD environment, or it can resolve a parent 
+    group dynamically using the provided --parent_group_name. It also filters the 
+    top-level groups to only show those that begin with the specified --group_prefix.
 
 Parameters:
     --env               : The environment (DEV or PROD). Default is DEV.
@@ -20,15 +19,16 @@ Parameters:
     --group_prefix      : The prefix for filtering top-level groups. Default is 'HSBC-DDoS-KSD'.
     --edgerc_file       : Path to the .edgerc file. Default is '~/.edgerc'.
     --section_name      : Section name in the .edgerc file. Default is 'default'.
+    --format            : The output format, either 'list' or 'json'. Default is 'list'.
 
 Usage:
-    - To list top-level LOBs in the DEV environment with the default parent group ID:
+    - To list top-level groups in the DEV environment with the default parent group ID:
         python script.py --env=DEV
 
-    - To list top-level LOBs in the PROD environment using a specific parent group ID:
+    - To list top-level groups in the PROD environment using a specific parent group ID:
         python script.py --env=PROD --parent_group_id=1234567
 
-    - To list top-level LOBs using a parent group name and filter by custom group prefix:
+    - To list top-level groups using a parent group name and filter by custom group prefix:
         python script.py --parent_group_name="Main Street Corporation" --group_prefix="CustomPrefix"
 ===================================================================================
 """
@@ -68,8 +68,8 @@ def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=Non
             return group
     return None
 
-# Function to extract and print only the LOB part of the top-level groups
-def list_top_level_lob_groups(session, base_url, group_prefix, parent_group_name=None, parent_group_id=None):
+# Function to list top-level groups filtered by group_prefix and output the LOB part
+def list_top_level_groups(session, base_url, group_prefix, parent_group_name=None, parent_group_id=None, output_format="list"):
     try:
         url = urljoin(base_url, "identity-management/v3/user-admin/groups")
         headers = {"accept": "application/json"}
@@ -82,12 +82,21 @@ def list_top_level_lob_groups(session, base_url, group_prefix, parent_group_name
             parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
 
             if parent_group:
-                print(f"Top-level LOB portions under '{parent_group.get('groupName')}' (ID: {parent_group.get('groupId')}) with prefix '{group_prefix}':")
+                lob_list = []
                 for subgroup in parent_group.get("subGroups", []):
                     if subgroup['groupName'].startswith(group_prefix):
-                        # Extract the LOB part of the group name
-                        lob_part = subgroup['groupName'].replace(f"{group_prefix}-", "")
-                        print(f" - {lob_part}")
+                        # Extract LOB part
+                        lob_part = subgroup['groupName'].replace(group_prefix + "-", "", 1)
+                        lob_list.append(lob_part)
+
+                # Output based on the specified format
+                if output_format == "json":
+                    print(json.dumps(lob_list, indent=4))
+                else:
+                    print("Top-level LOB portions:")
+                    for lob in lob_list:
+                        print(f" - {lob}")
+
             else:
                 print(f"Error: Parent group not found with name '{parent_group_name}' or ID '{parent_group_id}'.")
         else:
@@ -97,13 +106,14 @@ def list_top_level_lob_groups(session, base_url, group_prefix, parent_group_name
 
 # Main function that handles argument parsing and logic flow
 def main():
-    parser = argparse.ArgumentParser(description="List top-level LOB portions under a parent group, filtered by group prefix.")
+    parser = argparse.ArgumentParser(description="List top-level groups under a parent group, filtered by group prefix.")
     parser.add_argument("--env", choices=["DEV", "PROD"], default="DEV", help="The environment (DEV or PROD). Default is DEV.")
     parser.add_argument("--parent_group_name", help="The name of the parent group. Provide either this or --parent_group_id.")
     parser.add_argument("--parent_group_id", type=int, help="The numeric ID of the parent group. Provide either this or --parent_group_name.")
     parser.add_argument("--group_prefix", default="HSBC-DDoS-KSD", help="The prefix for filtering top-level groups. Default is 'HSBC-DDoS-KSD'.")
     parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
     parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
+    parser.add_argument("--format", choices=["list", "json"], default="list", help="The output format, either 'list' or 'json'. Default is 'list'.")
 
     args = parser.parse_args()
 
@@ -124,8 +134,8 @@ def main():
     else:
         resolved_parent_group_id = default_parent_group_id
 
-    # List the LOB portions of the top-level groups under the parent group, filtered by group_prefix
-    list_top_level_lob_groups(session, base_url, args.group_prefix, args.parent_group_name, resolved_parent_group_id)
+    # List the top-level groups under the parent group, filtered by group_prefix
+    list_top_level_groups(session, base_url, args.group_prefix, args.parent_group_name, resolved_parent_group_id, args.format)
 
 if __name__ == "__main__":
     main()
