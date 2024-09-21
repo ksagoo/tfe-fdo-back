@@ -64,7 +64,7 @@ def setup_session(edgerc_file, section_name):
         print(f"Error reading .edgerc file: {e}")
         exit(1)
 
-# Helper function to perform case-insensitive matching
+# Helper function to perform case-insensitive matching and return the matched value from Akamai
 def check_case_insensitive_match(value_to_check, values_list):
     return next((item for item in values_list if item.lower() == value_to_check.lower()), None)
 
@@ -74,37 +74,6 @@ def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=Non
         if (parent_group_name and check_case_insensitive_match(parent_group_name, [group.get("groupName")])) or (parent_group_id and group.get("groupId") == parent_group_id):
             return group
     return None
-
-# Function to check if a subgroup exists
-def check_group_exists(session, base_url, group_prefix, lob, region, country_servicename, parent_group_name=None, parent_group_id=None):
-    try:
-        url = urljoin(base_url, "identity-management/v3/user-admin/groups")
-        headers = {"accept": "application/json"}
-        response = session.get(url, headers=headers)
-
-        if response.status_code == 200:
-            groups = response.json()
-
-            parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
-
-            if parent_group:
-                for top_level_group in parent_group.get("subGroups", []):
-                    top_level_group_name = check_case_insensitive_match(lob, [top_level_group.get("groupName").replace(group_prefix + "-", "")])
-                    if top_level_group_name:
-                        for region_group in top_level_group.get("subGroups", []):
-                            region_name = region_group.get("groupName").replace(group_prefix + "-" + top_level_group_name + "-", "")
-                            if check_case_insensitive_match(region, [region_name]):
-                                for service_group in region_group.get("subGroups", []):
-                                    service_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "")
-                                    if check_case_insensitive_match(country_servicename, [service_name]):
-                                        return True, f"{service_group.get('groupName')} (ID: {service_group.get('groupId')})"
-                return False, None
-        else:
-            print(f"Failed to fetch groups: {response.status_code} - {response.text}")
-            return None, None
-    except Exception as e:
-        print(f"Error fetching group information: {e}")
-        return None, None
 
 # Function to list country/service groups under regional groups, filtered by group_prefix
 def list_country_service_groups(session, base_url, group_prefix, parent_group_name=None, parent_group_id=None, levels=3):
@@ -125,15 +94,17 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
                 country_service_output = {}
                 found_groups = False
                 for top_level_group in parent_group.get("subGroups", []):
-                    # Case-insensitive group_prefix check
-                    if check_case_insensitive_match(group_prefix, [top_level_group["groupName"][:len(group_prefix)]]):
+                    # Case-insensitive group_prefix check and retrieve the correct group prefix from Akamai
+                    matched_group_prefix = check_case_insensitive_match(group_prefix, [top_level_group["groupName"][:len(group_prefix)]])
+                    if matched_group_prefix:
                         found_groups = True
-                        lob_name = top_level_group.get("groupName").replace(group_prefix + "-", "")
+                        # Use the matched group prefix from Akamai to split the LOB and region
+                        lob_name = top_level_group.get("groupName").replace(matched_group_prefix + "-", "")
                         country_service_output[lob_name] = {}
 
                         if levels >= 2:
                             for region_group in top_level_group.get("subGroups", []):
-                                region_name = region_group.get("groupName").replace(group_prefix + "-" + lob_name + "-", "")
+                                region_name = region_group.get("groupName").replace(matched_group_prefix + "-" + lob_name + "-", "")
                                 country_service_output[lob_name][region_name] = []
 
                                 if levels == 3:
