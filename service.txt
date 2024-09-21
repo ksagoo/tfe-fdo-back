@@ -83,6 +83,10 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
             parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
 
             if parent_group:
+                # Print parent group name and group prefix
+                print(f"Parent Group: {parent_group.get('groupName')}")
+                print(f"Group Prefix: {group_prefix}\n")
+
                 country_service_output = {}
                 for top_level_group in parent_group.get("subGroups", []):
                     if top_level_group["groupName"].startswith(group_prefix):
