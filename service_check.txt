@@ -119,6 +119,8 @@ def list_or_check_country_service_groups(session, base_url, group_prefix, operat
                     lob = lob.strip().lower()
                     country_servicename = country_servicename.strip().lower()
 
+                    found_any = False  # Flag to track if any match is found
+
                     for top_level_group in parent_group.get("subGroups", []):
                         if top_level_group["groupName"].lower().startswith(group_prefix.lower()) and lob == top_level_group.get("groupName").replace(group_prefix + "-", "").lower():
                             for region_group in top_level_group.get("subGroups", []):
@@ -127,11 +129,13 @@ def list_or_check_country_service_groups(session, base_url, group_prefix, operat
                                     for service_group in region_group.get("subGroups", []):
                                         service_group_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "").lower()
                                         if service_group_name == country_servicename:
-                                            print(f"True: Subgroup '{service_group.get('groupName')}' already exists with groupId: {service_group.get('groupId')}")
-                                            return True
+                                            found_any = True
+                                            print(f"True: Subgroup '{service_group.get('groupName')}' already exists in region '{region_name}' with groupId: {service_group.get('groupId')}")
+                                            break
 
-                    print(f"False: Subgroup for LOB '{lob}', region(s) '{regions}' and country/service name '{country_servicename}' does not exist.")
-                    return False
+                    if not found_any:
+                        print(f"False: Subgroup for LOB '{lob}', region(s) '{regions}' and country/service name '{country_servicename}' does not exist.")
+                    return found_any
             else:
                 print(f"Error: Parent group not found with name '{parent_group_name}' or ID '{parent_group_id}'.")
         else:
@@ -156,11 +160,6 @@ def main():
     parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
 
     args = parser.parse_args()
-
-    # Validate input in 'check' mode
-    if args.operation == 'check' and (not args.lob or not args.country_servicename):
-        print("Error: '--lob' and '--country_servicename' must be provided in 'check' mode.")
-        return
 
     edgerc_file = os.path.expanduser(args.edgerc_file)
     session, base_url = setup_session(edgerc_file, args.section_name)
