@@ -123,15 +123,17 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
             parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
 
             if parent_group:
-                print(f"Parent Group: {parent_group.get('groupName')}")
-                print(f"Group Prefix: {group_prefix}\n")
-
-                country_service_output = {}
                 found_groups = False
+                country_service_output = {}
+                print(f"Parent Group: {parent_group.get('groupName')}")
+                
+                # Go through the subgroups under the parent group
                 for top_level_group in parent_group.get("subGroups", []):
-                    # Case-insensitive group_prefix check
+                    # Perform case-insensitive group_prefix check
                     found_prefix = check_case_insensitive_match(group_prefix, [top_level_group["groupName"][:len(group_prefix)]])
+                    
                     if found_prefix:
+                        print(f"Group Prefix: {found_prefix}\n")  # Print exact group_prefix from Akamai
                         found_groups = True
                         lob_name = top_level_group.get("groupName").replace(found_prefix + "-", "")
                         country_service_output[lob_name] = {}
