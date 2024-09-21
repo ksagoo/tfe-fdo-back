@@ -98,7 +98,8 @@ def check_group_exists(session, base_url, group_prefix, lob, region, country_ser
                                         service_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "")
                                         if case_insensitive_match(country_servicename, [service_name]):
                                             return True, f"{service_group.get('groupName')} (ID: {service_group.get('groupId')})"
-                return False, None
+                # If no match found for the country_servicename, return the Akamai matched group_prefix
+                return False, found_prefix
         else:
             print(f"Failed to fetch groups: {response.status_code} - {response.text}")
             return None, None
@@ -232,7 +233,7 @@ def main():
             if exists:
                 print(f"True: Subgroup already exists - {group_info}")
             else:
-                print(f"False: Subgroup {args.group_prefix}-{args.lob}-{region}-{args.country_servicename} does not exist.")
+                print(f"False: Subgroup {group_info}-{args.lob}-{region}-{args.country_servicename} does not exist.")  # Use matched group_prefix from Akamai
 
 if __name__ == "__main__":
     main()
