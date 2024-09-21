@@ -130,6 +130,7 @@ def check_group_exists(session, base_url, group_prefix, lob, regions, country_se
             parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
 
             if parent_group:
+                found = False
                 for top_level_group in parent_group.get("subGroups", []):
                     if top_level_group["groupName"].lower() == (group_prefix + "-" + lob).lower():
                         for region_group in top_level_group.get("subGroups", []):
@@ -138,9 +139,9 @@ def check_group_exists(session, base_url, group_prefix, lob, regions, country_se
                                 for service_group in region_group.get("subGroups", []):
                                     if service_group["groupName"].lower() == (region_group["groupName"] + "-" + country_servicename).lower():
                                         print(f"True, subgroup already exists: {service_group['groupName']} with groupId {service_group['groupId']}")
-                                        return True
-                print("False, subgroup currently does not exist")
-                return False
+                                        found = True
+                                if not found:
+                                    print(f"False: Subgroup '{group_prefix}-{lob}-{region_name}-{country_servicename}' does not exist")
             else:
                 print(f"Error: Parent group not found with name '{parent_group_name}' or ID '{parent_group_id}'.")
         else:
@@ -222,9 +223,12 @@ def main():
             print("Error: --lob and --country_servicename must be provided for 'check' operation.")
             return
 
+        # Set default regions to all if not provided
+        if not args.regions:
+            args.regions = ["APAC", "EMEA", "AMER", "Global", "LATAM"]
+
         # Check if the specified LOB, region, and country/service name exist
         check_group_exists(session, base_url, args.group_prefix, args.lob, args.regions, args.country_servicename, args.parent_group_name, resolved_parent_group_id)
-
 
 if __name__ == "__main__":
     main()
