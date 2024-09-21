@@ -218,10 +218,8 @@ def main():
         resolved_parent_group_id = default_parent_group_id
 
     if args.operation == "list":
-        # List the country/service groups under regional groups
         country_service_output = list_country_service_groups(session, base_url, args.group_prefix, args.parent_group_name, resolved_parent_group_id, args.levels)
 
-        # Output the result
         if country_service_output:
             if args.output_format == "list":
                 output = ""
