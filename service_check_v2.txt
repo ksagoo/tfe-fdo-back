@@ -90,11 +90,13 @@ def check_group_exists(session, base_url, group_prefix, lob, region, country_ser
             if parent_group:
                 for top_level_group in parent_group.get("subGroups", []):
                     # Perform case-insensitive match for group_prefix
-                    if check_case_insensitive_match(group_prefix, [top_level_group["groupName"][:len(group_prefix)]]):
-                        top_level_group_name = check_case_insensitive_match(lob, [top_level_group.get("groupName").replace(group_prefix + "-", "")])
+                    found_prefix = check_case_insensitive_match(group_prefix, [top_level_group["groupName"][:len(group_prefix)]])
+                    if found_prefix:
+                        # Use the exact group prefix from Akamai
+                        top_level_group_name = check_case_insensitive_match(lob, [top_level_group.get("groupName").replace(found_prefix + "-", "")])
                         if top_level_group_name:
                             for region_group in top_level_group.get("subGroups", []):
-                                region_name = region_group.get("groupName").replace(group_prefix + "-" + top_level_group_name + "-", "")
+                                region_name = region_group.get("groupName").replace(found_prefix + "-" + top_level_group_name + "-", "")
                                 if check_case_insensitive_match(region, [region_name]):
                                     for service_group in region_group.get("subGroups", []):
                                         service_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "")
@@ -128,14 +130,15 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
                 found_groups = False
                 for top_level_group in parent_group.get("subGroups", []):
                     # Case-insensitive group_prefix check
-                    if check_case_insensitive_match(group_prefix, [top_level_group["groupName"][:len(group_prefix)]]):
+                    found_prefix = check_case_insensitive_match(group_prefix, [top_level_group["groupName"][:len(group_prefix)]])
+                    if found_prefix:
                         found_groups = True
-                        lob_name = top_level_group.get("groupName").replace(group_prefix + "-", "")
+                        lob_name = top_level_group.get("groupName").replace(found_prefix + "-", "")
                         country_service_output[lob_name] = {}
 
                         if levels >= 2:
                             for region_group in top_level_group.get("subGroups", []):
-                                region_name = region_group.get("groupName").replace(group_prefix + "-" + lob_name + "-", "")
+                                region_name = region_group.get("groupName").replace(found_prefix + "-" + lob_name + "-", "")
                                 country_service_output[lob_name][region_name] = []
 
                                 if levels == 3:
