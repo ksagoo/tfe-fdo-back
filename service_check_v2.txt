@@ -191,9 +191,10 @@ def main():
     parser.add_argument("--output_type", choices=["stdout", "file"], default="stdout", help="Output to 'stdout' (default) or 'file'.")
     parser.add_argument("--operation", choices=["list", "check"], default="list", help="The operation mode, either 'list' (default) or 'check'.")
     parser.add_argument("--lob", help="The Line of Business to check when using 'check' mode.")
-    parser.add_argument("--regions", nargs='+', help="The regions to check when using 'check' mode (default to all 5 regions).")
+    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER", "LATAM", "Global"], default=["APAC", "EMEA", "AMER", "LATAM", "Global"], 
+                        help="The regions to check when using 'check' mode (default to all 5 regions).")
     parser.add_argument("--country_servicename", help="The country or service name to check when using 'check' mode.")
-    parser.add_argument("--levels", type=int, choices=[1, 2, 3], default=3, help="The levels to output when using 'list' (1, 2, or 3, default is 3).")
+    parser.add_argument("--levels", help="The levels to output when using 'list' (1, 2, or 3, default is 3).", type=int, default=3)
     parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
     parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
 
@@ -235,27 +236,23 @@ def main():
                 if args.output_type == "stdout":
                     print(output)
                 else:
-                    file_name = "country_service_list.txt"
-                    with open(file_name, "w") as f:
+                    with open("country_service_list.txt", "w") as f:
                         f.write(output)
-                    print(f"Output saved to file: {file_name}")
+                    print("File 'country_service_list.txt' created.")
             elif args.output_format == "json":
                 output_json = json.dumps(country_service_output, indent=4)
                 if args.output_type == "stdout":
                     print(output_json)
                 else:
-                    file_name = "country_service_list.json"
-                    with open(file_name, "w") as f:
+                    with open("country_service_list.json", "w") as f:
                         f.write(output_json)
-                    print(f"Output saved to file: {file_name}")
+                    print("File 'country_service_list.json' created.")
 
     elif args.operation == "check":
         if not args.lob or not args.country_servicename:
-            print("Error: --lob and --country_servicename are required for 'check' operation.")
+            print("Error: --lob and --country_servicename are required for the 'check' operation.")
         else:
-            regions_to_check = args.regions if args.regions else ["APAC", "EMEA", "AMER", "LATAM", "Global"]
-            # Check if the subgroup exists for the given lob, region, and country/service name
-            check_subgroup_exists(session, base_url, args.group_prefix, args.lob, regions_to_check, args.country_servicename, args.parent_group_name, resolved_parent_group_id)
+            check_subgroup_exists(session, base_url, args.group_prefix, args.lob, args.regions, args.country_servicename, args.parent_group_name, resolved_parent_group_id)
 
 if __name__ == "__main__":
     main()
