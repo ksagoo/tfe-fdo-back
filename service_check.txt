@@ -88,12 +88,13 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
                 print(f"Top-level group: '{parent_group.get('groupName')}' with group_prefix '{group_prefix}'")
 
                 for region_group in parent_group.get("subGroups", []):
-                    region_name = region_group.get("groupName").replace(group_prefix + "-", "")
-                    country_service_output[region_name] = []
+                    if region_group.get("groupName").startswith(group_prefix):
+                        region_name = region_group.get("groupName").replace(group_prefix + "-", "")
+                        country_service_output[region_name] = []
 
-                    for service_group in region_group.get("subGroups", []):
-                        country_service_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "")
-                        country_service_output[region_name].append(country_service_name)
+                        for service_group in region_group.get("subGroups", []):
+                            country_service_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "")
+                            country_service_output[region_name].append(country_service_name)
 
                 return country_service_output
             else:
@@ -117,6 +118,7 @@ def check_service_group_exists(session, base_url, lob, regions, country_servicen
             parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
 
             if parent_group:
+                # Ensure top-level LOB group starts with the group_prefix
                 lob_group_name = f"{group_prefix}-{lob}".lower()  # LOB search is case-insensitive
                 lob_group = find_group_by_name_or_id(parent_group.get("subGroups", []), lob_group_name)
 
