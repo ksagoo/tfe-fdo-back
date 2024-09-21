@@ -84,17 +84,18 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
 
             if parent_group:
                 country_service_output = {}
-                print(f"Top-level group: '{parent_group.get('groupName')}'")
-
                 for top_level_group in parent_group.get("subGroups", []):
                     if top_level_group["groupName"].startswith(group_prefix):
+                        lob_name = top_level_group.get("groupName").replace(group_prefix + "-", "")
+                        country_service_output[lob_name] = {}
+
                         for region_group in top_level_group.get("subGroups", []):
-                            region_name = region_group.get("groupName").replace(group_prefix + "-", "")
-                            country_service_output[region_name] = []
+                            region_name = region_group.get("groupName").replace(group_prefix + "-" + lob_name + "-", "")
+                            country_service_output[lob_name][region_name] = []
 
                             for service_group in region_group.get("subGroups", []):
                                 country_service_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "")
-                                country_service_output[region_name].append(country_service_name)
+                                country_service_output[lob_name][region_name].append(country_service_name)
 
                 return country_service_output
             else:
@@ -142,10 +143,12 @@ def main():
     if country_service_output:
         if args.output_format == "list":
             output = ""
-            for region, services in country_service_output.items():
-                output += f"{region}\n"
-                for service in services:
-                    output += f"  - {service}\n"
+            for lob, regions in country_service_output.items():
+                output += f"{lob}\n"
+                for region, services in regions.items():
+                    output += f"  - {region}\n"
+                    for service in services:
+                        output += f"    - {service}\n"
             if args.output_type == "stdout":
                 print(output)
             else:
