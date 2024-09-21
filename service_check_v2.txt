@@ -123,9 +123,11 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
                 print(f"Group Prefix: {group_prefix}\n")
 
                 country_service_output = {}
+                found_groups = False
                 for top_level_group in parent_group.get("subGroups", []):
                     # Case-insensitive group_prefix check
                     if check_case_insensitive_match(group_prefix, [top_level_group["groupName"][:len(group_prefix)]]):
+                        found_groups = True
                         lob_name = top_level_group.get("groupName").replace(group_prefix + "-", "")
                         country_service_output[lob_name] = {}
 
@@ -139,9 +141,11 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
                                         country_service_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "")
                                         country_service_output[lob_name][region_name].append(country_service_name)
 
+                if not found_groups:
+                    print(f"No match found for group prefix '{group_prefix}' under the parent group '{parent_group.get('groupName')}'.")
                 return country_service_output
             else:
-                print(f"Error: Parent group not found with name '{parent_group_name}' or ID '{parent_group_id}'.")
+                print(f"No match found for parent group '{parent_group_name}' with ID '{parent_group_id}'.")
         else:
             print(f"Failed to fetch groups: {response.status_code} - {response.text}")
     except Exception as e:
@@ -158,8 +162,7 @@ def main():
     parser.add_argument("--output_type", choices=["stdout", "file"], default="stdout", help="Output to 'stdout' (default) or 'file'.")
     parser.add_argument("--operation", choices=["list", "check"], default="list", help="The operation mode, either 'list' or 'check'.")
     parser.add_argument("--lob", help="The Line of Business (LOB) name, required for 'check' operation.")
-    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER", "Global", "LATAM"], default=["APAC", "EMEA", "AMER", "Global", "LATAM"], 
-                        help="The regions to check, required for 'check' operation.")
+    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER", "Global", "LATAM"], default=["APAC", "EMEA", "AMER", "Global", "LATAM"], help="The regions to check.")
     parser.add_argument("--country_servicename", help="The country/service name, required for 'check' operation.")
     parser.add_argument("--levels", type=int, choices=[1, 2, 3], default=3, help="Levels to list (1, 2, or 3). Default is 3.")
     parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
