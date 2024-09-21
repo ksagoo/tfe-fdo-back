@@ -19,11 +19,11 @@ Parameters:
     --group_prefix      : The prefix for filtering top-level groups. Default is 'HSBC-DDoS-KSD'.
     --output_format     : The format for output, either 'list' (default) or 'json'.
     --output_type       : Output to 'stdout' (default) or 'file'.
-    --operation         : Operation mode ('list' or 'check'). Default is 'list'.
-    --lob               : The LOB to check when in 'check' operation mode.
-    --regions           : The regions to check when in 'check' operation mode. Default is all regions.
-    --country_servicename: The country/service name to check when in 'check' operation mode.
-    --levels            : The levels to list (1, 2, or 3). Default is 3.
+    --operation         : The operation mode, either 'list' (default) or 'check'.
+    --lob               : The Line of Business (LOB) name, required for 'check' operation.
+    --regions           : The regions to check, required for 'check' operation. Default is all 5 regions.
+    --country_servicename: The country/service name, required for 'check' operation.
+    --levels            : Levels to create (1, 2, or 3), used in 'list' operation. Default is 3.
     --edgerc_file       : Path to the .edgerc file. Default is '~/.edgerc'.
     --section_name      : Section name in the .edgerc file. Default is 'default'.
 
@@ -31,11 +31,8 @@ Usage:
     - To list country/service name groups in the DEV environment with the default parent group ID:
         python script.py --env=DEV
 
-    - To list country/service name groups in the PROD environment using a specific parent group ID:
-        python script.py --env=PROD --parent_group_id=1234567
-
-    - To list country/service name groups using a parent group name and filter by custom group prefix:
-        python script.py --parent_group_name="Main Street Corporation" --group_prefix="CustomPrefix"
+    - To check for a specific LOB, region, and country/service name:
+        python script.py --operation=check --lob="TEST06" --country_servicename="AkamaiDevOps"
 ===================================================================================
 """
 
@@ -67,14 +64,49 @@ def setup_session(edgerc_file, section_name):
         print(f"Error reading .edgerc file: {e}")
         exit(1)
 
-# Function to find the parent group by name or ID, case-insensitive
+# Helper function to perform case-insensitive matching
+def check_case_insensitive_match(value_to_check, values_list):
+    return next((item for item in values_list if item.lower() == value_to_check.lower()), None)
+
+# Function to find the parent group by name or ID
 def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=None):
     for group in groups:
-        if (parent_group_name and group.get("groupName").lower() == parent_group_name.lower()) or (parent_group_id and group.get("groupId") == parent_group_id):
+        if (parent_group_name and check_case_insensitive_match(parent_group_name, [group.get("groupName")])) or (parent_group_id and group.get("groupId") == parent_group_id):
             return group
     return None
 
-# Function to list country/service groups under regional groups, filtered by group_prefix, case-insensitive
+# Function to check if a subgroup exists
+def check_group_exists(session, base_url, group_prefix, lob, region, country_servicename, parent_group_name=None, parent_group_id=None):
+    try:
+        url = urljoin(base_url, "identity-management/v3/user-admin/groups")
+        headers = {"accept": "application/json"}
+        response = session.get(url, headers=headers)
+
+        if response.status_code == 200:
+            groups = response.json()
+
+            parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
+
+            if parent_group:
+                for top_level_group in parent_group.get("subGroups", []):
+                    top_level_group_name = check_case_insensitive_match(lob, [top_level_group.get("groupName").replace(group_prefix + "-", "")])
+                    if top_level_group_name:
+                        for region_group in top_level_group.get("subGroups", []):
+                            region_name = region_group.get("groupName").replace(group_prefix + "-" + top_level_group_name + "-", "")
+                            if check_case_insensitive_match(region, [region_name]):
+                                for service_group in region_group.get("subGroups", []):
+                                    service_name = service_group.get("groupName").replace(region_group.get("groupName") + "-", "")
+                                    if check_case_insensitive_match(country_servicename, [service_name]):
+                                        return True, f"{service_group.get('groupName')} (ID: {service_group.get('groupId')})"
+                return False, None
+        else:
+            print(f"Failed to fetch groups: {response.status_code} - {response.text}")
+            return None, None
+    except Exception as e:
+        print(f"Error fetching group information: {e}")
+        return None, None
+
+# Function to list country/service groups under regional groups, filtered by group_prefix
 def list_country_service_groups(session, base_url, group_prefix, parent_group_name=None, parent_group_id=None, levels=3):
     try:
         url = urljoin(base_url, "identity-management/v3/user-admin/groups")
@@ -84,17 +116,15 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
         if response.status_code == 200:
             groups = response.json()
 
-            # Find the parent group by name or ID
             parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
 
             if parent_group:
-                # Print parent group name and group prefix
                 print(f"Parent Group: {parent_group.get('groupName')}")
                 print(f"Group Prefix: {group_prefix}\n")
 
                 country_service_output = {}
                 for top_level_group in parent_group.get("subGroups", []):
-                    if top_level_group["groupName"].lower().startswith(group_prefix.lower()):
+                    if top_level_group["groupName"].startswith(group_prefix):
                         lob_name = top_level_group.get("groupName").replace(group_prefix + "-", "")
                         country_service_output[lob_name] = {}
 
@@ -116,40 +146,6 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
     except Exception as e:
         print(f"Error fetching group information: {e}")
 
-# Function to check if the specified LOB, region, and country/service name exist, case-insensitive
-def check_group_exists(session, base_url, group_prefix, lob, regions, country_servicename, parent_group_name=None, parent_group_id=None):
-    try:
-        url = urljoin(base_url, "identity-management/v3/user-admin/groups")
-        headers = {"accept": "application/json"}
-        response = session.get(url, headers=headers)
-
-        if response.status_code == 200:
-            groups = response.json()
-
-            # Find the parent group by name or ID
-            parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
-
-            if parent_group:
-                found = False
-                lob_lower = lob.lower()  # Make LOB lookup case-insensitive
-                for top_level_group in parent_group.get("subGroups", []):
-                    if top_level_group["groupName"].lower() == (group_prefix + "-" + lob_lower).lower():
-                        for region_group in top_level_group.get("subGroups", []):
-                            region_name = region_group.get("groupName").replace(group_prefix + "-" + lob + "-", "")
-                            if not regions or region_name.lower() in [r.lower() for r in regions]:
-                                for service_group in region_group.get("subGroups", []):
-                                    if service_group["groupName"].lower() == (region_group["groupName"] + "-" + country_servicename).lower():
-                                        print(f"True, subgroup already exists: {service_group['groupName']} with groupId {service_group['groupId']}")
-                                        found = True
-                                if not found:
-                                    print(f"False: Subgroup '{group_prefix}-{lob}-{region_name}-{country_servicename}' does not exist")
-            else:
-                print(f"Error: Parent group not found with name '{parent_group_name}' or ID '{parent_group_id}'.")
-        else:
-            print(f"Failed to fetch groups: {response.status_code} - {response.text}")
-    except Exception as e:
-        print(f"Error checking group existence: {e}")
-
 # Main function that handles argument parsing and logic flow
 def main():
     parser = argparse.ArgumentParser(description="List or check country/service name groups under regional groups.")
@@ -159,10 +155,11 @@ def main():
     parser.add_argument("--group_prefix", default="HSBC-DDoS-KSD", help="The prefix for filtering top-level groups. Default is 'HSBC-DDoS-KSD'.")
     parser.add_argument("--output_format", choices=["list", "json"], default="list", help="The format for output, either 'list' (default) or 'json'.")
     parser.add_argument("--output_type", choices=["stdout", "file"], default="stdout", help="Output to 'stdout' (default) or 'file'.")
-    parser.add_argument("--operation", choices=["list", "check"], default="list", help="Operation mode ('list' or 'check'). Default is 'list'.")
-    parser.add_argument("--lob", help="The LOB to check when in 'check' operation mode.")
-    parser.add_argument("--regions", nargs="+", help="The regions to check when in 'check' operation mode. Default is all regions.")
-    parser.add_argument("--country_servicename", help="The country/service name to check when in 'check' operation mode.")
+    parser.add_argument("--operation", choices=["list", "check"], default="list", help="The operation mode, either 'list' or 'check'.")
+    parser.add_argument("--lob", help="The Line of Business (LOB) name, required for 'check' operation.")
+    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER", "Global", "LATAM"], default=["APAC", "EMEA", "AMER", "Global", "LATAM"], 
+                        help="The regions to check, required for 'check' operation.")
+    parser.add_argument("--country_servicename", help="The country/service name, required for 'check' operation.")
     parser.add_argument("--levels", type=int, choices=[1, 2, 3], default=3, help="Levels to list (1, 2, or 3). Default is 3.")
     parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
     parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
@@ -187,10 +184,8 @@ def main():
         resolved_parent_group_id = default_parent_group_id
 
     if args.operation == "list":
-        # List the country/service groups under regional groups
         country_service_output = list_country_service_groups(session, base_url, args.group_prefix, args.parent_group_name, resolved_parent_group_id, args.levels)
 
-        # Output the result
         if country_service_output:
             if args.output_format == "list":
                 output = ""
@@ -208,7 +203,7 @@ def main():
                     file_name = "country_service_list.txt"
                     with open(file_name, "w") as f:
                         f.write(output)
-                    print(f"File '{file_name}' created successfully.")
+                    print(f"File created: {file_name}")
             elif args.output_format == "json":
                 output_json = json.dumps(country_service_output, indent=4)
                 if args.output_type == "stdout":
@@ -217,19 +212,19 @@ def main():
                     file_name = "country_service_list.json"
                     with open(file_name, "w") as f:
                         f.write(output_json)
-                    print(f"File '{file_name}' created successfully.")
+                    print(f"File created: {file_name}")
+
     elif args.operation == "check":
-        # Check for missing required arguments
         if not args.lob or not args.country_servicename:
-            print("Error: --lob and --country_servicename must be provided for 'check' operation.")
+            print("Error: --lob and --country_servicename are required for 'check' operation.")
             return
 
-        # Set default regions to all if not provided
-        if not args.regions:
-            args.regions = ["APAC", "EMEA", "AMER", "Global", "LATAM"]
-
-        # Check if the specified LOB, region, and country/service name exist
-        check_group_exists(session, base_url, args.group_prefix, args.lob, args.regions, args.country_servicename, args.parent_group_name, resolved_parent_group_id)
+        for region in args.regions:
+            exists, group_info = check_group_exists(session, base_url, args.group_prefix, args.lob, region, args.country_servicename, args.parent_group_name, resolved_parent_group_id)
+            if exists:
+                print(f"True: Subgroup already exists - {group_info}")
+            else:
+                print(f"False: Subgroup {args.group_prefix}-{args.lob}-{region}-{args.country_servicename} does not exist.")
 
 if __name__ == "__main__":
     main()
