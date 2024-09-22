@@ -70,7 +70,7 @@ def setup_session(edgerc_file, section_name):
 
 # Helper function to perform case-insensitive matching
 def check_case_insensitive_match(value_to_check, values_list):
-    return next((item for item in values_list if item.lower() == value_to_check.lower()), None)
+    return next((item for item in values_list if item.lower().strip() == value_to_check.lower().strip()), None)
 
 # Function to find the parent group by name or ID
 def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=None):
@@ -253,12 +253,16 @@ def main():
             print("Error: --lob and --country_servicename are required for 'check' operation.")
             return
 
+        # Trim entered values for lob and country_servicename
+        lob_trimmed = args.lob.strip()
+        country_servicename_trimmed = args.country_servicename.strip()
+
         for region in args.regions:
-            exists, group_info = check_group_exists(session, base_url, args.group_prefix, args.lob, region, args.country_servicename, args.parent_group_name, resolved_parent_group_id)
+            exists, group_info = check_group_exists(session, base_url, args.group_prefix, lob_trimmed, region, country_servicename_trimmed, args.parent_group_name, resolved_parent_group_id)
             if exists:
                 print(f"True: Subgroup already exists - {group_info}")
             else:
-                print(f"False: Subgroup {args.group_prefix}-{args.lob}-{region}-{args.country_servicename} does not exist.")
+                print(f"False: Subgroup {args.group_prefix}-{lob_trimmed}-{region}-{country_servicename_trimmed} does not exist.")
 
 if __name__ == "__main__":
     main()
