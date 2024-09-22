@@ -1,44 +1,3 @@
-"""
-===================================================================================
-                                Akamai Access Country/Service Name Script
-===================================================================================
-Script Name:
-    Akamai Access Country/Service Name Script
-
-Description:
-    This script lists all country/service name groups under each regional group 
-    for a specified top-level group in the Akamai platform. It uses --env to set 
-    the default parent_group_id based on whether it's running in DEV or PROD environment, 
-    or it can resolve a parent group dynamically using the provided --parent_group_name. 
-    The script only processes top-level groups that contain the specified --group_prefix.
-
-Parameters:
-    --env               : The environment (DEV or PROD). Default is DEV.
-    --parent_group_name : The name of the parent group. Provide either this or --parent_group_id.
-    --parent_group_id   : The numeric ID of the parent group. Provide either this or --parent_group_name.
-    --group_prefix      : The prefix for filtering top-level groups. Default is 'HSBC-DDoS-KSD'.
-    --output_format     : The format for output, either 'list' (default) or 'json'.
-    --output_type       : Output to 'stdout' (default) or 'file'.
-    --operation         : The operation mode, either 'list' (default) or 'check'.
-    --lob               : The Line of Business (LOB) name, required for 'check' operation.
-    --regions           : The regions to check, required for 'check' operation. Default is all 5 regions.
-    --country_servicename: The country/service name, required for 'check' operation.
-    --levels            : Levels to create (1, 2, or 3), used in 'list' operation. Default is 3.
-    --mode              : Mode of listing, either 'frontdoor' (default) or 'akamai'. Used with 'list' operation.
-    --edgerc_file       : Path to the .edgerc file. Default is '~/.edgerc'.
-    --section_name      : Section name in the .edgerc file. Default is 'default'.
-
-Usage:
-    - To list country/service name groups in the DEV environment with the default parent group ID:
-        python script.py --env=DEV
-
-    - To check for a specific LOB, region, and country/service name:
-        python script.py --operation=check --lob="TEST06" --country_servicename="AkamaiDevOps"
-
-    - To list country/service name groups in Akamai format:
-        python script.py --operation=list --mode=akamai --output_format=json
-===================================================================================
-"""
 import os
 import argparse
 import requests
@@ -138,8 +97,15 @@ def list_country_service_groups(session, base_url, group_prefix, parent_group_na
                                         country_service_name = service_group.get("groupName").replace(
                                             region_group.get("groupName") + "-", "")
                                         if mode == 'akamai':
-                                            country_service_name = f"{group_prefix_used}-{lob_name}-{region_name}-{country_service_name}"
-                                        country_service_output[lob_name][region_name].append(country_service_name)
+                                            # Apply Akamai formatting to all levels
+                                            lob_formatted = f"{group_prefix_used}-{lob_name}"
+                                            region_formatted = f"{group_prefix_used}-{lob_name}-{region_name}"
+                                            country_service_name_formatted = f"{group_prefix_used}-{lob_name}-{region_name}-{country_service_name}"
+                                            country_service_output[lob_formatted] = country_service_output.pop(lob_name)
+                                            country_service_output[lob_formatted][region_formatted] = country_service_output[lob_formatted].pop(region_name)
+                                            country_service_output[lob_formatted][region_formatted].append(country_service_name_formatted)
+                                        else:
+                                            country_service_output[lob_name][region_name].append(country_service_name)
 
                 return country_service_output
             else:
@@ -213,7 +179,8 @@ def main():
     parser.add_argument("--output_type", choices=["stdout", "file"], default="stdout", help="Output to 'stdout' (default) or 'file'.")
     parser.add_argument("--operation", choices=["list", "check"], default="list", help="The operation mode, either 'list' or 'check'.")
     parser.add_argument("--lob", help="The Line of Business (LOB) name, required for 'check' operation.")
-    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER", "Global", "LATAM"], default=["APAC", "EMEA", "AMER", "Global", "LATAM"], help="The regions to check.")
+    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER", "Global", "LATAM"],
+                        default=["APAC", "EMEA", "AMER", "Global", "LATAM"], help="The regions to check.")
     parser.add_argument("--country_servicename", help="The country/service name, required for 'check' operation.")
     parser.add_argument("--levels", type=int, choices=[1, 2, 3], default=3, help="Levels to list (1, 2, or 3). Default is 3.")
     parser.add_argument("--mode", choices=["frontdoor", "akamai"], default="frontdoor", help="The mode of output (frontdoor or akamai).")
@@ -292,6 +259,7 @@ def main():
                 print(f"True: Subgroup already exists - {group_info}")
             else:
                 print(f"False: Subgroup {group_info}")
+
 
 if __name__ == "__main__":
     main()
