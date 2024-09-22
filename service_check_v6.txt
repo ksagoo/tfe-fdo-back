@@ -226,27 +226,27 @@ def main():
                     print(f"File created: {file_name}")
             elif args.output_format == "json":
                 if args.mode == "akamai":
-                    # In 'akamai' mode, modify the output for JSON formatting
-                    output_json = {}
-                    for lob, regions in country_service_output.items():
-                        lob_output = f"{args.group_prefix}-{lob}"
-                        output_json[lob_output] = {}
-                        for region, services in regions.items():
-                            region_output = f"{args.group_prefix}-{lob}-{region}"
-                            output_json[lob_output][region_output] = []
-                            for service in services:
-                                service_output = f"{args.group_prefix}-{lob}-{region}-{service}"
-                                output_json[lob_output][region_output].append(service_output)
-                else:
-                    output_json = country_service_output
+        # In 'akamai' mode, modify the output for JSON formatting
+        output_json = {}
+        for lob, regions in country_service_output.items():
+            lob_output = f"{args.group_prefix}-{lob}"
+            output_json[lob_output] = {}
+            for region, services in regions.items():
+                region_output = f"{args.group_prefix}-{lob}-{region}"
+                output_json[lob_output][region_output] = []
+                for service in services:
+                    service_output = f"{region_output}-{service}"  # Corrected to prevent duplication of group_prefix
+                    output_json[lob_output][region_output].append(service_output)
+    else:
+        output_json = country_service_output
 
-                if args.output_type == "stdout":
-                    print(json.dumps(output_json, indent=4))
-                else:
-                    file_name = "country_service_list.json"
-                    with open(file_name, "w") as f:
-                        json.dump(output_json, f, indent=4)
-                    print(f"File created: {file_name}")
+    if args.output_type == "stdout":
+        print(json.dumps(output_json, indent=4))
+    else:
+        file_name = "country_service_list.json"
+        with open(file_name, "w") as f:
+            json.dump(output_json, f, indent=4)
+        print(f"File created: {file_name}")
 
     elif args.operation == "check":
         if not args.lob or not args.country_servicename:
