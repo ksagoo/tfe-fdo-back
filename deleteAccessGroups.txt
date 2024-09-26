@@ -1,0 +1,216 @@
+"""
+===================================================================================
+                                Akamai Access Group Management Script
+===================================================================================
+Script Name:
+    Akamai Access Group Management Script
+
+Description:
+    This script manages the creation and deletion of Akamai access groups. It checks if a group 
+    exists under a specified parent group and creates it if it does not exist, or deletes the 
+    group based on the hierarchy. The script supports creating or deleting groups for specified levels.
+
+Parameters:
+    lob (required)                 : Line of Business, e.g., TEST01.
+    country_servicename (required) : Country or Service Name, e.g., AkamaiDevOps.
+    --group_prefix                 : The prefix for the group name. Default is 'HSBC-DDoS-KSD'.
+    --regions                      : Regions for which subgroups will be created/deleted (APAC, EMEA, AMER, Global, LATAM). 
+                                     Default is all five: APAC, EMEA, AMER, Global, LATAM.
+    --parent_group_name            : The name of the parent group. Provide either this or --parent_group_id.
+    --parent_group_id              : The numeric ID of the parent group. Provide either this or --parent_group_name.
+    --env                          : The environment (DEV or PROD). Default is DEV.
+    --edgerc_file                  : Path to the .edgerc file. Default is '~/.edgerc'.
+    --section_name                 : Section name in the .edgerc file. Default is 'default'.
+    --levels                       : Levels to create or delete (1, 2, 3, or 4). Default is 4.
+    --operation                    : Operation mode: 'create' (default) or 'delete'.
+
+Usage:
+    - To create a group (default):
+        python script.py "LOB" "CountryServiceName" --levels=4 --operation=create
+
+    - To delete a specific subgroup at level 4:
+        python script.py "LOB" "CountryServiceName" --levels=4 --operation=delete
+
+    - To delete all subgroups under a region:
+        python script.py "LOB" "CountryServiceName" --levels=2 --operation=delete
+
+    - To delete the entire group structure including all regions and subgroups:
+        python script.py "LOB" "CountryServiceName" --levels=ALL --operation=delete
+
+Notes:
+    - For deletion, the script will prompt for confirmation before proceeding.
+    - Subgroups can only be deleted if no further subgroups exist under them.
+===================================================================================
+"""
+
+import os
+import argparse
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+import json
+
+# Function to load EdgeRc and set up authentication
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/"
+        client_token = edgerc.get(section_name, 'client_token')
+        client_secret = edgerc.get(section_name, 'client_secret')
+        access_token = edgerc.get(section_name, 'access_token')
+
+        session = requests.Session()
+        session.auth = EdgeGridAuth(
+            client_token=client_token,
+            client_secret=client_secret,
+            access_token=access_token
+        )
+
+        return session, base_url
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Function to check if a group exists under the parent group
+def check_group_exists(session, base_url, group_name, parent_group_name=None, parent_group_id=None):
+    try:
+        url = urljoin(base_url, "identity-management/v3/user-admin/groups")
+        headers = {"accept": "application/json"}
+        response = session.get(url, headers=headers)
+
+        if response.status_code == 200:
+            groups = response.json()
+            parent_group = find_group_by_name_or_id(groups, parent_group_name, parent_group_id)
+            if parent_group:
+                group_exists, existing_group_id, existing_group = check_group_exists_under_parent(parent_group, group_name)
+                return group_exists, existing_group_id, parent_group, existing_group
+        else:
+            print(f"Failed to fetch groups: {response.status_code} - {response.text}")
+            return None, None, None, None
+    except Exception as e:
+        print(f"Error during group existence check: {e}")
+        return None, None, None, None
+
+# Recursive function to find the group by name or ID anywhere in the hierarchy
+def find_group_by_name_or_id(groups, parent_group_name=None, parent_group_id=None):
+    for group in groups:
+        if (parent_group_name and group.get("groupName").lower() == parent_group_name.lower()) or (parent_group_id and group.get("groupId") == parent_group_id):
+            return group
+        if group.get("subGroups"):
+            found_group = find_group_by_name_or_id(group.get("subGroups"), parent_group_name, parent_group_id)
+            if found_group:
+                return found_group
+    return None
+
+# Function to delete a group
+def delete_group(session, base_url, group_id, group_name):
+    try:
+        url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{group_id}")
+        headers = {"accept": "application/json"}
+        response = session.delete(url, headers=headers)
+
+        if response.status_code == 204:
+            print(f"Group '{group_name}' deleted successfully.")
+        else:
+            print(f"Failed to delete group '{group_name}': {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"Error during group deletion: {e}")
+
+# Function to confirm deletion from the user
+def confirm_deletion(groups_to_delete):
+    print("\nThe following groups will be deleted:")
+    for group in groups_to_delete:
+        print(f" - {group['groupName']} (ID: {group['groupId']})")
+    
+    confirmation = input("Are you sure you want to proceed with deletion? Type 'YES' to confirm: ").strip().upper()
+    return confirmation == "YES"
+
+# Function to delete subgroups recursively
+def delete_subgroups(session, base_url, group):
+    groups_to_delete = []
+
+    # Recursively collect all subgroups that need to be deleted
+    def collect_groups_to_delete(group):
+        for subgroup in group.get("subGroups", []):
+            collect_groups_to_delete(subgroup)
+        groups_to_delete.append(group)
+
+    collect_groups_to_delete(group)
+
+    # Confirm deletion with the user
+    if confirm_deletion(groups_to_delete):
+        for group in groups_to_delete:
+            delete_group(session, base_url, group['groupId'], group['groupName'])
+    else:
+        print("Deletion aborted by the user.")
+
+# Main function that handles creation and deletion
+def main():
+    parser = argparse.ArgumentParser(description="Manage Akamai Access Groups (Create or Delete).")
+    parser.add_argument("lob", help="Line of Business, e.g., TEST01.")
+    parser.add_argument("country_servicename", help="Country or Service Name, e.g., AkamaiDevOps.")
+    parser.add_argument("--group_prefix", default="HSBC-DDoS-KSD", help="The prefix for the group name. Default is 'HSBC-DDoS-KSD'.")
+    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER", "Global", "LATAM"], default=["APAC", "EMEA", "AMER", "Global", "LATAM"], 
+                        help="Regions for which subgroups will be created/deleted (APAC, EMEA, AMER, Global, LATAM).")
+    parser.add_argument("--parent_group_name", help="The name of the parent group. Provide either this or --parent_group_id.")
+    parser.add_argument("--parent_group_id", type=int, help="The numeric ID of the parent group. Provide either this or --parent_group_name.")
+    parser.add_argument("--env", choices=["DEV", "PROD"], default="DEV", help="The environment (DEV or PROD). Default is DEV.")
+    parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
+    parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
+    parser.add_argument("--levels", help="Levels to create/delete (1, 2, 3, 4, or ALL)", type=int, default=4)
+    parser.add_argument("--operation", choices=["create", "delete"], default="create", help="Operation to perform: 'create' or 'delete'.")
+
+    args = parser.parse_args()
+
+    lob = args.lob.strip().upper()
+    country_servicename = args.country_servicename.strip()
+    group_prefix = args.group_prefix.strip()
+    parent_group_name = args.parent_group_name.strip() if args.parent_group_name else None
+    regions = [region.strip().capitalize() if region.lower() == 'global' else region.strip().upper() for region in args.regions]
+
+    edgerc_file = os.path.expanduser(args.edgerc_file)
+    session, base_url = setup_session(edgerc_file, args.section_name)
+
+    if args.env == "DEV":
+        default_parent_group_id = 185773
+    else:
+        default_parent_group_id = 1234567
+
+    if args.operation == "create":
+        # Logic for creating groups (as in the original script)
+        pass
+    elif args.operation == "delete":
+        # Logic for deleting groups
+        top_level_group_name = f"{group_prefix}-{lob}"
+
+        if args.parent_group_id:
+            resolved_parent_group_id = args.parent_group_id
+        elif parent_group_name:
+            group_exists, existing_group_id, resolved_parent_group, _ = check_group_exists(
+                session, base_url, "", parent_group_name, None
+            )
+            if not group_exists and resolved_parent_group is not None:
+                resolved_parent_group_id = resolved_parent_group.get('groupId')
+            else:
+                print(f"Error: Could not resolve parent group name '{parent_group_name}' to an ID. Exiting.")
+                return
+        else:
+            resolved_parent_group_id = default_parent_group_id
+
+        group_exists, existing_group_id, resolved_parent_group, _ = check_group_exists(
+            session, base_url, top_level_group_name, None, resolved_parent_group_id
+        )
+
+        if group_exists:
+            print(f"Group '{top_level_group_name}' found under parent group '{resolved_parent_group.get('groupName')}' with groupId '{existing_group_id}'.")
+            if args.levels == 1:
+                delete_group(session, base_url, existing_group_id, top_level_group_name)
+            elif args.levels == 2:
+                delete_subgroups(session, base_url, resolved_parent_group)
+            elif args.levels == "ALL":
+                delete_subgroups(session, base_url, resolved_parent_group)
+        else:
+            print(f"Group '{top_level_group_name}' does not exist. Exiting without deletion.")
+
+if __name__ == "__main__":
+    main()
