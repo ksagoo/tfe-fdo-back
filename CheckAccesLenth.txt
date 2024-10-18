@@ -1,0 +1,65 @@
+# Function to ensure subgroups are created based on the specified level
+def ensure_subgroups(session, base_url, group_prefix, top_level_group_id, lob, regions, country_servicename, level, create_flag):
+    all_subgroups_exist = True
+    subgroups_created = False  # To track if any subgroups are created
+
+    for region in regions:
+        if region == 'Global':
+            region_group_name = f"{group_prefix}-{lob}-Global"
+        else:
+            region_group_name = f"{group_prefix}-{lob}-{region.upper()}"
+
+        region_group_exists, region_group_id, parent_group, region_group = check_group_exists(session, base_url, region_group_name, None, top_level_group_id)
+
+        if not region_group_exists:
+            all_subgroups_exist = False
+            if level >= 2:
+                if create_flag == "N":
+                    print(f"Group '{region_group_name}' would be created under top-level groupId: {top_level_group_id} (Approval needed)")
+                else:
+                    region_group_id = create_group(session, base_url, region_group_name, top_level_group_id)
+                    if region_group_id:
+                        print(f"Region group '{region_group_name}' created with groupId: {region_group_id}")
+                        subgroups_created = True
+
+        if region_group_id and level >= 3:
+            service_group_name = f"{region_group_name}-{country_servicename}"
+            
+            # Check the length of the group name before creating it
+            if len(service_group_name) > 50:
+                print("Error: Service Access group name should be <= 50 characters.")
+                print("New group will not be created. Please reduce Service Name length and re-submit.")
+                return  # Exit the function
+            
+            service_group_exists, service_group_id, _, service_group = check_group_exists(session, base_url, service_group_name, None, region_group_id)
+            if not service_group_exists:
+                all_subgroups_exist = False
+                if create_flag == "N":
+                    print(f"Service/Country group '{service_group_name}' would be created under region groupId: {region_group_id} (Approval needed)")
+                else:
+                    service_group_id = create_group(session, base_url, service_group_name, region_group_id)
+                    if service_group_id:
+                        print(f"Service/Country group '{service_group_name}' created with groupId: {service_group_id}")
+                        subgroups_created = True
+
+            if service_group_id and service_group and level == 4:
+                subgroups_to_create = [f"{service_group_name}-NonProd", f"{service_group_name}-Prod"]
+                existing_subgroups = {subgroup['groupName']: subgroup['groupId'] for subgroup in service_group.get("subGroups", [])}
+
+                for subgroup_name in subgroups_to_create:
+                    if subgroup_name not in existing_subgroups:
+                        all_subgroups_exist = False
+                        if create_flag == "N":
+                            print(f"Subgroup '{subgroup_name}' would be created under service groupId: {service_group_id} (Approval needed)")
+                        else:
+                            created_subgroup_id = create_group(session, base_url, subgroup_name, service_group_id)
+                            if created_subgroup_id:
+                                print(f"Subgroup '{subgroup_name}' created successfully with groupId: {created_subgroup_id}")
+                                subgroups_created = True
+
+    if all_subgroups_exist and create_flag == "Y":
+        print("All required subgroups already exist, no new subgroups needed.")
+    elif create_flag == "N":
+        print("No new groups will be created until the request is approved.")
+    elif subgroups_created:
+        print("New subgroups created successfully.")
