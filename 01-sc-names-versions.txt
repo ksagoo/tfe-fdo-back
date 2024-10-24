@@ -1,0 +1,126 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+===================================================================================
+                        Akamai Configuration Names and Versions Listing Script
+===================================================================================
+Script Name:
+    Akamai Configuration Names and Versions Listing Script
+Description:
+    This script retrieves and lists all configuration names from the Akamai platform 
+    in a simple JSON format, along with the versions for each configuration and their 
+    status in the staging and production networks. If the '--versions' flag is passed 
+    as 'Y', the versions will be listed, otherwise only the configuration names will 
+    be retrieved. The data will be printed to the screen and also saved to a file 
+    called configNames.json (which will be overwritten if it already exists).
+Parameters:
+    --edgerc_file (optional)      : Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.
+    --section_name (optional)     : Section name in the .edgerc file. Default is 'default'.
+    --versions (optional)         : Whether to include versions in the output. Default is 'N'.
+Usage:
+    - List all configuration names (without versions):
+        python list_configs.py
+    - List all configuration names and versions:
+        python list_configs.py --versions Y
+    - Use a custom .edgerc file and section:
+        python list_configs.py --edgerc_file ~/.edgerc --section_name mysection
+===================================================================================
+"""
+
+import os
+import argparse
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+import json
+
+# Function to load EdgeRc and set up authentication
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/".rstrip('/') + '/'
+        session = requests.Session()
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, section_name)
+        print("Session setup successful.")
+        return session, base_url
+    except KeyError as e:
+        print(f"Missing required value in .edgerc: {e}")
+        exit(1)
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Function to fetch and return the versions of a given configuration
+def fetch_config_versions(session, base_url, config_id):
+    url = urljoin(base_url, f"appsec/v1/configs/{config_id}/versions")
+    headers = {"accept": "application/json"}
+    response = session.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        versions = response.json().get("versionList", [])
+        version_info = []
+        for version in versions:
+            version_entry = {
+                "version": version["version"],
+                "staging_status": version.get('staging', {}).get('status', 'N/A'),
+                "production_status": version.get('production', {}).get('status', 'N/A')
+            }
+            version_info.append(version_entry)
+        return version_info
+    else:
+        print(f"Failed to fetch versions for config ID {config_id}. Status Code: {response.status_code}")
+        return []
+
+# Function to list all configuration names and optionally their versions
+def list_config_names_and_versions(session, base_url, include_versions):
+    url = urljoin(base_url, "appsec/v1/configs")
+    headers = {"accept": "application/json"}
+    response = session.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        configs = response.json().get("configurations", [])
+        config_data = []
+
+        for config in configs:
+            config_entry = {
+                "configId": config["id"],
+                "name": config["name"]
+            }
+
+            # Optionally fetch and include version information
+            if include_versions == "Y":
+                config_entry["versions"] = fetch_config_versions(session, base_url, config["id"])
+
+            config_data.append(config_entry)
+
+        # Output the configuration names and versions in JSON format
+        print(json.dumps(config_data, indent=4))
+        
+        # Save the output to a file (overwrites if the file already exists)
+        with open("configNames.json", "w") as f:
+            json.dump(config_data, f, indent=4)
+            print("Configuration names and versions saved to configNames.json")
+    else:
+        print(f"Failed to fetch configuration names. Status Code: {response.status_code}")
+        print(response.text)
+
+# Main function to handle arguments and execute the script
+if __name__ == "__main__":
+    # Set up argument parsing
+    parser = argparse.ArgumentParser(description="List Akamai configuration names and optionally their versions in JSON format and save to file")
+    
+    # Arguments for .edgerc file and section
+    parser.add_argument("--edgerc_file", default=os.path.expanduser("~/.edgerc"), help="Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.")
+    parser.add_argument("--section_name", default="default", help="Section of the .edgerc file to use (default: 'default').")
+    
+    # Optional argument to include versions
+    parser.add_argument("--versions", choices=["Y", "N"], default="N", help="Whether to include configuration versions in the output. Default is 'N'.")
+    
+    # Parse the arguments
+    args = parser.parse_args()
+
+    # Set up session with EdgeRc credentials
+    session, base_url = setup_session(args.edgerc_file, args.section_name)
+
+    # List all configuration names and optionally their versions and save them to a file
+    list_config_names_and_versions(session, base_url, args.versions)
