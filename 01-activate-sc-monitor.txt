@@ -171,8 +171,8 @@ def compare_versions(session, base_url, config_id, from_version, to_version):
         print(f"Failed to compare versions. Status Code: {response.status_code}")
         print(response.text)
 
-# Function to get the activation request status and return the status
-def get_activation_status(session, base_url, activation_id):
+# Function to get the activation request status and return the status, with an option for minimal output
+def get_activation_status(session, base_url, activation_id, detailed=False):
     # Construct the correct URL by appending the activation ID
     status_url = urljoin(base_url, f"appsec/v1/activations/{activation_id}")
     
@@ -187,8 +187,9 @@ def get_activation_status(session, base_url, activation_id):
         activation_data = response.json()
         status = activation_data.get("status", "UNKNOWN")
         
-        # Output the full activation response for reference
-        print(json.dumps(activation_data, indent=4))
+        # If detailed output is requested (when status is 'ACTIVATED'), print the full activation data
+        if detailed:
+            print(json.dumps(activation_data, indent=4))
 
         return status  # Return the current status
     else:
@@ -211,9 +212,9 @@ def monitor_activation_status(session, base_url, activation_id):
         # Re-check the activation status
         status = get_activation_status(session, base_url, activation_id)
 
-    # Once 'ACTIVATED', output full response
+    # Once 'ACTIVATED', output the full response with detailed=True
     print("The activation has been completed. The new version is now active.")
-    get_activation_status(session, base_url, activation_id)
+    get_activation_status(session, base_url, activation_id, detailed=True)
 
 # Main function to handle arguments and perform the activation or status check
 if __name__ == "__main__":
