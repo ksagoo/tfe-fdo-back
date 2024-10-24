@@ -147,6 +147,30 @@ def activate_security_configuration(session, base_url, config_id, config_version
         print(response.text)
         return None
 
+# Function to compare two versions of a security configuration
+def compare_versions(session, base_url, config_id, from_version, to_version):
+    compare_url = urljoin(base_url, f"appsec/v1/configs/{config_id}/versions/diff")
+    
+    payload = {
+        "outcomes": ["MODIFIED"],
+        "to": to_version,   # Use the version directly as 'v1', 'v2', etc.
+        "from": from_version
+    }
+
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
+    }
+
+    response = session.post(compare_url, json=payload, headers=headers)
+    
+    if response.status_code == 200:
+        print("Comparison between versions:")
+        print(json.dumps(response.json(), indent=4))
+    else:
+        print(f"Failed to compare versions. Status Code: {response.status_code}")
+        print(response.text)
+
 # Function to get the activation request status and return the status
 def get_activation_status(session, base_url, activation_id):
     # Construct the correct URL by appending the activation ID
