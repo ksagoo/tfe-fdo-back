@@ -204,4 +204,41 @@ if __name__ == "__main__":
     
     # Authentication options
     parser.add_argument("--edgerc", default=os.path.expanduser("~/.edgerc"), help="Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.")
-    parser.add_argument("--section
+    parser.add_argument("--section", default="default", help="Section of the .edgerc file to use (default: 'default').")
+    
+    # Additional functionality
+    parser.add_argument("--activation_id", type=int, help="The activation ID to check the status")
+    parser.add_argument("--compare", choices=["Y", "N"], default="N", help="Compare the versions ('Y' to compare, default is 'N').")
+
+    # Parse the arguments
+    args = parser.parse_args()
+
+    # Strip 'v' from the config_version input
+    if args.config_version.startswith('v'):
+        config_version = int(args.config_version[1:])
+    else:
+        config_version = int(args.config_version)
+
+    # Set up session with EdgeRc credentials
+    session, base_url = setup_session(args.edgerc, args.section)
+
+    if args.activation_id:
+        # Check the activation status if activation_id is provided
+        get_activation_status(session, base_url, args.activation_id)
+    else:
+        # If config_name is provided, retrieve config_id and active version in one call
+        if args.config_name and not args.config_id:
+            args.config_id, active_version = get_config_id_by_name(session, base_url, args.config_name, args.network)
+            print(f"Using config ID: {args.config_id}, Active version for {args.network}: {active_version}")
+        elif args.config_id:
+            active_version = list_config_versions(session, base_url, args.config_id, args.network)
+
+        # Compare versions if --compare is set to Y
+        if args.compare == "Y" and active_version:
+            compare_versions(session, base_url, args.config_id, active_version, config_version)
+
+        # Activate the security configuration using the correct active version
+        if active_version:
+            activation_id = activate_security_configuration(session, base_url, args.config_id, config_version, args.network, args.note, args.emails)
+            if activation_id:
+                print(f"Activation initiated. Activation ID: {activation_id}")
