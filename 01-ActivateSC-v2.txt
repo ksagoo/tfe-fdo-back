@@ -198,4 +198,18 @@ if __name__ == "__main__":
         # Check the activation status if activation_id is provided
         get_activation_status(session, base_url, args.activation_id)
     else:
-        # If config_name is
+        # If config_name is provided, retrieve config_id
+        if args.config_name and not args.config_id:
+            args.config_id, previous_version = get_config_id_by_name(session, base_url, args.config_name)
+            print(f"Using config ID: {args.config_id}, Previous active version: {previous_version}")
+        elif args.config_id:
+            previous_version = None  # In case the user provides config_id directly, there's no way to know the previous version.
+
+        # Compare versions if --compare is set to Y
+        if args.compare == "Y" and previous_version:
+            compare_versions(session, base_url, args.config_id, previous_version, args.config_version)
+
+        # Activate the security configuration
+        activation_id = activate_security_configuration(session, base_url, args.config_id, args.config_version, args.network, args.note, args.emails)
+        if activation_id:
+            print(f"Activation initiated. Activation ID: {activation_id}")
