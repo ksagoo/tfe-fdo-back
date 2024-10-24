@@ -1,3 +1,46 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+===================================================================================
+                           Akamai Security Configuration Activation Script
+===================================================================================
+Script Name:
+    Akamai Security Configuration Activation Script
+Description:
+    This script activates a security configuration on the Akamai platform, allowing 
+    users to specify either a configuration name or a configuration ID. It also 
+    supports the comparison of a previous active configuration version with the new 
+    version to be activated, and allows users to check the status of ongoing activations.
+    The script handles authentication via the .edgerc file using Akamai EdgeGrid API.
+
+Parameters:
+    --config_id (optional)        : The ID of the security configuration. Use this or --config_name.
+    --config_name (optional)      : The name of the security configuration. Use this or --config_id.
+    --config_version (required)   : The version of the security configuration to activate (format: 'v1', 'v2', etc.)
+    --network (optional)          : The environment for activation ('staging' or 'production'). Default is 'staging'.
+    --note (optional)             : Note to include with the activation. Default is 'New Version to Activate'.
+    --emails (optional)           : Notification emails for activation status. Default is 'aactivation@test.com'.
+    --edgerc (optional)           : Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.
+    --section (optional)          : Section name in the .edgerc file. Default is 'default'.
+    --activation_id (optional)    : The activation ID to check the status of an ongoing activation.
+    --compare (optional)          : Compare the current active version with the new one ('Y' or 'N'). Default is 'N'.
+
+Usage:
+    - Activate using a config name and compare versions:
+        python activate_security.py --config_name "Corporate Sites WAF" --config_version v9 --network production --compare Y
+    
+    - Activate using a config ID without version comparison:
+        python activate_security.py --config_id 7180 --config_version v9 --network staging --compare N
+    
+    - Check the activation status by providing the activation ID:
+        python activate_security.py --activation_id 1234
+    
+    - Compare the versions of an existing and new configuration before activation:
+        python activate_security.py --config_name "Corporate Sites WAF" --config_version v9 --compare Y
+
+===================================================================================
+"""
+
 import os
 import argparse
 import requests
