@@ -189,7 +189,7 @@ def compare_versions(session, base_url, config_id, from_version, to_version):
         print(f"Failed to compare versions. Status Code: {response.status_code}")
         print(response.text)
 
-# Main function to handle arguments and perform the activation
+# Main function to handle arguments and perform the activation or status check
 if __name__ == "__main__":
     # Set up argument parsing
     parser = argparse.ArgumentParser(description="Activate Akamai security configuration, compare versions, and check activation status")
@@ -197,7 +197,7 @@ if __name__ == "__main__":
     # Arguments for configuration details
     parser.add_argument("--config_id", type=int, help="The ID of the security configuration")
     parser.add_argument("--config_name", help="The name of the security configuration")
-    parser.add_argument("--config_version", type=str, required=True, help="The version of the security configuration to activate in the format 'v1', 'v2', etc.")
+    parser.add_argument("--config_version", type=str, help="The version of the security configuration to activate in the format 'v1', 'v2', etc.")
     
     # Network and activation options
     parser.add_argument("--network", choices=["staging", "production"], default="staging", help="The network to activate ('staging' or 'production'). Default is 'staging'.")
@@ -215,12 +215,6 @@ if __name__ == "__main__":
     # Parse the arguments
     args = parser.parse_args()
 
-    # Strip 'v' from the config_version input
-    if args.config_version.startswith('v'):
-        config_version = int(args.config_version[1:])
-    else:
-        config_version = int(args.config_version)
-
     # Set up session with EdgeRc credentials
     session, base_url = setup_session(args.edgerc, args.section)
 
@@ -228,6 +222,16 @@ if __name__ == "__main__":
         # Check the activation status if activation_id is provided
         get_activation_status(session, base_url, args.activation_id)
     else:
+        # If activation_id is not provided, config_version becomes required
+        if not args.config_version:
+            parser.error("--config_version is required when activation_id is not provided")
+
+        # Strip 'v' from the config_version input
+        if args.config_version.startswith('v'):
+            config_version = int(args.config_version[1:])
+        else:
+            config_version = int(args.config_version)
+
         # If config_name is provided, retrieve config_id and active version in one call
         if args.config_name and not args.config_id:
             args.config_id, active_version = get_config_id_by_name(session, base_url, args.config_name, args.network)
