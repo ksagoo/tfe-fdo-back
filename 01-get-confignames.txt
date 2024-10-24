@@ -1,0 +1,78 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+===================================================================================
+                        Akamai Configuration Names Listing Script
+===================================================================================
+Script Name:
+    Akamai Configuration Names Listing Script
+Description:
+    This script retrieves and lists all configuration names from the Akamai platform 
+    in a simple JSON format.
+Parameters:
+    --edgerc_file (optional)      : Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.
+    --section_name (optional)     : Section name in the .edgerc file. Default is 'default'.
+Usage:
+    - List all configuration names:
+        python list_configs.py
+    - Use a custom .edgerc file and section:
+        python list_configs.py --edgerc_file ~/.edgerc --section_name mysection
+===================================================================================
+"""
+
+import os
+import argparse
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+import json
+
+# Function to load EdgeRc and set up authentication
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/".rstrip('/') + '/'
+        session = requests.Session()
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, section_name)
+        print("Session setup successful.")
+        return session, base_url
+    except KeyError as e:
+        print(f"Missing required value in .edgerc: {e}")
+        exit(1)
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Function to list all configuration names in simple JSON format
+def list_config_names(session, base_url):
+    url = urljoin(base_url, "appsec/v1/configs")
+    headers = {"accept": "application/json"}
+    response = session.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        configs = response.json().get("configurations", [])
+        config_names = [{"configId": config["id"], "name": config["name"]} for config in configs]
+        
+        # Output the configuration names in JSON format
+        print(json.dumps(config_names, indent=4))
+    else:
+        print(f"Failed to fetch configuration names. Status Code: {response.status_code}")
+        print(response.text)
+
+# Main function to handle arguments and execute the script
+if __name__ == "__main__":
+    # Set up argument parsing
+    parser = argparse.ArgumentParser(description="List Akamai configuration names in JSON format")
+    
+    # Arguments for .edgerc file and section
+    parser.add_argument("--edgerc_file", default=os.path.expanduser("~/.edgerc"), help="Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.")
+    parser.add_argument("--section_name", default="default", help="Section of the .edgerc file to use (default: 'default').")
+    
+    # Parse the arguments
+    args = parser.parse_args()
+
+    # Set up session with EdgeRc credentials
+    session, base_url = setup_session(args.edgerc_file, args.section_name)
+
+    # List all configuration names
+    list_config_names(session, base_url)
