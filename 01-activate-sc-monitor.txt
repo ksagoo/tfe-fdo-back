@@ -203,10 +203,7 @@ def monitor_activation_status(session, base_url, activation_id):
     
     # Loop until the status becomes 'ACTIVATED'
     while status != "ACTIVATED":
-        if status == "RECEIVED":
-            print("Activation request received, waiting for it to become active...")
-        else:
-            print(f"Current activation status: {status}")
+        print(f"Activation request in status '{status}', waiting for it to be 'ACTIVATED'...")
         
         # Sleep for 30 seconds before checking the status again
         time.sleep(30)
@@ -214,7 +211,9 @@ def monitor_activation_status(session, base_url, activation_id):
         # Re-check the activation status
         status = get_activation_status(session, base_url, activation_id)
 
+    # Once 'ACTIVATED', output full response
     print("The activation has been completed. The new version is now active.")
+    get_activation_status(session, base_url, activation_id)
 
 # Main function to handle arguments and perform the activation or status check
 if __name__ == "__main__":
