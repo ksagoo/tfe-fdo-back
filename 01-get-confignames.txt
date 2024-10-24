@@ -8,7 +8,8 @@ Script Name:
     Akamai Configuration Names Listing Script
 Description:
     This script retrieves and lists all configuration names from the Akamai platform 
-    in a simple JSON format.
+    in a simple JSON format. The names will be printed to the screen and also saved 
+    to a file called configNames.json (which will be overwritten if it already exists).
 Parameters:
     --edgerc_file (optional)      : Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.
     --section_name (optional)     : Section name in the .edgerc file. Default is 'default'.
@@ -55,6 +56,11 @@ def list_config_names(session, base_url):
         
         # Output the configuration names in JSON format
         print(json.dumps(config_names, indent=4))
+        
+        # Save the output to a file (overwrites if the file already exists)
+        with open("configNames.json", "w") as f:
+            json.dump(config_names, f, indent=4)
+            print("Configuration names saved to configNames.json")
     else:
         print(f"Failed to fetch configuration names. Status Code: {response.status_code}")
         print(response.text)
@@ -62,7 +68,7 @@ def list_config_names(session, base_url):
 # Main function to handle arguments and execute the script
 if __name__ == "__main__":
     # Set up argument parsing
-    parser = argparse.ArgumentParser(description="List Akamai configuration names in JSON format")
+    parser = argparse.ArgumentParser(description="List Akamai configuration names in JSON format and save to file")
     
     # Arguments for .edgerc file and section
     parser.add_argument("--edgerc_file", default=os.path.expanduser("~/.edgerc"), help="Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.")
@@ -74,5 +80,5 @@ if __name__ == "__main__":
     # Set up session with EdgeRc credentials
     session, base_url = setup_session(args.edgerc_file, args.section_name)
 
-    # List all configuration names
+    # List all configuration names and save them to a file
     list_config_names(session, base_url)
