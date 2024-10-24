@@ -1,0 +1,201 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+===================================================================================
+                           Akamai Security Configuration Activation Script
+===================================================================================
+Script Name:
+    Akamai Security Configuration Activation Script
+Description:
+    This script activates a security configuration on the Akamai platform, allowing 
+    users to specify either a configuration name or a configuration ID. It also 
+    supports the comparison of a previous active configuration version with the new 
+    version to be activated, and allows users to check the status of ongoing activations.
+    The script handles authentication via the .edgerc file using Akamai EdgeGrid API.
+
+Parameters:
+    --config_id (optional)        : The ID of the security configuration. Use this or --config_name.
+    --config_name (optional)      : The name of the security configuration. Use this or --config_id.
+    --config_version (required)   : The version of the security configuration to activate in the format 'v1', 'v2', etc.
+    --network (optional)          : The environment for activation ('staging' or 'production'). Default is 'staging'.
+    --note (optional)             : Note to include with the activation. Default is 'New Version to Activate'.
+    --emails (optional)           : Notification emails for activation status. Default is 'aactivation@test.com'.
+    --edgerc (optional)           : Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.
+    --section (optional)          : Section name in the .edgerc file. Default is 'default'.
+    --activation_id (optional)    : The activation ID to check the status of an ongoing activation.
+    --compare (optional)          : Compare the current active version with the new one ('Y' or 'N'). Default is 'N'.
+
+Usage:
+    - Activate using a config name and compare versions:
+        python activate_security.py --config_name "Corporate Sites WAF" --config_version v9 --network production --compare Y
+    
+    - Activate using a config ID without version comparison:
+        python activate_security.py --config_id 7180 --config_version v9 --network staging --compare N
+    
+    - Check the activation status by providing the activation ID:
+        python activate_security.py --activation_id 1234
+    
+    - Compare the versions of an existing and new configuration before activation:
+        python activate_security.py --config_name "Corporate Sites WAF" --config_version v9 --compare Y
+
+===================================================================================
+"""
+
+import os
+import argparse
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+import json
+
+# Function to load EdgeRc and set up authentication
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/".rstrip('/') + '/'
+        session = requests.Session()
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, section_name)
+        print("Session setup successful.")
+        return session, base_url
+    except KeyError as e:
+        print(f"Missing required value in .edgerc: {e}")
+        exit(1)
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Function to retrieve all configuration names and IDs
+def get_config_id_by_name(session, base_url, config_name):
+    url = urljoin(base_url, "appsec/v1/configs")
+    headers = {"accept": "application/json"}
+    response = session.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        configs = response.json().get("configurations", [])
+        for config in configs:
+            if config["name"] == config_name:
+                config_id = config["id"]
+                print(f"Found configuration '{config_name}' with ID: {config_id}")
+                print("Fetching config versions...")
+                list_config_versions(session, base_url, config_id)
+                return config_id, config.get("productionVersion", "v1")  # Default production version if not available
+        print(f"Config name '{config_name}' not found.")
+        exit(1)
+    else:
+        print(f"Failed to fetch configurations. Status Code: {response.status_code}")
+        exit(1)
+
+# Function to list all versions of a specific configuration
+def list_config_versions(session, base_url, config_id):
+    url = urljoin(base_url, f"appsec/v1/configs/{config_id}/versions")
+    headers = {"accept": "application/json"}
+    response = session.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        versions = response.json().get("versions", [])
+        print(f"Versions for config ID {config_id}:")
+        for version in versions:
+            print(f"Version: {version['version']}, Status: {version['status']}")
+    else:
+        print(f"Failed to fetch config versions. Status Code: {response.status_code}")
+        print(response.text)
+
+# Function to activate the security configuration
+def activate_security_configuration(session, base_url, config_id, config_version, network, note, emails):
+    activation_url = urljoin(base_url, "appsec/v1/activations")
+    
+    payload = {
+        "action": "ACTIVATE",
+        "activationConfigs": [
+            {
+                "configId": config_id,
+                "configVersion": config_version  # Pass directly as 'v1', 'v2', etc.
+            }
+        ],
+        "network": network.upper(),
+        "note": note,
+        "notificationEmails": emails
+    }
+
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
+    }
+
+    response = session.post(activation_url, json=payload, headers=headers)
+    
+    if response.status_code == 200:
+        print("Security configuration activation initiated successfully.")
+        print(json.dumps(response.json(), indent=4))
+        return response.json().get('activationId')
+    else:
+        print(f"Failed to activate configuration. Status Code: {response.status_code}")
+        print(response.text)
+        return None
+
+# Function to get the activation request status
+def get_activation_status(session, base_url, activation_id):
+    status_url = urljoin(base_url, f"appsec/v1/activations/status/{activation_id}")
+    
+    headers = {
+        "accept": "application/json"
+    }
+
+    response = session.get(status_url, headers=headers)
+    
+    if response.status_code == 200:
+        print("Activation Status:")
+        print(json.dumps(response.json(), indent=4))
+    else:
+        print(f"Failed to get activation status. Status Code: {response.status_code}")
+        print(response.text)
+
+# Function to compare two versions of a security configuration
+def compare_versions(session, base_url, config_id, from_version, to_version):
+    compare_url = urljoin(base_url, f"appsec/v1/configs/{config_id}/versions/diff")
+    
+    payload = {
+        "outcomes": ["MODIFIED"],
+        "to": to_version,   # Use the version directly as 'v1', 'v2', etc.
+        "from": from_version
+    }
+
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
+    }
+
+    response = session.post(compare_url, json=payload, headers=headers)
+    
+    if response.status_code == 200:
+        print("Comparison between versions:")
+        print(json.dumps(response.json(), indent=4))
+    else:
+        print(f"Failed to compare versions. Status Code: {response.status_code}")
+        print(response.text)
+
+# Main function to handle arguments and perform the activation
+if __name__ == "__main__":
+    # Set up argument parsing
+    parser = argparse.ArgumentParser(description="Activate Akamai security configuration, compare versions, and check activation status")
+    parser.add_argument("--config_id", type=int, help="The ID of the security configuration")
+    parser.add_argument("--config_name", help="The name of the security configuration")
+    parser.add_argument("--config_version", type=str, required=True, help="The version of the security configuration to activate in the format 'v1', 'v2', etc.")
+    parser.add_argument("--network", choices=["staging", "production"], default="staging", help="The network to activate ('staging' or 'production'). Default is 'staging'.")
+    parser.add_argument("--note", default="New Version to Activate", help="Optional note to include with the activation")
+    parser.add_argument("--emails", nargs="+", default=["aactivation@test.com"], help="Notification emails for activation status")
+    parser.add_argument("--edgerc", default=os.path.expanduser("~/.edgerc"), help="Path to the .edgerc file (default: ~/.edgerc)")
+    parser.add_argument("--section", default="default", help="Section of the .edgerc file to use (default: default)")
+    parser.add_argument("--activation_id", type=int, help="The activation ID to check the status")
+    parser.add_argument("--compare", choices=["Y", "N"], default="N", help="Compare the versions ('Y' to compare, default is 'N').")
+
+    args = parser.parse_args()
+
+    # Set up session with EdgeRc credentials
+    session, base_url = setup_session(args.edgerc, args.section)
+
+    if args.activation_id:
+        # Check the activation status if activation_id is provided
+        get_activation_status(session, base_url, args.activation_id)
+    else:
+        # If config_name is
