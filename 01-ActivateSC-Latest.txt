@@ -204,6 +204,11 @@ if __name__ == "__main__":
         elif args.config_id:
             active_version = list_config_versions(session, base_url, args.config_id, args.network)
 
+        # Check if the selected version is already active in the chosen network
+        if config_version == active_version:
+            print(f"The selected version {config_version} is already active in the '{args.network}' network. No further action required.")
+            exit(0)
+
         # Compare versions if --compare is set to Y
         if args.compare == "Y" and active_version:
             compare_versions(session, base_url, args.config_id, active_version, config_version)
