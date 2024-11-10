@@ -1,0 +1,134 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+===================================================================================
+                        Akamai Security Configuration Activation Script
+===================================================================================
+Script Name:
+    Akamai Security Configuration Activation Script
+Description:
+    This script activates a specified security configuration on the Akamai platform.
+    Users can specify a configuration name or ID, and compare versions before activation.
+    If --create is set to N (default), the script only compares and outputs potential changes without activation.
+Parameters:
+    --config_id           : ID of the security configuration (use this or --config_name).
+    --config_name         : Name of the security configuration (use this or --config_id).
+    --config_version      : Version of the security configuration to activate.
+    --network             : Network to activate on ('staging' or 'production'). Default is 'staging'.
+    --note                : Note to include with the activation request. Default is "New Version to Activate".
+    --emails              : Notification emails for activation status updates. Default is 'aactivation@test.com'.
+    --edgerc_file         : Path to the .edgerc file. Default is '~/.edgerc'.
+    --section_name        : Section in the .edgerc file. Default is 'default'.
+    --activation_id       : ID to check status of an ongoing activation.
+    --compare             : Set to 'Y' to compare active version with target version. Default is 'N'.
+    --create              : Set to 'Y' to apply changes; otherwise only outputs comparison. Default is 'N'.
+Usage:
+    - Compare versions without activating:
+        python activate_security.py --config_name "Corporate Sites WAF" --config_version v9 --compare Y --create N
+    - Activate configuration by ID with comparison:
+        python activate_security.py --config_id 7180 --config_version v9 --network staging --compare Y --create Y
+===================================================================================
+"""
+
+import os
+import argparse
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+import json
+
+# Function to load EdgeRc and set up authentication
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/".rstrip('/') + '/'
+        session = requests.Session()
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, section_name)
+        return session, base_url
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Function to fetch and return the versions of a given configuration
+def fetch_config_versions(session, base_url, config_id):
+    url = urljoin(base_url, f"appsec/v1/configs/{config_id}/versions")
+    headers = {"accept": "application/json"}
+    response = session.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        return response.json().get("versionList", [])
+    else:
+        print(f"Failed to fetch versions for config ID {config_id}. Status Code: {response.status_code}")
+        return []
+
+# Function to compare versions and output differences
+def compare_versions(session, base_url, config_id, current_version, target_version):
+    url = urljoin(base_url, f"appsec/v1/configs/{config_id}/versions/diff")
+    payload = {"outcomes": ["MODIFIED"], "from": current_version, "to": target_version}
+    headers = {"accept": "application/json", "content-type": "application/json"}
+    response = session.post(url, json=payload, headers=headers)
+
+    if response.status_code == 200:
+        print("Differences between current and target versions:")
+        print(json.dumps(response.json(), indent=4))
+    else:
+        print(f"Failed to compare versions. Status Code: {response.status_code}")
+
+# Function to activate the configuration
+def activate_configuration(session, base_url, config_id, config_version, network, note, emails):
+    url = urljoin(base_url, "appsec/v1/activations")
+    payload = {
+        "action": "ACTIVATE",
+        "activationConfigs": [{"configId": config_id, "configVersion": config_version}],
+        "network": network,
+        "note": note,
+        "notificationEmails": emails.split(",")
+    }
+    headers = {"accept": "application/json", "content-type": "application/json"}
+    response = session.post(url, json=payload, headers=headers)
+
+    if response.status_code == 201:
+        print("Activation request submitted successfully:")
+        print(json.dumps(response.json(), indent=4))
+    else:
+        print(f"Failed to activate configuration. Status Code: {response.status_code}")
+        print(response.text)
+
+# Main function to handle arguments and execute the script
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Akamai Security Configuration Activation Script")
+    parser.add_argument("--config_id", type=int, help="ID of the security configuration (use this or --config_name)")
+    parser.add_argument("--config_name", type=str, help="Name of the security configuration (use this or --config_id)")
+    parser.add_argument("--config_version", type=str, required=True, help="Version of the security configuration to activate")
+    parser.add_argument("--network", type=str, choices=["staging", "production"], default="staging", help="Network to activate on. Default is 'staging'")
+    parser.add_argument("--note", type=str, default="New Version to Activate", help="Note to include with the activation request")
+    parser.add_argument("--emails", type=str, default="aactivation@test.com", help="Notification emails for activation status updates")
+    parser.add_argument("--edgerc_file", type=str, default=os.path.expanduser("~/.edgerc"), help="Path to the .edgerc file")
+    parser.add_argument("--section_name", type=str, default="default", help="Section name in the .edgerc file")
+    parser.add_argument("--activation_id", type=int, help="Activation ID to check the status of an ongoing activation")
+    parser.add_argument("--compare", choices=["Y", "N"], default="Y", help="Whether to compare active version with target version. Default is 'Y'")
+    parser.add_argument("--create", choices=["Y", "N"], default="N", help="Whether to apply changes (Y) or only output comparison (N)")
+
+    args = parser.parse_args()
+
+    # Set up session and base URL
+    session, base_url = setup_session(args.edgerc_file, args.section_name)
+
+    # If --compare is Y, perform a version comparison
+    if args.compare == "Y":
+        # Fetch active version and compare with target
+        config_versions = fetch_config_versions(session, base_url, args.config_id)
+        if config_versions:
+            active_version = next((v["version"] for v in config_versions if v.get("production", {}).get("status") == "Active"), None)
+            if active_version:
+                compare_versions(session, base_url, args.config_id, active_version, args.config_version)
+            else:
+                print("No active version found for comparison.")
+        else:
+            print("Could not retrieve configuration versions for comparison.")
+
+    # If --create is Y, perform the activation
+    if args.create == "Y":
+        activate_configuration(session, base_url, args.config_id, args.config_version, args.network, args.note, args.emails)
+    else:
+        print("Comparison only - No activation triggered. Please provide Approval First.")
