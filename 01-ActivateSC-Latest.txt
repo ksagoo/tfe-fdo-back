@@ -6,10 +6,14 @@ Script Name:
     Akamai Security Configuration Activation Script
 Description:
     This script activates a security configuration on the Akamai platform, allowing 
-    users to specify either a configuration name or a configuration ID. It also 
-    supports the comparison of a previous active configuration version with the new 
-    version to be activated, and allows users to check the status of ongoing activations.
+    users to specify either a configuration name or a configuration ID. It supports 
+    the comparison of a previous active configuration version with the new version 
+    to be activated and allows users to check the status of ongoing activations.
     The script handles authentication via the .edgerc file using Akamai EdgeGrid API.
+    
+    When activating in the production network, the script checks if the specified 
+    version is already active in staging. If the version is not active in staging, 
+    the activation in production will not proceed. 
 
 Parameters:
     --config_id (optional)        : The ID of the security configuration. Use this or --config_name.
@@ -21,15 +25,18 @@ Parameters:
     --edgerc (optional)           : Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.
     --section (optional)          : Section name in the .edgerc file. Default is 'default'.
     --activation_id (optional)    : The activation ID to check the status of an ongoing activation.
-    --compare (optional)          : Compare the current active version with the new one ('Y' or 'N'). Default is 'N'.
+    --compare (optional)          : Compare the current active version with the new one ('Y' or 'N'). Default is 'Y'.
     --create (optional)           : Apply changes if 'Y' (default is 'N' - comparison only without activation).
 
 Usage:
     - Compare versions without activating:
         python activate_security.py --config_name "Corporate Sites WAF" --config_version v9 --compare Y --create N
     
-    - Activate configuration by ID with comparison:
+    - Activate configuration by ID with comparison in staging:
         python activate_security.py --config_id 7180 --config_version v9 --network staging --compare Y --create Y
+    
+    - Activate configuration in production only if version is active in staging:
+        python activate_security.py --config_name "Corporate Sites WAF" --config_version v9 --network production --create Y
     
     - Check the activation status by providing the activation ID:
         python activate_security.py --activation_id 1234
@@ -60,12 +67,44 @@ def setup_session(edgerc_file, section_name):
 
 # Retrieve config ID and active version by name
 def get_config_id_by_name(session, base_url, config_name, network):
-    # Implementation remains the same
-    pass
+    url = urljoin(base_url, "appsec/v1/configs")
+    headers = {"accept": "application/json"}
+    response = session.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        configs = response.json().get("configurations", [])
+        for config in configs:
+            if config["name"] == config_name:
+                config_id = config["id"]
+                print(f"Found configuration '{config_name}' with ID: {config_id}")
+                print("Fetching config versions...")
+                
+                url_versions = urljoin(base_url, f"appsec/v1/configs/{config_id}/versions")
+                version_response = session.get(url_versions, headers=headers)
+                
+                if version_response.status_code == 200:
+                    config_data = version_response.json()
+                    production_active_version = config_data.get("productionActiveVersion")
+                    staging_active_version = config_data.get("stagingActiveVersion")
+                    
+                    if network.lower() == "production":
+                        active_version = production_active_version
+                    else:
+                        active_version = staging_active_version
+
+                    print(f"Using active version {active_version} for network {network}")
+                    return config_id, active_version
+                else:
+                    print(f"Failed to fetch config versions. Status Code: {version_response.status_code}")
+                    exit(1)
+        print(f"Config name '{config_name}' not found.")
+        exit(1)
+    else:
+        print(f"Failed to fetch configurations. Status Code: {response.status_code}")
+        exit(1)
 
 # Activate the security configuration
 def activate_security_configuration(session, base_url, config_id, config_version, network, note, emails):
-    # Proceed with activation
     activation_url = urljoin(base_url, "appsec/v1/activations")
     payload = {
         "action": "ACTIVATE",
@@ -76,7 +115,6 @@ def activate_security_configuration(session, base_url, config_id, config_version
     }
 
     headers = {"accept": "application/json", "content-type": "application/json"}
-
     response = session.post(activation_url, json=payload, headers=headers)
     
     if response.status_code == 200:
@@ -90,15 +128,28 @@ def activate_security_configuration(session, base_url, config_id, config_version
 
 # Compare two versions
 def compare_versions(session, base_url, config_id, from_version, to_version):
-    # Implementation remains the same
-    pass
+    compare_url = urljoin(base_url, f"appsec/v1/configs/{config_id}/versions/diff")
+    payload = {
+        "outcomes": ["MODIFIED"],
+        "to": to_version,
+        "from": from_version
+    }
+
+    headers = {"accept": "application/json", "content-type": "application/json"}
+    response = session.post(compare_url, json=payload, headers=headers)
+    
+    if response.status_code == 200:
+        print("Comparison between versions:")
+        print(json.dumps(response.json(), indent=4))
+    else:
+        print(f"Failed to compare versions. Status Code: {response.status_code}")
+        print(response.text)
 
 # Monitor activation status until 'ACTIVATED'
 def monitor_activation_status(session, base_url, activation_id):
     print(f"Checking activation status for ID: {activation_id}")
     status = get_activation_status(session, base_url, activation_id)
     
-    # Loop until the status becomes 'ACTIVATED'
     while status != "ACTIVATED":
         print(f"Activation request in status '{status}', waiting for it to be 'ACTIVATED'...")
         time.sleep(30)
@@ -156,6 +207,16 @@ if __name__ == "__main__":
         # Compare versions if --compare is set to Y
         if args.compare == "Y" and active_version:
             compare_versions(session, base_url, args.config_id, active_version, config_version)
+
+        # Check if the version is active in staging before production activation
+        if args.network == "production":
+            # Fetch the active version in staging for this config
+            _, staging_active_version = get_config_id_by_name(session, base_url, args.config_name or args.config_id, "staging")
+            if config_version != staging_active_version:
+                print(f"Error: Version {config_version} must be active in staging before it can be activated in production.")
+                exit(1)
+            else:
+                print(f"Version {config_version} is active in staging. Check passed for production activation.")
 
         # Activate only if --create is set to Y
         if args.create == "Y":
