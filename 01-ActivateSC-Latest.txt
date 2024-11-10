@@ -212,6 +212,9 @@ if __name__ == "__main__":
         # Compare versions if --compare is set to Y
         if args.compare == "Y" and active_version:
             compare_versions(session, base_url, args.config_id, active_version, config_version)
+            if args.create == "N":
+                print(f"Comparison Complete. Approval Required for Network: {args.network} to activate version {config_version} from current active version {active_version}.")
+                exit(0)
 
         # Check if the version is active in staging before production activation
         if args.network == "production":
@@ -223,11 +226,11 @@ if __name__ == "__main__":
             else:
                 print(f"Version {config_version} is active in staging. Check passed for production activation.")
 
-        # Activate only if --create is set to Y
+        # Message before activation when --create is set to Y
         if args.create == "Y":
+            print(f"Version {config_version} in process of being Activated for Network '{args.network}' from existing current Active Version {active_version}.")
             activation_id = activate_security_configuration(session, base_url, args.config_id, config_version, args.network, args.note, args.emails)
             if activation_id:
                 print(f"Activation initiated. Activation ID: {activation_id}")
                 monitor_activation_status(session, base_url, activation_id)
-        else:
-            print("Comparison only - no activation triggered. Use --create Y to activate.")
+
