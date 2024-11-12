@@ -1,3 +1,60 @@
+import json
+import os
+import argparse
+import requests
+import time
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+
+# Function to load EdgeRc and set up authentication
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/".rstrip('/') + '/'
+        session = requests.Session()
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, section_name)
+        print("Session setup successful.")
+        return session, base_url
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Function to retrieve configuration ID and active version by name
+def get_config_id_by_name(session, base_url, config_name, network):
+    # Implementation remains the same
+    pass
+
+# Function to activate the security configuration
+def activate_security_configuration(session, base_url, config_id, config_version, network, note, emails):
+    # Implementation remains the same
+    pass
+
+# Updated function to compare two versions and save the output to a JSON file
+def compare_versions(session, base_url, config_id, from_version, to_version):
+    compare_url = urljoin(base_url, f"appsec/v1/configs/{config_id}/versions/diff")
+    payload = {
+        "outcomes": ["MODIFIED"],
+        "to": to_version,
+        "from": from_version
+    }
+
+    headers = {"accept": "application/json", "content-type": "application/json"}
+    response = session.post(compare_url, json=payload, headers=headers)
+    
+    if response.status_code == 200:
+        comparison_data = response.json()
+        print("Comparison between versions:")
+        print(json.dumps(comparison_data, indent=4))
+        
+        # Save comparison data to a JSON file
+        filename = f"VersionComparisonFrom{from_version}To{to_version}.json"
+        with open(filename, "w") as file:
+            json.dump(comparison_data, file, indent=4)
+        print(f"Comparison JSON output saved to {filename}")
+    else:
+        print(f"Failed to compare versions. Status Code: {response.status_code}")
+        print(response.text)
+
 # Main function to handle arguments and perform activation or comparison
 if __name__ == "__main__":
     # Set up argument parsing
