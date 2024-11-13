@@ -1,0 +1,12 @@
+        script {
+                def attachmentsPattern = "${env.WORKSPACE}/logs/error_log_*.txt"
+                
+                emailext(
+                    subject: "Build #${env.BUILD_NUMBER} - Log Report",
+                    body: """<p>Hello,</p>
+                             <p>Please find attached the error log files for build #${env.BUILD_NUMBER}.</p>""",
+                    to: 'your_email@example.com',
+                    attachLog: true,
+                    attachmentsPattern: attachmentsPattern
+                )
+            }
