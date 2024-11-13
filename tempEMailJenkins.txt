@@ -10,3 +10,6 @@
                     attachmentsPattern: attachmentsPattern
                 )
             }
+
+// Define a pattern to match multiple types of files
+def attachmentsPattern = "${env.WORKSPACE}/{logs/*.txt,reports/*.html,data/*.csv}"
