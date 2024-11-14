@@ -81,6 +81,19 @@ if __name__ == "__main__":
     # Parse the arguments
     args = parser.parse_args()
 
+ # Parse the arguments
+    args = parser.parse_args()
+
+    # Strip leading/trailing whitespace for relevant arguments
+    if args.config_name:
+        args.config_name = args.config_name.strip()
+    if args.config_version:
+        args.config_version = args.config_version.strip()
+    if args.note:
+        args.note = args.note.strip()
+    if args.emails:
+        args.emails = [email.strip() for email in args.emails]  # Strip each email in the list
+
     # Set up session with EdgeRc credentials
     session, base_url = setup_session(args.edgerc, args.section)
 
