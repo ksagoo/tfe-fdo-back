@@ -1,0 +1,180 @@
+"""
+===================================================================================
+                     Akamai Security Configuration Activation Script
+===================================================================================
+
+Script Description:
+    This script is designed to activate security configurations on the Akamai platform. 
+    It includes functionality to validate user access to a security configuration, 
+    compare versions, monitor activation status, and enforce staging checks for production.
+
+User validation is based on an `entitlements.xlsx` file containing mappings of user IDs 
+to security configurations they are authorized to access. 
+
+Functionality:
+1. Validate user access to a security configuration using the `entitlements.xlsx` file.
+2. Activate a security configuration in staging or production.
+3. Compare the new version with the current active version before activation.
+4. Monitor the activation status until it is fully activated.
+5. Enforce that a version must be active in staging before it can be activated in production.
+
+Parameters:
+    --config_id           (Optional) The ID of the security configuration. Use this or `--config_name`.
+    --config_name         (Optional) The name of the security configuration. Use this or `--config_id`.
+    --config_version      (Required) The version of the security configuration to activate, e.g., 'v1', 'v2'.
+    --user_id             (Required) The ID of the user initiating the pipeline.
+    --entitlements_file   (Optional) Path to the entitlements file. Default: 'entitlements.xlsx'.
+    --network             (Optional) The network to activate ('staging' or 'production'). Default: 'staging'.
+    --note                (Optional) A note to include with the activation. Default: 'New Version to Activate'.
+    --emails              (Optional) Notification emails for activation status. Default: ['aactivation@test.com'].
+    --edgerc              (Optional) Path to the `.edgerc` file for Akamai API authentication. Default: '~/.edgerc'.
+    --section             (Optional) Section in the `.edgerc` file. Default: 'default'.
+    --activation_id       (Optional) Activation ID to check the status of an ongoing activation.
+    --compare             (Optional) Whether to compare current active version with the target version ('Y' or 'N'). Default: 'Y'.
+    --create              (Optional) Apply changes if 'Y'; otherwise, only outputs comparison. Default: 'N'.
+
+Usage Examples:
+    - Activate a security configuration:
+        python activate_security.py --config_name "Corporate Sites WAF" --config_version v9 --user_id jira.user.id
+
+    - Compare versions without activating:
+        python activate_security.py --config_name "Corporate Sites WAF" --config_version v9 --user_id jira.user.id --create N
+
+    - Monitor activation status:
+        python activate_security.py --activation_id 1234
+
+    - Activate in production after staging is active:
+        python activate_security.py --config_name "Corporate Sites WAF" --config_version v9 --user_id jira.user.id --network production
+
+===================================================================================
+"""
+import json
+import os
+import argparse
+import requests
+import time
+import pandas as pd
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+
+# Function to load EdgeRc and set up authentication
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/".rstrip('/') + '/'
+        session = requests.Session()
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, section_name)
+        print("Session setup successful.")
+        return session, base_url
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Function to validate user access to the specified config_name
+def validate_user_access(entitlements_file, user_id, config_name):
+    try:
+        # Load the entitlements spreadsheet
+        entitlements = pd.read_excel(entitlements_file)
+        # Filter the rows matching the given user_id
+        user_row = entitlements[entitlements['user_id'] == user_id]
+        if user_row.empty:
+            print(f"Error: User ID {user_id} not found in entitlements file.")
+            exit(1)
+        
+        # Get the list of security_config_names the user has access to
+        user_configs = user_row['security_config_name'].values[0]
+        # Ensure user_configs is split into a list if stored as a comma-separated string
+        if isinstance(user_configs, str):
+            user_configs = [config.strip() for config in user_configs.split(",")]
+        
+        # Check if the entered config_name is in the user's list
+        if config_name not in user_configs:
+            print(f"Error: User ID {user_id} does not have access to Security Configuration '{config_name}'.")
+            exit(1)
+        else:
+            print(f"Validation successful: User ID {user_id} has access to Security Configuration '{config_name}'.")
+    except Exception as e:
+        print(f"Error validating user access: {e}")
+        exit(1)
+
+# Function to retrieve configuration ID and active version by name
+def get_config_id_by_name(session, base_url, config_name, network):
+    url = urljoin(base_url, "appsec/v1/configs")
+    headers = {"accept": "application/json"}
+    response = session.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        configs = response.json().get("configurations", [])
+        for config in configs:
+            if config["name"] == config_name:
+                config_id = config["id"]
+                print(f"Found configuration '{config_name}' with ID: {config_id}")
+                print("Fetching config versions...")
+                
+                url_versions = urljoin(base_url, f"appsec/v1/configs/{config_id}/versions")
+                version_response = session.get(url_versions, headers=headers)
+                
+                if version_response.status_code == 404:
+                    print(f"Provided Configuration Version: {config_version} for Security Configuration: {config_name} cannot be found. Please recheck and try again.")
+                    exit(1)
+                
+                if version_response.status_code == 200:
+                    config_data = version_response.json()
+                    production_active_version = config_data.get("productionActiveVersion")
+                    staging_active_version = config_data.get("stagingActiveVersion")
+                    
+                    if network.lower() == "production":
+                        active_version = production_active_version
+                    else:
+                        active_version = staging_active_version
+
+                    print(f"Using active version {active_version} for network {network}")
+                    return config_id, active_version
+                else:
+                    print(f"Failed to fetch config versions. Status Code: {version_response.status_code}")
+                    print(version_response.text)
+                    exit(1)
+        
+        print(f"Provided Security Configuration Name: {config_name} does not exist. Please check the name and retry.")
+        exit(1)
+    else:
+        print(f"Failed to fetch configurations. Status Code: {response.status_code}")
+        exit(1)
+
+# Main function to handle arguments and perform activation or comparison
+if __name__ == "__main__":
+    # Set up argument parsing
+    parser = argparse.ArgumentParser(description="Activate Akamai security configuration, compare versions, and check activation status")
+    
+    parser.add_argument("--config_id", type=int, help="The ID of the security configuration")
+    parser.add_argument("--config_name", help="The name of the security configuration")
+    parser.add_argument("--config_version", type=str, help="The version of the security configuration to activate in the format 'v1', 'v2', etc.")
+    parser.add_argument("--user_id", required=True, help="The user ID of the pipeline initiator")
+    parser.add_argument("--entitlements_file", default="entitlements.xlsx", help="Path to the entitlements spreadsheet")
+    
+    # Network and activation options
+    parser.add_argument("--network", choices=["staging", "production"], default="staging", help="The network to activate ('staging' or 'production'). Default is 'staging'.")
+    parser.add_argument("--note", default="New Version to Activate", help="Optional note to include with the activation")
+    parser.add_argument("--emails", nargs="+", default=["aactivation@test.com"], help="Notification emails for activation status")
+    
+    # Authentication options
+    parser.add_argument("--edgerc", default=os.path.expanduser("~/.edgerc"), help="Path to the .edgerc file for Akamai API authentication. Default is '~/.edgerc'.")
+    parser.add_argument("--section", default="default", help="Section of the .edgerc file to use (default: 'default').")
+    
+    # Additional functionality
+    parser.add_argument("--activation_id", type=int, help="The activation ID to check the status")
+    parser.add_argument("--compare", choices=["Y", "N"], default="Y", help="Compare the versions ('Y' to compare, default is 'Y').")
+    parser.add_argument("--create", choices=["Y", "N"], default="N", help="Apply changes if 'Y', else only outputs comparison. Default is 'N'.")
+
+    # Parse the arguments
+    args = parser.parse_args()
+
+    # Strip leading/trailing whitespace for relevant arguments
+    if args.config_name:
+        args.config_name = args.config_name.strip()
+
+    # Validate user access to the provided config_name
+    if args.config_name:
+        validate_user_access(args.entitlements_file, args.user_id, args.config_name)
+
+    # Rest of the script logic goes here...
