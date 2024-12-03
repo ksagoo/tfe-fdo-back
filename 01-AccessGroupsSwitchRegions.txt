@@ -1,0 +1,147 @@
+import os
+import argparse
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+import json
+
+# Centralized region settings for PROD
+REGION_SETTINGS = {
+    "Global": {"account_switch_key": "AccountKeyGlobal", "parent_group_name": "A"},
+    "APAC": {"account_switch_key": "AccountKeyAPAC", "parent_group_name": "B"},
+    "EMEA": {"account_switch_key": "AccountKeyEMEA", "parent_group_name": "C"},
+    "LATAM": {"account_switch_key": "AccountKeyLATAM", "parent_group_name": "D"}
+}
+
+# Function to set up the session using the .edgerc file for authentication
+def setup_session(edgerc_file, section_name, account_switch_key=None):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/"
+        client_token = edgerc.get(section_name, 'client_token')
+        client_secret = edgerc.get(section_name, 'client_secret')
+        access_token = edgerc.get(section_name, 'access_token')
+
+        session = requests.Session()
+        session.auth = EdgeGridAuth(
+            client_token=client_token,
+            client_secret=client_secret,
+            access_token=access_token
+        )
+
+        # Add account switch key if provided
+        if account_switch_key:
+            session.headers.update({"X-Akamai-AccountSwitchKey": account_switch_key})
+
+        return session, base_url
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Function to get region-specific settings for PROD
+def get_region_settings(region, override_parent_group_name=None):
+    """
+    Retrieves account switch key and parent group name for a specific region in PROD.
+    If override_parent_group_name is provided, it takes precedence over region settings.
+
+    Args:
+        region (str): The region (e.g., "APAC", "EMEA", etc.).
+        override_parent_group_name (str): Optional custom parent group name.
+
+    Returns:
+        dict: Contains 'account_switch_key' and 'parent_group_name' for the region.
+    """
+    if override_parent_group_name:
+        return {"account_switch_key": None, "parent_group_name": override_parent_group_name}
+
+    settings = REGION_SETTINGS.get(region)
+    if not settings:
+        raise ValueError(f"Invalid region: {region}. Valid options are: {list(REGION_SETTINGS.keys())}.")
+    return settings
+
+# Function to validate the length of the group name
+def validate_group_name_length(group_name):
+    if len(group_name) > 50:
+        print(f"Error: Service Access group name exceeds 50 characters: {group_name}")
+        print("New group will not be created. Please reduce the Service Name length and re-submit.")
+        exit(1)
+
+# Main function to handle argument parsing and script execution
+def main():
+    parser = argparse.ArgumentParser(description="Create or list Akamai Access Groups.")
+    parser.add_argument("lob", help="Line of Business, e.g., TEST01.")
+    parser.add_argument("service_name", help="Service Name, e.g., AkamaiDevOps.")
+    parser.add_argument("--country_code", help="ISO 3166 Country Code (2 uppercase characters). If 'N/A', country code will be ignored.")
+    parser.add_argument("--group_prefix", default="", help="The prefix for the group name. Default is ''.")
+    parser.add_argument("--regions", nargs='+', choices=["APAC", "EMEA", "AMER", "Global", "LATAM"], default=["APAC", "EMEA", "AMER", "Global", "LATAM"], 
+                        help="Regions for which subgroups will be created.")
+    parser.add_argument("--env", choices=["DEV", "PROD"], default="DEV", help="The environment (DEV or PROD). Default is DEV.")
+    parser.add_argument("--parent_group_name", help="The name of the parent group. Overrides automatic selection for PROD.")
+    parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
+    parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
+    parser.add_argument("--levels", type=int, choices=[1, 2, 3, 4], default=4, help="Levels to create (1, 2, 3, or 4). Default is 4.")
+    parser.add_argument("--create", choices=["Y", "N"], default="Y", help="Whether to create groups. Default is 'Y'.")
+
+    args = parser.parse_args()
+
+    # Set default parent group ID for DEV and initialize variables for PROD
+    if args.env == "DEV":
+        default_parent_group_id = 185733
+        account_switch_key = None
+        parent_group_name = args.parent_group_name
+    else:  # PROD
+        if len(args.regions) != 1:
+            print("Error: For PROD, specify exactly one region or override with --parent_group_name.")
+            return
+        region = args.regions[0]
+        try:
+            region_settings = get_region_settings(region, args.parent_group_name)
+        except ValueError as e:
+            print(e)
+            return
+        parent_group_name = region_settings["parent_group_name"]
+        account_switch_key = region_settings["account_switch_key"]
+
+    # Construct the group name dynamically
+    lob = args.lob.strip().upper()
+    service_name = args.service_name.strip()
+    group_prefix = args.group_prefix.strip()
+    if args.country_code and args.country_code != "N/A":
+        country_code = args.country_code.upper()
+        if len(country_code) != 2:
+            print("Error: --country_code must be 2 uppercase characters or 'N/A'.")
+            return
+        group_name = f"{group_prefix}-{lob}-{country_code}-{service_name}" if group_prefix else f"{lob}-{country_code}-{service_name}"
+    else:
+        group_name = f"{group_prefix}-{lob}-{service_name}" if group_prefix else f"{lob}-{service_name}"
+
+    # Validate group name length
+    validate_group_name_length(group_name)
+
+    # Print parameters being used
+    print("Parameters being used:")
+    print(f"LOB: {lob}")
+    print(f"Service Name: {service_name}")
+    print(f"Group Prefix: {group_prefix}")
+    print(f"Regions: {args.regions}")
+    print(f"Parent Group Name: {parent_group_name}")
+    print(f"Environment: {args.env}")
+    print(f"EdgeRC File: {args.edgerc_file}")
+    print(f"Section Name: {args.section_name}")
+    print(f"Selected Level: {args.levels}")
+    print(f"Create: {args.create}")
+    print(f"Account Switch Key: {account_switch_key or 'Not applicable'}")
+
+    # Initialize session
+    session, base_url = setup_session(args.edgerc_file, args.section_name, account_switch_key)
+
+    # Proceed with group creation logic if --create is Y
+    if args.create == "Y":
+        print(f"Groups will be created under parent group '{parent_group_name or default_parent_group_id}'.")
+        # Insert group creation logic here
+    else:
+        print(f"Groups will not be created. Listing groups that would be created:")
+        # Insert group preview logic here
+
+if __name__ == "__main__":
+    main()
