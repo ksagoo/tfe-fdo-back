@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# Define the Python script path
+PYTHON_SCRIPT="akamai_access_group.py"
+
+# Define the common parameters
+ENV="PROD"
+EDGERC_FILE="~/.edgerc"
+SECTION_NAME="default"
+CREATE="Y"
+
+# Define hierarchies as an array
+# Each entry contains LOB, Service Name, Regions, and Parent Group Name (optional)
+HIERARCHIES=(
+  "LOB1 ServiceName1 APAC ParentGroupA"
+  "LOB2 ServiceName2 EMEA ParentGroupB"
+  "LOB3 ServiceName3 AMER ParentGroupC"
+  "LOB4 ServiceName4 LATAM ParentGroupD"
+)
+
+# Iterate through each hierarchy
+for HIERARCHY in "${HIERARCHIES[@]}"; do
+    # Parse the hierarchy details
+    IFS=' ' read -r LOB SERVICE_NAME REGION PARENT_GROUP_NAME <<< "$HIERARCHY"
+
+    # Call the Python script with the parameters
+    echo "Creating access group for LOB: $LOB, Service Name: $SERVICE_NAME, Region: $REGION, Parent Group: $PARENT_GROUP_NAME"
+
+    python3 "$PYTHON_SCRIPT" \
+        "$LOB" \
+        "$SERVICE_NAME" \
+        --regions "$REGION" \
+        --parent_group_name "$PARENT_GROUP_NAME" \
+        --env "$ENV" \
+        --edgerc_file "$EDGERC_FILE" \
+        --section_name "$SECTION_NAME" \
+        --create "$CREATE"
+done
+
+echo "Access group creation process completed."
