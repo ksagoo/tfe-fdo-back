@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+===================================================================================
+                                Akamai Access Group Management Script
+===================================================================================
+Script Name:
+    Akamai Access Group Management Script
+
+Description:
+    This script manages the creation of Akamai access groups. It checks if a group 
+    exists under a specified parent group and creates it if it does not exist.
+
+Parameters:
+    group_name (required)      : The name of the group to create.
+    --parent_group_name        : The name of the parent group. Provide either this or --parent_group_id.
+    --parent_group_id          : The numeric ID of the parent group. Provide either this or --parent_group_name.
+    --env                      : The environment (DEV or PROD). Default is DEV.
+    --edgerc_file              : Path to the .edgerc file. Default is '~/.edgerc'.
+    --section_name             : Section name in the .edgerc file. Default is 'default'.
+    --regions                  : Region to create group (APAC, EMEA, Global, LATAM, AMER). Default is Global.
+    --change_number            : Change Ticket Number for validation.
+    --svc_name                 : Service Account Name for ServiceNow authentication.
+    --svc_pwd                  : Service Account Password for ServiceNow authentication.
+
+===================================================================================
+"""
+
+import os
+import argparse
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+import json
+from datetime import datetime
+
+# Function to validate the change ticket
+def change_validation(change_number, svc_name, svc_pwd):
+    """
+    Validates a change ticket in ServiceNow.
+
+    Parameters:
+        change_number (str): The change ticket number.
+        svc_name (str): The service account username.
+        svc_pwd (str): The service account password.
+
+    Returns:
+        bool: True if the change ticket is valid and within the requested time period, False otherwise.
+    """
+    try:
+        servicenow_url = f"https://your-instance.service-now.com/api/now/table/change_request/{change_number}"
+        headers = {"Accept": "application/json"}
+        auth = (svc_name, svc_pwd)
+
+        response = requests.get(servicenow_url, headers=headers, auth=auth)
+        if response.status_code == 200:
+            change_data = response.json().get('result', {})
+            state = change_data.get("state", "").lower()
+            start_date = change_data.get("start_date")
+            end_date = change_data.get("end_date")
+
+            current_time = datetime.now()
+
+            if state == "approved" and start_date <= current_time.isoformat() <= end_date:
+                print("Change Ticket is valid. Proceeding with Akamai request.")
+                return True
+            else:
+                print("Change Ticket is not Valid - Request cannot proceed.")
+                return False
+        else:
+            print(f"Error validating change ticket: {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        print(f"Error during change validation: {e}")
+        return False
+
+# Function to load EdgeRc and set up authentication
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/"
+        client_token = edgerc.get(section_name, 'client_token')
+        client_secret = edgerc.get(section_name, 'client_secret')
+        access_token = edgerc.get(section_name, 'access_token')
+
+        session = requests.Session()
+        session.auth = EdgeGridAuth(
+            client_token=client_token,
+            client_secret=client_secret,
+            access_token=access_token
+        )
+
+        return session, base_url
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Main logic
+def main():
+    parser = argparse.ArgumentParser(description="Create an Akamai Access Group if it doesn't already exist.")
+    parser.add_argument("group_name", help="The name of the group to create.")
+    parser.add_argument("--parent_group_name", help="The name of the parent group. Provide either this or --parent_group_id.")
+    parser.add_argument("--parent_group_id", type=int, help="The numeric ID of the parent group. Provide either this or --parent_group_name.")
+    parser.add_argument("--env", choices=["DEV", "PROD"], default="DEV", help="The environment (DEV or PROD). Default is DEV.")
+    parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
+    parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
+    parser.add_argument("--regions", choices=["Global", "APAC", "EMEA", "LATAM", "AMER"], default="Global", help="Region to create the group.")
+    parser.add_argument("--change_number", required=True, help="Change Ticket Number for validation.")
+    parser.add_argument("--svc_name", required=True, help="Service Account Name for ServiceNow authentication.")
+    parser.add_argument("--svc_pwd", required=True, help="Service Account Password for ServiceNow authentication.")
+
+    args = parser.parse_args()
+
+    # Validate the change ticket
+    if not change_validation(args.change_number, args.svc_name, args.svc_pwd):
+        exit(1)
+
+    # Proceed with Akamai group creation logic
+    group_name = args.group_name.strip()
+    print(f"Proceeding with creation of group: {group_name}")
+
+    # Additional logic for group creation can follow...
+
+if __name__ == "__main__":
+    main()
