@@ -1,5 +1,69 @@
 openssl s_client -showcerts -connect example.com:443 </dev/null 2>/dev/null | openssl x509 -outform PEM > server-cert.pem
+-------------------------------------------------------------------------------------------------
+For Debian/Ubuntu-Based Images
+-------------------------------
+The update-ca-certificates command is part of the ca-certificates package.
 
+Check if update-ca-certificates is Installed: Run the following command in the container:
+
+bash
+Copy code
+which update-ca-certificates
+If it outputs a path (e.g., /usr/sbin/update-ca-certificates), the tool is installed.
+
+Install if Missing: If it’s not installed, install the ca-certificates package:
+
+bash
+Copy code
+apt-get update && apt-get install -y ca-certificates
+
+For Alpine-Based Images
+-------------------------
+In Alpine Linux, the equivalent command is update-ca-certificates, provided by the ca-certificates package.
+
+Check if Installed:
+
+bash
+Copy code
+which update-ca-certificates
+Install if Missing: Install the ca-certificates package:
+
+bash
+Copy code
+apk add --no-cache ca-certificates
+Ensure the Package is Configured: If update-ca-certificates doesn’t work immediately, run:
+
+bash
+Copy code
+mkdir -p /usr/local/share/ca-certificates
+
+For CentOS/RHEL-Based Images
+------------------------------
+CentOS/RHEL uses update-ca-trust instead of update-ca-certificates.
+
+Check if Installed:
+
+bash
+Copy code
+which update-ca-trust
+Install if Missing: Install the ca-certificates package:
+
+bash
+Copy code
+yum install -y ca-certificates
+Enable CA Certificate Management: Run:
+
+bash
+Copy code
+update-ca-trust enable
+Add the Certificate: Copy the .pem file to /etc/pki/ca-trust/source/anchors/ and then run:
+
+bash
+Copy code
+update-ca-trust
+
+
+-------------------------------------------------------------------------------------------------
 
 #!/bin/bash
 
