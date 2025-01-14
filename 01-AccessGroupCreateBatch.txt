@@ -63,6 +63,27 @@ Copy code
 update-ca-trust
 
 
+
+Verify Installation
+After ensuring update-ca-certificates is installed, you can verify it’s working:
+
+Add your .crt file to the correct location:
+
+bash
+Copy code
+cp server-cert.crt /usr/local/share/ca-certificates/
+Update the CA certificates store:
+
+bash
+Copy code
+update-ca-certificates
+Check if the certificate was added:
+
+bash
+Copy code
+openssl verify -CAfile /etc/ssl/certs/ca-certificates.crt /usr/local/share/ca-certificates/server-cert.crt
+
+
 -------------------------------------------------------------------------------------------------
 
 #!/bin/bash
