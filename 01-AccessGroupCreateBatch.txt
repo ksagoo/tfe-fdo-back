@@ -1,3 +1,51 @@
+# Step 1: Perform Change Validation Checks
+IF ChangeValidationCheckPassed:
+    # Step 2: Determine Change Ticket Type
+    IF ChangeTicketType == "Standard":
+        # Check if the Front Door Form Requestor is part of the Change Assignment Group
+        IF FrontDoorFormRequestor IN ChangeAssignmentGroup:
+            AccessControlValidation = True 
+        ELSE:
+            AccessControlValidation = True     
+    # Ticket type non standard i.e. Normal, Emergency, other 
+    ELSE:
+        # Check if the Requestor is part of the Assignment Group
+        IF Requestor IN AssignmentGroup:
+            AccessControlValidation = True   
+        # OR Check if the Requestor is part of the Approval Group AND not the Change Owner
+        ELSE IF Requestor IN ApprovalGroup AND Requestor != ChangeOwner:
+            AccessControlValidation = True 
+        ELSE:
+            AccessControlValidation = False
+ELSE:
+    ChangeValidationCheckPassed = False    
+END
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Save the JSON data to a file
 with open('changeTicket.json', 'w') as json_file:
     json.dump(json_data, json_file, indent=4)  # `indent=4` makes the JSON file pretty-printed
