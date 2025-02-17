@@ -201,3 +201,44 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def check_user_in_group(session, base_url, group_id, user_email):
+    """Checks if a given user email exists in an Akamai IAM group."""
+    try:
+        url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{group_id}/members")
+        headers = {"accept": "application/json"}
+
+        print(f"Checking if {user_email} exists in Group ID {group_id} at URL: {url}")
+        response = session.get(url, headers=headers)
+
+        if response.status_code == 200:
+            users = response.json()
+
+            # Debugging: Print the returned JSON user list
+            print("Users found in the group:")
+            print(json.dumps(users, indent=4))
+
+            # Check if user_email exists in the returned list
+            for user in users:
+                if user.get("email", "").lower() == user_email.lower():
+                    print(f"Match found: {user_email} exists in Group ID {group_id}.")
+                    return True
+
+            print(f"No match: {user_email} is NOT found in Group ID {group_id}.")
+            return False
+
+        elif response.status_code == 403:
+            print(f"API lacks permission to retrieve users. Check Akamai IAM settings.")
+        
+        elif response.status_code == 404:
+            print(f"Group ID {group_id} not found, or it has no assigned users.")
+
+        else:
+            print(f"Failed to retrieve users: {response.status_code} - {response.text}")
+
+        return False
+
+    except Exception as e:
+        print(f"Error fetching user information: {e}")
+        return False
+
