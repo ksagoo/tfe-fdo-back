@@ -143,6 +143,8 @@ def list_users_in_group(session, base_url, group_id):
     """
     try:
         url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{group_id}/ui-identities")
+
+url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{group_id}/members")
         headers = {"accept": "application/json"}
 
         print(f"Retrieving users in Group ID {group_id} at URL: {url}")
