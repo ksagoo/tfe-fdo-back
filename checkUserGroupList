@@ -241,4 +241,26 @@ def check_user_in_group(session, base_url, group_id, user_email):
     except Exception as e:
         print(f"Error fetching user information: {e}")
         return False
+------------------------------
 
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Check if a user email exists in an Akamai IAM Group.")
+    parser.add_argument("--group_id", required=True, help="Group ID to check users.")
+    parser.add_argument("--user_email", required=True, help="Email of the user to check in the group.")
+    parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
+    parser.add_argument("--section_name", default="default", help="Section name in the .edgerc file. Default is 'default'.")
+
+    args = parser.parse_args()
+
+    # Setup session
+    edgerc_file = os.path.expanduser(args.edgerc_file)
+    session, base_url = setup_session(edgerc_file, args.section_name)
+
+    # Check if user exists in the group
+    user_exists = check_user_in_group(session, base_url, args.group_id, args.user_email)
+
+    # Output result
+    if user_exists:
+        print(f"✅ User {args.user_email} EXISTS in Group ID {args.group_id}.")
+    else:
+        print(f"❌ User {args.user_email} does NOT exist in Group ID {args.group_id}.")
