@@ -12,7 +12,7 @@ Description:
     in that list.
 
 Parameters:
-    security_config_name           : Name of the Security Configuration (required).
+    --config_name                  : Name of the Security Configuration (required).
     --account                      : Account name to determine section names. Default is 'Global'.
                                      Possible values: Global, AMER, LATM, EMEA, APAC, DEV.
     --edgerc_file                  : Path to the .edgerc file. Default is '~/.edgerc'.
@@ -24,21 +24,21 @@ Section Naming Convention:
 
 Usage:
     - To retrieve group details for a Security Configuration:
-        python script.py "MySecurityConfig"
+        python script.py --config_name "MySecurityConfig"
 
     - To specify an account (e.g., EMEA):
-        python script.py "MySecurityConfig" --account EMEA
+        python script.py --config_name "MySecurityConfig" --account EMEA
 
     - To check if an email exists in the group:
-        python script.py "MySecurityConfig" --email user@example.com
+        python script.py --config_name "MySecurityConfig" --email user@example.com
 
     - Full example with all parameters:
-        python script.py "MySecurityConfig" --account APAC --edgerc_file /path/to/.edgerc --email user@example.com
+        python script.py --config_name "MySecurityConfig" --account APAC --edgerc_file /path/to/.edgerc --email user@example.com
 
 Notes:
     - Section names are derived from the account parameter.
     - The script handles API lookups for both Security Configuration details and Access Group details.
-    - Each step includes validation to ensure proper API responses.
+    - A brand new session is initiated for the second API call to ensure proper authentication context.
 ===================================================================================
 """
 
@@ -46,6 +46,7 @@ import requests
 from akamai.edgegrid import EdgeGridAuth, EdgeRc
 from urllib.parse import urljoin
 import argparse
+import os
 
 # Function to set up the session using the .edgerc file for authentication
 def setup_session(edgerc_file, section_name):
@@ -69,10 +70,13 @@ def setup_session(edgerc_file, section_name):
         exit(1)
 
 
-def get_security_config(config_name, session, base_url):
+def get_security_config(config_name, edgerc_file, section_name):
     """
     Retrieve the Group ID and Contract ID for the given security configuration name.
+    A new session is started for this API call.
     """
+    edgerc_file = os.path.expanduser(edgerc_file)
+    session, base_url = setup_session(edgerc_file, section_name)
     configs_url = urljoin(base_url, "appsec/v1/configs")
     response = session.get(configs_url, headers={"Accept": "application/json"})
     response.raise_for_status()
@@ -85,10 +89,13 @@ def get_security_config(config_name, session, base_url):
     raise ValueError(f"Security configuration '{config_name}' not found.")
 
 
-def get_group_details(group_id, session, base_url):
+def get_group_details(group_id, edgerc_file, section_name):
     """
     Retrieve the Group Name given a Group ID.
+    A brand new session is started for this API call.
     """
+    edgerc_file = os.path.expanduser(edgerc_file)
+    session, base_url = setup_session(edgerc_file, section_name)
     groups_url = urljoin(base_url, "papi/v1/groups")
     resp_groups = session.get(groups_url, headers={"Accept": "application/json"})
     resp_groups.raise_for_status()
@@ -101,10 +108,13 @@ def get_group_details(group_id, session, base_url):
     raise ValueError(f"Group with ID '{group_id}' not found.")
 
 
-def get_group_members(group_id, session, base_url):
+def get_group_members(group_id, edgerc_file, section_name):
     """
     Retrieve a list of group member email addresses for the given Group ID.
+    A new session is started for this API call.
     """
+    edgerc_file = os.path.expanduser(edgerc_file)
+    session, base_url = setup_session(edgerc_file, section_name)
     members_url = urljoin(base_url, f"identity-management/v2/user-admin/groups/{group_id}/members")
     response = session.get(members_url, headers={"Accept": "application/json"})
     response.raise_for_status()
@@ -115,7 +125,7 @@ def get_group_members(group_id, session, base_url):
 
 def main():
     parser = argparse.ArgumentParser(description="Check SC Access Group Membership")
-    parser.add_argument("security_config_name", help="SC Name")
+    parser.add_argument("--config_name", required=True, help="Name of the Security Configuration.")
     parser.add_argument("--account", default="Global", choices=["Global", "AMER", "LATM", "EMEA", "APAC", "DEV"],
                         help="Account name to determine section names. Default is 'Global'.")
     parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
@@ -123,20 +133,23 @@ def main():
     args = parser.parse_args()
 
     try:
+        # Expand user path for edgerc file
+        args.edgerc_file = os.path.expanduser(args.edgerc_file)
+
         # Determine section names based on account
         security_section = f"{args.account}_SEC"
         group_section = f"{args.account}_GRP"
 
-        # API lookup for Security Configuration Details
-        sec_session, sec_base_url = setup_session(args.edgerc_file, security_section)
-        group_id, contract_id, config_id = get_security_config(args.security_config_name, sec_session, sec_base_url)
+        # API lookup for Security Configuration Details with a fresh session
+        group_id, contract_id, config_id = get_security_config(args.config_name, args.edgerc_file, security_section)
 
-        # API lookup for Access Group Details
-        grp_session, grp_base_url = setup_session(args.edgerc_file, group_section)
-        group_name, group_id_str = get_group_details(group_id, grp_session, grp_base_url)
-        group_members = get_group_members(group_id_str, grp_session, grp_base_url)
+        # API lookup for Access Group Details with a new session
+        group_name, group_id_str = get_group_details(group_id, args.edgerc_file, group_section)
 
-        print(f"\nSecurity Configuration: {args.security_config_name}")
+        # Retrieve group members with a fresh session
+        group_members = get_group_members(group_id_str, args.edgerc_file, group_section)
+
+        print(f"\nSecurity Configuration: {args.config_name}")
         print(f"Group Name: {group_name}")
         print(f"Group ID: {group_id_str}")
         print("\nGroup Members Email Addresses:")
