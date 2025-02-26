@@ -1,3 +1,47 @@
+"""
+===================================================================================
+                    Entitlement Check - Access Group Membership for SC
+===================================================================================
+Script Name:
+    Entitlement Check - Access Group Membership for SC
+
+Description:
+    This script retrieves the Access Group details (Group Name and Group ID) associated
+    with a specified Akamai Security Configuration. It also lists all email addresses
+    of users belonging to the Access Group and checks if a specific email address exists
+    in that list.
+
+Parameters:
+    security_config_name           : Name of the Security Configuration (required).
+    --account                      : Account name to determine section names. Default is 'Global'.
+                                     Possible values: Global, AMER, LATM, EMEA, APAC, DEV.
+    --edgerc_file                  : Path to the .edgerc file. Default is '~/.edgerc'.
+    --email                        : (Optional) Email address to check for membership in the Access Group.
+
+Section Naming Convention:
+    - For Security Configuration lookup: <account>_SEC (e.g., AMER_SEC)
+    - For Access Group lookup: <account>_GRP (e.g., AMER_GRP)
+
+Usage:
+    - To retrieve group details for a Security Configuration:
+        python script.py "MySecurityConfig"
+
+    - To specify an account (e.g., EMEA):
+        python script.py "MySecurityConfig" --account EMEA
+
+    - To check if an email exists in the group:
+        python script.py "MySecurityConfig" --email user@example.com
+
+    - Full example with all parameters:
+        python script.py "MySecurityConfig" --account APAC --edgerc_file /path/to/.edgerc --email user@example.com
+
+Notes:
+    - Section names are derived from the account parameter.
+    - The script handles API lookups for both Security Configuration details and Access Group details.
+    - Each step includes validation to ensure proper API responses.
+===================================================================================
+"""
+
 import requests
 from akamai.edgegrid import EdgeGridAuth, EdgeRc
 from urllib.parse import urljoin
