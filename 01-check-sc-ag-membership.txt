@@ -8,8 +8,9 @@ Script Name:
 Description:
     This script retrieves the Access Group details (Group Name and Group ID) associated
     with a specified Akamai Security Configuration by matching the Security Configuration
-    Name to the Access Group Name. It also lists all email addresses of users belonging
-    to the Access Group and checks if a specific email address exists in that list.
+    Name (with 'SC-' removed) to the Access Group Name. It also lists all email addresses
+    of users belonging to the Access Group and checks if a specific email address exists
+    in that list.
 
 Parameters:
     --config_name                  : Name of the Security Configuration (required).
@@ -24,20 +25,20 @@ Section Naming Convention:
 
 Usage:
     - To retrieve group details for a Security Configuration:
-        python script.py --config_name "MySecurityConfig"
+        python script.py --config_name "SC-MySecurityConfig"
 
     - To specify an account (e.g., EMEA):
-        python script.py --config_name "MySecurityConfig" --account EMEA
+        python script.py --config_name "SC-MySecurityConfig" --account EMEA
 
     - To check if an email exists in the group:
-        python script.py --config_name "MySecurityConfig" --email user@example.com
+        python script.py --config_name "SC-MySecurityConfig" --email user@example.com
 
     - Full example with all parameters:
-        python script.py --config_name "MySecurityConfig" --account APAC --edgerc_file /path/to/.edgerc --email user@example.com
+        python script.py --config_name "SC-MySecurityConfig" --account APAC --edgerc_file /path/to/.edgerc --email user@example.com
 
 Notes:
     - Section names are derived from the account parameter.
-    - The script matches the Security Configuration Name to the Access Group Name to determine the correct group.
+    - The script now removes the 'SC-' prefix from the Security Configuration Name before matching it to the Access Group Name.
     - Each step includes validation to ensure proper API responses.
 ===================================================================================
 """
@@ -95,7 +96,8 @@ def get_security_config(config_name, edgerc_file, section_name):
 
 def get_group_details_by_name(group_name, edgerc_file, section_name):
     """
-    Retrieve the Group ID by matching the Group Name with the Security Configuration Name.
+    Retrieve the Group ID by matching the Group Name with the Security Configuration Name
+    after removing the 'SC-' prefix.
     """
     edgerc_file = os.path.expanduser(edgerc_file)
     session, base_url = setup_session(edgerc_file, section_name)
@@ -104,11 +106,12 @@ def get_group_details_by_name(group_name, edgerc_file, section_name):
     resp_groups.raise_for_status()
 
     groups_data = resp_groups.json()
+    normalized_group_name = group_name.replace("SC-", "", 1)  # Remove 'SC-' prefix
     for group in groups_data.get("groups", {}).get("items", []):
-        if group.get("groupName") == group_name:
+        if group.get("groupName") == normalized_group_name:
             return group.get("groupName"), group.get("groupId")
 
-    raise ValueError(f"Access group with name '{group_name}' not found.")
+    raise ValueError(f"Access group with name '{normalized_group_name}' not found.")
 
 
 def get_group_members(group_id, edgerc_file, section_name):
@@ -145,7 +148,7 @@ def main():
         # API lookup for Security Configuration Details
         config_id, config_name = get_security_config(args.config_name, args.edgerc_file, security_section)
 
-        # Match Security Configuration Name to Access Group Name
+        # Match Security Configuration Name (without 'SC-') to Access Group Name
         group_name, group_id_str = get_group_details_by_name(config_name, args.edgerc_file, group_section)
 
         # Retrieve group members
@@ -157,10 +160,6 @@ def main():
         print("\nGroup Members Email Addresses:")
         for email in group_members:
             print(f"- {email}")
-
-        if args.email:
-            email_exists = args.email in group_members
-            print(f"\nEmail '{args.email}' exists in group: {email_exists}")
 
     except Exception as e:
         print(f"Error: {str(e)}")
