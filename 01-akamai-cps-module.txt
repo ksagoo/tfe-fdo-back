@@ -1,0 +1,131 @@
+"""
+===================================================================================
+                    Akamai CPS Certificate Enrollment Management Script
+===================================================================================
+Script Name:
+    Akamai CPS Certificate Enrollment Management Script
+
+Description:
+    This script interacts with the Akamai Certificate Provisioning System (CPS) API to:
+    - Create a new certificate enrollment.
+    - Update an existing certificate enrollment.
+    - Lookup an existing certificate enrollment by ID or Common Name.
+
+Parameters:
+    --operation                    : Operation to perform. Options: 'create', 'update', 'lookup'. (Required)
+    --common_name                  : Common Name (CN) for the certificate. Required for 'create' and 'lookup'.
+    --enrollment_id                : ID of the enrollment to update or lookup. Required for 'update' and 'lookup'.
+    --edgerc_file                  : Path to the .edgerc file. Default is '~/.edgerc'.
+    --account                      : Account name for section mapping in .edgerc. Default is 'default'.
+
+Usage:
+    - To create a new certificate enrollment:
+        python cps_script.py --operation create --common_name "example.com"
+
+    - To update an existing enrollment:
+        python cps_script.py --operation update --enrollment_id 12345
+
+    - To lookup an enrollment by ID:
+        python cps_script.py --operation lookup --enrollment_id 12345
+
+    - To lookup an enrollment by Common Name:
+        python cps_script.py --operation lookup --common_name "example.com"
+===================================================================================
+"""
+
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
+import argparse
+import os
+import json
+
+# Function to set up the session using the .edgerc file for authentication
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/"
+        client_token = edgerc.get(section_name, 'client_token')
+        client_secret = edgerc.get(section_name, 'client_secret')
+        access_token = edgerc.get(section_name, 'access_token')
+
+        session = requests.Session()
+        session.auth = EdgeGridAuth(
+            client_token=client_token,
+            client_secret=client_secret,
+            access_token=access_token
+        )
+
+        return session, base_url
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        exit(1)
+
+# Function to create a new certificate enrollment
+def create_enrollment(session, base_url, common_name):
+    enrollment_url = urljoin(base_url, "cps/v2/enrollments")
+    data = {
+        "commonName": common_name,
+        "csr": "-----BEGIN CERTIFICATE REQUEST-----\n...\n-----END CERTIFICATE REQUEST-----",
+        "certType": "STANDARD_TLS",
+        "validationType": "DV",
+    }
+    response = session.post(enrollment_url, json=data, headers={"Accept": "application/json"})
+    response.raise_for_status()
+    print("Enrollment Created:", json.dumps(response.json(), indent=4))
+
+# Function to update an existing enrollment
+def update_enrollment(session, base_url, enrollment_id):
+    update_url = urljoin(base_url, f"cps/v2/enrollments/{enrollment_id}")
+    data = {"csr": "-----BEGIN CERTIFICATE REQUEST-----\n...\n-----END CERTIFICATE REQUEST-----"}
+    response = session.put(update_url, json=data, headers={"Accept": "application/json"})
+    response.raise_for_status()
+    print("Enrollment Updated:", json.dumps(response.json(), indent=4))
+
+# Function to lookup an enrollment by ID or Common Name
+def lookup_enrollment(session, base_url, enrollment_id=None, common_name=None):
+    if enrollment_id:
+        lookup_url = urljoin(base_url, f"cps/v2/enrollments/{enrollment_id}")
+    elif common_name:
+        lookup_url = urljoin(base_url, "cps/v2/enrollments")
+    else:
+        raise ValueError("Either enrollment_id or common_name must be provided for lookup.")
+
+    response = session.get(lookup_url, headers={"Accept": "application/json"})
+    response.raise_for_status()
+    print("Enrollment Details:", json.dumps(response.json(), indent=4))
+
+# Main function
+def main():
+    parser = argparse.ArgumentParser(description="Manage Akamai CPS Certificate Enrollments")
+    parser.add_argument("--operation", required=True, choices=["create", "update", "lookup"],
+                        help="Operation to perform: create, update, lookup")
+    parser.add_argument("--common_name", help="Common Name for certificate enrollment")
+    parser.add_argument("--enrollment_id", help="Enrollment ID for lookup or update")
+    parser.add_argument("--edgerc_file", default="~/.edgerc", help="Path to the .edgerc file. Default is '~/.edgerc'.")
+    parser.add_argument("--account", default="default", help="Account name for section mapping in .edgerc")
+    args = parser.parse_args()
+
+    try:
+        # Expand user path for edgerc file
+        args.edgerc_file = os.path.expanduser(args.edgerc_file)
+
+        # Set up API session
+        session, base_url = setup_session(args.edgerc_file, args.account)
+
+        # Perform the requested operation
+        if args.operation == "create":
+            if not args.common_name:
+                raise ValueError("--common_name is required for create operation.")
+            create_enrollment(session, base_url, args.common_name)
+        elif args.operation == "update":
+            if not args.enrollment_id:
+                raise ValueError("--enrollment_id is required for update operation.")
+            update_enrollment(session, base_url, args.enrollment_id)
+        elif args.operation == "lookup":
+            lookup_enrollment(session, base_url, args.enrollment_id, args.common_name)
+    except Exception as e:
+        print(f"Error: {str(e)}")
+
+if __name__ == "__main__":
+    main()
