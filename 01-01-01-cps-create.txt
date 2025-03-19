@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""
+===================================================================================
+         Akamai CPS Certificate Enrollment Management Script - Enrollment Creation
+===================================================================================
+ Script Name:
+     cps_enrollment_creation.py
+     
+ Description:
+     This script interacts with the Akamai Certificate Provisioning System (CPS) API to:
+       - Create a new certificate enrollment.
+     
+     It supports both DV and EV certificate enrollment creation by accepting the
+     required parameters for the CSR, network configuration, and contact details.
+     
+     A flag (--send) is provided. When not set (default), the script outputs the JSON 
+     payload without sending it. When set, the enrollment request is sent.
+     
+ Parameters:
+     --operation             : Operation to perform. Options: 'create', 'update', 'lookup'. (Required)
+     --common_name           : Common Name (CN) for the certificate enrollment. (Required for create)
+     --san                   : Additional SAN domains. (Repeatable)
+     
+     --csr_country           : Country for the CSR (default: US)
+     --csr_state             : State for the CSR (default: CA)
+     --csr_locality          : Locality for the CSR (default: San Diego)
+     --csr_org               : Organization for the CSR. (Required)
+     --preferred_trust_chain : Preferred trust chain (optional)
+     
+     --validation_type       : Validation type: ev or dv (default: ev)
+     --ra                    : RA parameter (default: lets-encrypt)
+     --certificate_type      : Certificate type (default: san)
+     --change_management     : Enable change management flag (set flag for true)
+     --contract_id           : Contract ID for the enrollment (query parameter; Required)
+     
+     --admin_email           : Admin contact email. (Required)
+     --admin_first_name      : Admin contact first name. (Required)
+     --admin_last_name       : Admin contact last name. (Required)
+     --admin_phone           : Admin contact phone. (Required)
+     --admin_org             : Admin organization name. (Required)
+     --admin_address1        : Admin address line one. (Required)
+     --admin_address2        : Admin address line two (optional)
+     --admin_city            : Admin city. (Required)
+     --admin_region          : Admin region/state. (Required)
+     --admin_country         : Admin country. (Required)
+     --admin_postal          : Admin postal code. (Required)
+     --admin_title           : Admin contact title. (Required)
+     
+     --tech_email            : Tech contact email. (Required)
+     --tech_first_name       : Tech contact first name. (Required)
+     --tech_last_name        : Tech contact last name. (Required)
+     --tech_phone            : Tech contact phone. (Required)
+     --tech_org              : Tech organization name. (Required)
+     --tech_title            : Tech contact title. (Required)
+     
+     --edgerc_file           : Path to the .edgerc file (default: ~/.edgerc.txt)
+     --account               : Account name for section mapping in .edgerc (default: default)
+     --send                  : If set, sends the enrollment request; otherwise only outputs the JSON payload.
+     
+ Usage Example:
+     To output the JSON payload without sending:
+       python cps_enrollment_creation.py --operation create --common_name "example.com" \
+         --csr_org "Example Corp" --contract_id "1-2ABCD3" \
+         --admin_email "admin@example.com" --admin_first_name "John" --admin_last_name "Doe" \
+         --admin_phone "800-555-1234" --admin_org "Example Corp" --admin_address1 "123 Main St" \
+         --admin_city "San Diego" --admin_region "CA" --admin_country "US" --admin_postal "92101" \
+         --admin_title "Administrator" \
+         --tech_email "tech@example.com" --tech_first_name "Jane" --tech_last_name "Doe" \
+         --tech_phone "617-555-0111" --tech_org "Example Corp" --tech_title "Engineer"
+     
+     To send the enrollment request, add the --send flag:
+       python cps_enrollment_creation.py --operation create --common_name "example.com" --send [other parameters...]
+===================================================================================
+"""
+
+import os
+import sys
+import json
+import argparse
+import requests
+from urllib.parse import urljoin
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+
+def setup_session(edgerc_file, section):
+    """
+    Sets up an authenticated session using credentials from the .edgerc file.
+    The provided section determines which account credentials to use.
+    """
+    try:
+        edgerc = EdgeRc(os.path.expanduser(edgerc_file))
+        baseurl = f"https://{edgerc.get(section, 'host')}"
+        session = requests.Session()
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, section)
+        return session, baseurl
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        sys.exit(1)
+
+def create_enrollment(session, baseurl, payload, contract_id):
+    """
+    Creates a new certificate enrollment using the CPS API.
+    """
+    path = "/cps/v2/enrollments"
+    url = urljoin(baseurl, path)
+    headers = {
+        "Content-Type": "application/vnd.akamai.cps.enrollment.v9+json",
+        "Accept": "application/vnd.akamai.cps.enrollment-status.v9+json"
+    }
+    querystring = {"contractId": contract_id}
+    
+    try:
+        response = session.post(url, headers=headers, json=payload, params=querystring)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred: {http_err}")
+        print("Response:", response.text)
+        sys.exit(1)
+    except Exception as err:
+        print(f"Error occurred: {err}")
+        sys.exit(1)
+    
+    return response.json()
+
+def main():
+    parser = argparse.ArgumentParser(description="Manage Akamai CPS Certificate Enrollments")
+    parser.add_argument("--operation", required=True, choices=["create", "update", "lookup"],
+                        help="Operation to perform: create, update, lookup")
+    parser.add_argument("--common_name", help="Common Name (Primary FQDN) for certificate enrollment")
+    parser.add_argument("--san", action="append", help="Additional SAN domains (repeat for multiple)")
+    
+    # CSR details
+    parser.add_argument("--csr_country", default="US", help="Country for CSR (default: US)")
+    parser.add_argument("--csr_state", default="CA", help="State for CSR (default: CA)")
+    parser.add_argument("--csr_locality", default="San Diego", help="Locality for CSR (default: San Diego)")
+    parser.add_argument("--csr_org", required=True, help="Organization for CSR")
+    parser.add_argument("--preferred_trust_chain", default="", help="Preferred trust chain (optional)")
+    
+    # Enrollment configuration
+    parser.add_argument("--validation_type", default="ev", help="Validation type: ev or dv (default: ev)")
+    parser.add_argument("--ra", default="lets-encrypt", help="RA parameter (default: lets-encrypt)")
+    parser.add_argument("--certificate_type", default="san", help="Certificate type (default: san)")
+    parser.add_argument("--change_management", action="store_true", help="Enable change management")
+    parser.add_argument("--contract_id", required=True, help="Contract ID for the enrollment (query parameter)")
+    
+    # Admin Contact details
+    parser.add_argument("--admin_email", required=True, help="Admin contact email")
+    parser.add_argument("--admin_first_name", required=True, help="Admin contact first name")
+    parser.add_argument("--admin_last_name", required=True, help="Admin contact last name")
+    parser.add_argument("--admin_phone", required=True, help="Admin contact phone")
+    parser.add_argument("--admin_org", required=True, help="Admin organization name")
+    parser.add_argument("--admin_address1", required=True, help="Admin address line one")
+    parser.add_argument("--admin_address2", default="", help="Admin address line two (optional)")
+    parser.add_argument("--admin_city", required=True, help="Admin city")
+    parser.add_argument("--admin_region", required=True, help="Admin region/state")
+    parser.add_argument("--admin_country", required=True, help="Admin country")
+    parser.add_argument("--admin_postal", required=True, help="Admin postal code")
+    parser.add_argument("--admin_title", required=True, help="Admin contact title")
+    
+    # Tech Contact details
+    parser.add_argument("--tech_email", required=True, help="Tech contact email")
+    parser.add_argument("--tech_first_name", required=True, help="Tech contact first name")
+    parser.add_argument("--tech_last_name", required=True, help="Tech contact last name")
+    parser.add_argument("--tech_phone", required=True, help="Tech contact phone")
+    parser.add_argument("--tech_org", required=True, help="Tech organization name")
+    parser.add_argument("--tech_title", required=True, help="Tech contact title")
+    
+    # edgerc file and account section mapping
+    parser.add_argument("--edgerc_file", default="~/.edgerc.txt", help="Path to the .edgerc file (default: ~/.edgerc.txt)")
+    parser.add_argument("--account", default="default", help="Account name for section mapping in .edgerc (default: default)")
+    
+    # Flag to determine whether to send the enrollment request
+    parser.add_argument("--send", action="store_true", default=False,
+                        help="If set, sends the enrollment request. Otherwise, only outputs the JSON payload.")
+    
+    args = parser.parse_args()
+    
+    if args.operation != "create":
+        print("Only 'create' operation is implemented in this script.")
+        sys.exit(1)
+    
+    if not args.common_name:
+        print("Error: --common_name is required for certificate enrollment creation.")
+        sys.exit(1)
+    
+    # Build the enrollment payload based on the Secure Cert API v9 structure:
+    payload = {
+        "validationType": args.validation_type,
+        "ra": args.ra,
+        "certificateType": args.certificate_type,
+        "changeManagement": args.change_management,
+        "csr": {
+            "cn": args.common_name,
+            "sans": [args.common_name] + (args.san if args.san else []),
+            "c": args.csr_country,
+            "st": args.csr_state,
+            "l": args.csr_locality,
+            "o": args.csr_org,
+            "preferredTrustChain": args.preferred_trust_chain
+        },
+        "networkConfiguration": {
+            "secureNetwork": "standard-tls",
+            "geography": "core",
+            "sniOnly": True
+        },
+        "adminContact": {
+            "email": args.admin_email,
+            "firstName": args.admin_first_name,
+            "lastName": args.admin_last_name,
+            "phone": args.admin_phone,
+            "organizationName": args.admin_org,
+            "addressLineOne": args.admin_address1,
+            "addressLineTwo": args.admin_address2,
+            "city": args.admin_city,
+            "region": args.admin_region,
+            "country": args.admin_country,
+            "postalCode": args.admin_postal,
+            "title": args.admin_title
+        },
+        "techContact": {
+            "email": args.tech_email,
+            "firstName": args.tech_first_name,
+            "lastName": args.tech_last_name,
+            "phone": args.tech_phone,
+            "organizationName": args.tech_org,
+            "title": args.tech_title
+        }
+    }
+    
+    # Output the JSON payload if the --send flag is not set
+    if not args.send:
+        print("The enrollment JSON payload is:")
+        print(json.dumps(payload, indent=2))
+        sys.exit(0)
+    
+    # Set up the session using the provided edgerc file and account (section)
+    session, baseurl = setup_session(args.edgerc_file, args.account)
+    
+    # Send the enrollment creation request to the CPS API
+    response = create_enrollment(session, baseurl, payload, args.contract_id)
+    
+    print("CPS API Enrollment Creation Response:")
+    print(json.dumps(response, indent=2))
+
+if __name__ == "__main__":
+    main()
