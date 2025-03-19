@@ -13,54 +13,68 @@
      It supports both DV and EV certificate enrollment creation by accepting the
      required parameters for the CSR, network configuration, and contact details.
      
-     A flag (--send) is provided. When not set (default), the script outputs the JSON 
-     payload without sending it. When set, the enrollment request is sent.
+     A flag (--create) controls whether the enrollment request is sent (if set) or 
+     if the script only outputs the JSON payload.
+     
+     A new parameter --chinacdn (default false) controls the geography setting. If true,
+     "geography" is set to "china+core"; otherwise, it is "core".
+     
+     Additionally, the --account parameter (allowed values: Global, APAC, EMEA, LATAM, AMER, DEV)
+     is used to automatically derive the contract ID from a predefined mapping.
+     
+ REGION_SETTINGS (example mapping):
+     Global: {"parent_group_name": "HSBC", "contract_id": "a"}
+     APAC:   {"parent_group_name": "HSBC", "contract_id": "b"}
+     EMEA:   {"parent_group_name": "HBC",  "contract_id": "c"}
+     LATAM:  {"parent_group_name": "HSBC", "contract_id": "d"}
+     AMER:   {"parent_group_name": "HSBC", "contract_id": "e"}
+     DEV:    {"parent_group_name": "HSBC", "contract_id": "f"}
      
  Parameters:
-     --operation             : Operation to perform. Options: 'create', 'update', 'lookup'. (Required)
-     --common_name           : Common Name (CN) for the certificate enrollment. (Required for create)
-     --san                   : Additional SAN domains. (Repeatable)
+     --operation             : Operation to perform (only "create" is supported here) (Required)
+     --common_name           : Common Name (Primary FQDN) for certificate enrollment (Required for create)
+     --san                   : Additional SAN domains (repeatable; optional)
      
      --csr_country           : Country for the CSR (default: US)
      --csr_state             : State for the CSR (default: CA)
      --csr_locality          : Locality for the CSR (default: San Diego)
-     --csr_org               : Organization for the CSR. (Required)
+     --csr_org               : Organization for the CSR (Required for create)
      --preferred_trust_chain : Preferred trust chain (optional)
      
      --validation_type       : Validation type: ev or dv (default: ev)
      --ra                    : RA parameter (default: lets-encrypt)
      --certificate_type      : Certificate type (default: san)
      --change_management     : Enable change management flag (set flag for true)
-     --contract_id           : Contract ID for the enrollment (query parameter; Required)
      
-     --admin_email           : Admin contact email. (Required)
-     --admin_first_name      : Admin contact first name. (Required)
-     --admin_last_name       : Admin contact last name. (Required)
-     --admin_phone           : Admin contact phone. (Required)
-     --admin_org             : Admin organization name. (Required)
-     --admin_address1        : Admin address line one. (Required)
+     --chinacdn              : Set to true to use China CDN configuration (geography "china+core"); default is false.
+     
+     --admin_email           : Admin contact email (Required for EV)
+     --admin_first_name      : Admin contact first name (Required for EV)
+     --admin_last_name       : Admin contact last name (Required for EV)
+     --admin_phone           : Admin contact phone (Required for EV)
+     --admin_org             : Admin organization name (Required for EV)
+     --admin_address1        : Admin address line one (Required for EV)
      --admin_address2        : Admin address line two (optional)
-     --admin_city            : Admin city. (Required)
-     --admin_region          : Admin region/state. (Required)
-     --admin_country         : Admin country. (Required)
-     --admin_postal          : Admin postal code. (Required)
-     --admin_title           : Admin contact title. (Required)
+     --admin_city            : Admin city (Required for EV)
+     --admin_region          : Admin region/state (Required for EV)
+     --admin_country         : Admin country (Required for EV)
+     --admin_postal          : Admin postal code (Required for EV)
+     --admin_title           : Admin contact title (Required for EV)
      
-     --tech_email            : Tech contact email. (Required)
-     --tech_first_name       : Tech contact first name. (Required)
-     --tech_last_name        : Tech contact last name. (Required)
-     --tech_phone            : Tech contact phone. (Required)
-     --tech_org              : Tech organization name. (Required)
-     --tech_title            : Tech contact title. (Required)
+     --tech_email            : Tech contact email (Required for EV)
+     --tech_first_name       : Tech contact first name (Required for EV)
+     --tech_last_name        : Tech contact last name (Required for EV)
+     --tech_phone            : Tech contact phone (Required for EV)
+     --tech_org              : Tech organization name (Required for EV)
+     --tech_title            : Tech contact title (Required for EV)
      
      --edgerc_file           : Path to the .edgerc file (default: ~/.edgerc.txt)
-     --account               : Account name for section mapping in .edgerc (default: default)
-     --send                  : If set, sends the enrollment request; otherwise only outputs the JSON payload.
+     --account               : Region for enrollment (allowed: Global, APAC, EMEA, LATAM, AMER, DEV). Default is Global.
+     --create                : If set, sends the enrollment request; if not set, only outputs the JSON payload.
      
- Usage Example:
-     To output the JSON payload without sending:
-       python cps_enrollment_creation.py --operation create --common_name "example.com" \
-         --csr_org "Example Corp" --contract_id "1-2ABCD3" \
+ Usage Example (output JSON without sending):
+     python cps_enrollment_creation.py --operation create --common_name "example.com" \
+         --csr_org "Example Corp" --account Global \
          --admin_email "admin@example.com" --admin_first_name "John" --admin_last_name "Doe" \
          --admin_phone "800-555-1234" --admin_org "Example Corp" --admin_address1 "123 Main St" \
          --admin_city "San Diego" --admin_region "CA" --admin_country "US" --admin_postal "92101" \
@@ -68,8 +82,8 @@
          --tech_email "tech@example.com" --tech_first_name "Jane" --tech_last_name "Doe" \
          --tech_phone "617-555-0111" --tech_org "Example Corp" --tech_title "Engineer"
      
-     To send the enrollment request, add the --send flag:
-       python cps_enrollment_creation.py --operation create --common_name "example.com" --send [other parameters...]
+ Usage Example (send enrollment request):
+     python cps_enrollment_creation.py --operation create --common_name "example.com" --create --account APAC --chinacdn true [other parameters...]
 ===================================================================================
 """
 
@@ -81,24 +95,45 @@ import requests
 from urllib.parse import urljoin
 from akamai.edgegrid import EdgeGridAuth, EdgeRc
 
-def setup_session(edgerc_file, section):
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+
+def setup_session(edgerc_file, region):
     """
     Sets up an authenticated session using credentials from the .edgerc file.
-    The provided section determines which account credentials to use.
+    The provided region determines which account credentials to use.
     """
     try:
         edgerc = EdgeRc(os.path.expanduser(edgerc_file))
-        baseurl = f"https://{edgerc.get(section, 'host')}"
+        baseurl = f"https://{edgerc.get(region, 'host')}"
         session = requests.Session()
-        session.auth = EdgeGridAuth.from_edgerc(edgerc, section)
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, region)
         return session, baseurl
     except Exception as e:
         print(f"Error reading .edgerc file: {e}")
         sys.exit(1)
 
+# Define the region-to-contract mapping
+REGION_SETTINGS = {
+    "Global": {"parent_group_name": "HSBC", "contract_id": "a"},
+    "APAC":   {"parent_group_name": "HSBC", "contract_id": "b"},
+    "EMEA":   {"parent_group_name": "HBC",  "contract_id": "c"},
+    "LATAM":  {"parent_group_name": "HSBC", "contract_id": "d"},
+    "AMER":   {"parent_group_name": "HSBC", "contract_id": "e"},
+    "DEV":    {"parent_group_name": "HSBC", "contract_id": "f"}
+}
+
 def create_enrollment(session, baseurl, payload, contract_id):
     """
     Creates a new certificate enrollment using the CPS API.
+    Uses API version v9 for creation.
     """
     path = "/cps/v2/enrollments"
     url = urljoin(baseurl, path)
@@ -112,27 +147,27 @@ def create_enrollment(session, baseurl, payload, contract_id):
         response = session.post(url, headers=headers, json=payload, params=querystring)
         response.raise_for_status()
     except requests.exceptions.HTTPError as http_err:
-        print(f"HTTP error occurred: {http_err}")
+        print(f"HTTP error occurred during enrollment creation: {http_err}")
         print("Response:", response.text)
         sys.exit(1)
     except Exception as err:
-        print(f"Error occurred: {err}")
+        print(f"Error occurred during enrollment creation: {err}")
         sys.exit(1)
     
     return response.json()
 
 def main():
-    parser = argparse.ArgumentParser(description="Manage Akamai CPS Certificate Enrollments")
-    parser.add_argument("--operation", required=True, choices=["create", "update", "lookup"],
-                        help="Operation to perform: create, update, lookup")
-    parser.add_argument("--common_name", help="Common Name (Primary FQDN) for certificate enrollment")
+    parser = argparse.ArgumentParser(description="Manage Akamai CPS Certificate Enrollments (Creation)")
+    parser.add_argument("--operation", required=True, choices=["create"],
+                        help="Operation to perform (currently only 'create' is implemented)")
+    parser.add_argument("--common_name", help="Common Name (Primary FQDN) for certificate enrollment", required=True)
     parser.add_argument("--san", action="append", help="Additional SAN domains (repeat for multiple)")
     
     # CSR details
     parser.add_argument("--csr_country", default="US", help="Country for CSR (default: US)")
     parser.add_argument("--csr_state", default="CA", help="State for CSR (default: CA)")
     parser.add_argument("--csr_locality", default="San Diego", help="Locality for CSR (default: San Diego)")
-    parser.add_argument("--csr_org", required=True, help="Organization for CSR")
+    parser.add_argument("--csr_org", help="Organization for CSR", required=True)
     parser.add_argument("--preferred_trust_chain", default="", help="Preferred trust chain (optional)")
     
     # Enrollment configuration
@@ -140,51 +175,51 @@ def main():
     parser.add_argument("--ra", default="lets-encrypt", help="RA parameter (default: lets-encrypt)")
     parser.add_argument("--certificate_type", default="san", help="Certificate type (default: san)")
     parser.add_argument("--change_management", action="store_true", help="Enable change management")
-    parser.add_argument("--contract_id", required=True, help="Contract ID for the enrollment (query parameter)")
     
-    # Admin Contact details
-    parser.add_argument("--admin_email", required=True, help="Admin contact email")
-    parser.add_argument("--admin_first_name", required=True, help="Admin contact first name")
-    parser.add_argument("--admin_last_name", required=True, help="Admin contact last name")
-    parser.add_argument("--admin_phone", required=True, help="Admin contact phone")
-    parser.add_argument("--admin_org", required=True, help="Admin organization name")
-    parser.add_argument("--admin_address1", required=True, help="Admin address line one")
+    # New parameter: ChinaCDN flag
+    parser.add_argument("--chinacdn", type=str2bool, nargs='?', const=True, default=False,
+                        help="Set to true to use China CDN configuration (geography 'china+core'); default is false (geography 'core')")
+    
+    # Admin Contact details (for EV enrollments)
+    parser.add_argument("--admin_email", help="Admin contact email (Required for EV)", required=True)
+    parser.add_argument("--admin_first_name", help="Admin contact first name (Required for EV)", required=True)
+    parser.add_argument("--admin_last_name", help="Admin contact last name (Required for EV)", required=True)
+    parser.add_argument("--admin_phone", help="Admin contact phone (Required for EV)", required=True)
+    parser.add_argument("--admin_org", help="Admin organization name (Required for EV)", required=True)
+    parser.add_argument("--admin_address1", help="Admin address line one (Required for EV)", required=True)
     parser.add_argument("--admin_address2", default="", help="Admin address line two (optional)")
-    parser.add_argument("--admin_city", required=True, help="Admin city")
-    parser.add_argument("--admin_region", required=True, help="Admin region/state")
-    parser.add_argument("--admin_country", required=True, help="Admin country")
-    parser.add_argument("--admin_postal", required=True, help="Admin postal code")
-    parser.add_argument("--admin_title", required=True, help="Admin contact title")
+    parser.add_argument("--admin_city", help="Admin city (Required for EV)", required=True)
+    parser.add_argument("--admin_region", help="Admin region/state (Required for EV)", required=True)
+    parser.add_argument("--admin_country", help="Admin country (Required for EV)", required=True)
+    parser.add_argument("--admin_postal", help="Admin postal code (Required for EV)", required=True)
+    parser.add_argument("--admin_title", help="Admin contact title (Required for EV)", required=True)
     
-    # Tech Contact details
-    parser.add_argument("--tech_email", required=True, help="Tech contact email")
-    parser.add_argument("--tech_first_name", required=True, help="Tech contact first name")
-    parser.add_argument("--tech_last_name", required=True, help="Tech contact last name")
-    parser.add_argument("--tech_phone", required=True, help="Tech contact phone")
-    parser.add_argument("--tech_org", required=True, help="Tech organization name")
-    parser.add_argument("--tech_title", required=True, help="Tech contact title")
+    # Tech Contact details (for EV enrollments)
+    parser.add_argument("--tech_email", help="Tech contact email (Required for EV)", required=True)
+    parser.add_argument("--tech_first_name", help="Tech contact first name (Required for EV)", required=True)
+    parser.add_argument("--tech_last_name", help="Tech contact last name (Required for EV)", required=True)
+    parser.add_argument("--tech_phone", help="Tech contact phone (Required for EV)", required=True)
+    parser.add_argument("--tech_org", help="Tech organization name (Required for EV)", required=True)
+    parser.add_argument("--tech_title", help="Tech contact title (Required for EV)", required=True)
     
-    # edgerc file and account section mapping
+    # edgerc file and account (region) parameter
     parser.add_argument("--edgerc_file", default="~/.edgerc.txt", help="Path to the .edgerc file (default: ~/.edgerc.txt)")
-    parser.add_argument("--account", default="default", help="Account name for section mapping in .edgerc (default: default)")
+    parser.add_argument("--account", default="Global", choices=["Global", "APAC", "EMEA", "LATAM", "AMER", "DEV"],
+                        help="Region for enrollment (allowed: Global, APAC, EMEA, LATAM, AMER, DEV). Default is Global.")
     
-    # Flag to determine whether to send the enrollment request
-    parser.add_argument("--send", action="store_true", default=False,
-                        help="If set, sends the enrollment request. Otherwise, only outputs the JSON payload.")
+    # Flag for sending enrollment creation (if set, the request is sent; otherwise, only outputs the JSON payload)
+    parser.add_argument("--create", action="store_true", default=False,
+                        help="If set, sends the enrollment request; otherwise, only outputs the JSON payload.")
     
     args = parser.parse_args()
     
-    if args.operation != "create":
-        print("Only 'create' operation is implemented in this script.")
-        sys.exit(1)
+    # Derive contract_id automatically based on the region (account)
+    contract_id = REGION_SETTINGS[args.account]["contract_id"]
     
-    if not args.common_name:
-        print("Error: --common_name is required for certificate enrollment creation.")
-        sys.exit(1)
-    
-    # Build the enrollment payload based on the Secure Cert API v9 structure:
+    # Build the common enrollment payload:
+    geography_value = "china+core" if args.chinacdn else "core"
     payload = {
-        "validationType": args.validation_type,
+        "validationType": args.validation_type.lower(),
         "ra": args.ra,
         "certificateType": args.certificate_type,
         "changeManagement": args.change_management,
@@ -199,7 +234,7 @@ def main():
         },
         "networkConfiguration": {
             "secureNetwork": "standard-tls",
-            "geography": "core",
+            "geography": geography_value,
             "sniOnly": True
         },
         "adminContact": {
@@ -226,17 +261,17 @@ def main():
         }
     }
     
-    # Output the JSON payload if the --send flag is not set
-    if not args.send:
-        print("The enrollment JSON payload is:")
+    # If the --create flag is not set, output the JSON payload and exit.
+    if not args.create:
+        print("Enrollment JSON payload:")
         print(json.dumps(payload, indent=2))
         sys.exit(0)
     
-    # Set up the session using the provided edgerc file and account (section)
+    # Set up the session using the provided edgerc file and region (account)
     session, baseurl = setup_session(args.edgerc_file, args.account)
     
     # Send the enrollment creation request to the CPS API
-    response = create_enrollment(session, baseurl, payload, args.contract_id)
+    response = create_enrollment(session, baseurl, payload, contract_id)
     
     print("CPS API Enrollment Creation Response:")
     print(json.dumps(response, indent=2))
