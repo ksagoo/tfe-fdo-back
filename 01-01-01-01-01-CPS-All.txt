@@ -1,4 +1,28 @@
-#!/usr/bin/env python3
+python cps_enrollment_creation.py --operation create \
+  --common_name "example.com" \
+  --csr_org "Example Corp" \
+  --admin_email "admin@example.com" \
+  --admin_first_name "John" \
+  --admin_last_name "Doe" \
+  --admin_phone "800-555-1234" \
+  --admin_org "Example Corp" \
+  --admin_address1 "123 Main St" \
+  --admin_city "San Diego" \
+  --admin_region "CA" \
+  --admin_country "US" \
+  --admin_postal "92101" \
+  --admin_title "Administrator" \
+  --tech_email "tech@example.com" \
+  --tech_first_name "Jane" \
+  --tech_last_name "Doe" \
+  --tech_phone "617-555-0111" \
+  --tech_org "Example Corp" \
+  --tech_title "Engineer" \
+  --account Global \
+  --create
+
+
+
 """
 ===================================================================================
          Akamai CPS Certificate Enrollment Management Script - Enrollment Operations
