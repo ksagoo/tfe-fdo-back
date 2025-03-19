@@ -21,10 +21,22 @@
      A flag (--create) controls whether the creation payload is sent (if set) or simply printed.
      The --test flag (default true) controls whether to delete the enrollment after creation.
      
+     A new parameter --chinacdn (default false) controls the geography setting. If true, geography
+     is "china+core"; otherwise, it is "core".
+     
+     The --account parameter now represents the region and is limited to the allowed regions.
+     Based on the region, the script automatically assigns a contract ID using a lookup.
+     
+ REGION_SETTINGS (example mapping):
+     Global: {"parent_group_name": "HSBC", "contract_id": "a"}
+     APAC:   {"parent_group_name": "HSBC", "contract_id": "b"}
+     EMEA:   {"parent_group_name": "HBC",  "contract_id": "c"}
+     LATAM:  {"parent_group_name": "HSBC", "contract_id": "d"}
+     AMER:   {"parent_group_name": "HSBC", "contract_id": "e"}
+     DEV:    {"parent_group_name": "HSBC", "contract_id": "f"}
+     
  Parameters:
      --operation             : Operation to perform: create, list, lookup, update, history (Required)
-     
- For Create Operation:
      --common_name           : Common Name (Primary FQDN) for certificate enrollment (Required for create)
      --san                   : Additional SAN domains (repeatable; optional)
      
@@ -35,10 +47,11 @@
      --preferred_trust_chain : Preferred trust chain (optional)
      
      --validation_type       : Validation type: ev or dv (default: ev)
-     --ra                    : RA parameter (default: lets-encrypt or symantec, etc.)
+     --ra                    : RA parameter (default: lets-encrypt)
      --certificate_type      : Certificate type (default: san)
      --change_management     : Enable change management flag
-     --contract_id           : Contract ID for the enrollment (query parameter; Required)
+     
+     --chinacdn              : Set to true to use China CDN configuration (geography "china+core"); default is false.
      
      --admin_email           : Admin contact email (Required for EV)
      --admin_first_name      : Admin contact first name (Required for EV)
@@ -64,13 +77,11 @@
      --test                  : Enable testing deletion after creation. Default is true. (Ignored if --create is not set)
      
  For List Operation:
-     --contract_id           : Contract ID for the enrollments (Required)
      --page                  : Page number for listing enrollments (default: 1)
      --pageSize              : Page size for listing enrollments (default: 10)
      
  For Lookup Operation:
      --enrollment_id         : Enrollment ID for lookup (Required for lookup)
-     --contract_id           : Contract ID (Required)
      
  For Update Operation:
      --enrollment_id         : Enrollment ID to update (Required for update)
@@ -78,18 +89,17 @@
      
  For History Operation:
      --enrollment_id         : Enrollment ID for which to retrieve certificate history (Required for history)
-     --contract_id           : Contract ID (Required)
      --page                  : Page number for history results (default: 1)
      --pageSize              : Page size for history results (default: 10)
      
  Common Parameters:
      --edgerc_file           : Path to the .edgerc file (default: ~/.edgerc.txt)
-     --account               : Account name for section mapping in .edgerc (default: default)
+     --account               : Region for enrollment (allowed: Global, APAC, EMEA, LATAM, AMER, DEV)
      
  Usage Examples:
      To output the enrollment JSON payload (create) without sending:
        python cps_enrollment.py --operation create --common_name "example.com" \
-         --csr_org "Example Corp" --contract_id "1-2ABCD3" \
+         --csr_org "Example Corp" --account Global \
          --admin_email "admin@example.com" --admin_first_name "John" --admin_last_name "Doe" \
          --admin_phone "800-555-1234" --admin_org "Example Corp" --admin_address1 "123 Main St" \
          --admin_city "San Diego" --admin_region "CA" --admin_country "US" --admin_postal "92101" \
@@ -98,20 +108,20 @@
          --tech_phone "617-555-0111" --tech_org "Example Corp" --tech_title "Engineer"
      
      To send the enrollment creation request and delete it after creation (if --test is true):
-       python cps_enrollment.py --operation create --common_name "example.com" --create [other parameters...]
+       python cps_enrollment.py --operation create --common_name "example.com" --create --test true --account APAC [other parameters...]
      
      To list enrollments:
-       python cps_enrollment.py --operation list --contract_id "1-2ABCD3" --page 1 --pageSize 10
+       python cps_enrollment.py --operation list --account Global --page 1 --pageSize 10
      
      To lookup a specific enrollment:
-       python cps_enrollment.py --operation lookup --enrollment_id 678910 --contract_id "1-2ABCD3"
+       python cps_enrollment.py --operation lookup --enrollment_id 678910 --account Global
      
      To update an enrollment:
        python cps_enrollment.py --operation update --enrollment_id 678910 --common_name "new.example.com" \
-         --csr_org "Example Corp" --contract_id "1-2ABCD3" [other parameters as needed]
+         --csr_org "Example Corp" --account Global [other parameters as needed]
      
      To retrieve certificate history for an enrollment:
-       python cps_enrollment.py --operation history --enrollment_id 678910 --contract_id "1-2ABCD3" --page 1 --pageSize 10
+       python cps_enrollment.py --operation history --enrollment_id 678910 --account Global --page 1 --pageSize 10
 ===================================================================================
 """
 
@@ -147,6 +157,16 @@ def setup_session(edgerc_file, section):
     except Exception as e:
         print(f"Error reading .edgerc file: {e}")
         sys.exit(1)
+
+# Define the region-to-contract mapping
+REGION_SETTINGS = {
+    "Global": {"parent_group_name": "HSBC", "contract_id": "a"},
+    "APAC":   {"parent_group_name": "HSBC", "contract_id": "b"},
+    "EMEA":   {"parent_group_name": "HBC",  "contract_id": "c"},
+    "LATAM":  {"parent_group_name": "HSBC", "contract_id": "d"},
+    "AMER":   {"parent_group_name": "HSBC", "contract_id": "e"},
+    "DEV":    {"parent_group_name": "HSBC", "contract_id": "f"}
+}
 
 def create_enrollment(session, baseurl, payload, contract_id):
     """
@@ -322,7 +342,10 @@ def main():
     parser.add_argument("--ra", default="lets-encrypt", help="RA parameter (default: lets-encrypt)")
     parser.add_argument("--certificate_type", default="san", help="Certificate type (default: san)")
     parser.add_argument("--change_management", action="store_true", help="Enable change management")
-    parser.add_argument("--contract_id", required=True, help="Contract ID for the enrollment (query parameter)")
+    
+    # New parameter: ChinaCDN flag
+    parser.add_argument("--chinacdn", type=str2bool, nargs='?', const=True, default=False,
+                        help="Set to true to use China CDN configuration (geography 'china+core'); default is false (geography 'core')")
     
     # Admin Contact details (for EV enrollments)
     parser.add_argument("--admin_email", help="Admin contact email (required for EV)")
@@ -353,9 +376,10 @@ def main():
     # For lookup, update, and history operations
     parser.add_argument("--enrollment_id", help="Enrollment ID for lookup/update/history (required for lookup, update, history)")
     
-    # edgerc file and account section mapping
+    # edgerc file and account (region) parameter
     parser.add_argument("--edgerc_file", default="~/.edgerc.txt", help="Path to the .edgerc file (default: ~/.edgerc.txt)")
-    parser.add_argument("--account", default="default", help="Account name for section mapping in .edgerc (default: default)")
+    parser.add_argument("--account", default="Global", choices=["Global", "APAC", "EMEA", "LATAM", "AMER", "DEV"],
+                        help="Region for enrollment (allowed: Global, APAC, EMEA, LATAM, AMER, DEV)")
     
     # Flag for sending enrollment creation (only applicable for create)
     parser.add_argument("--create", action="store_true", default=False,
@@ -365,6 +389,9 @@ def main():
                         help="Enable testing deletion after creation. Default is true. Set to false to disable deletion.")
     
     args = parser.parse_args()
+    
+    # Derive contract_id automatically based on the region (account)
+    contract_id = REGION_SETTINGS[args.account]["contract_id"]
     
     if args.operation == "create":
         if not args.common_name:
@@ -390,6 +417,9 @@ def main():
                 print(", ".join(missing_fields))
                 sys.exit(1)
         
+        # Set geography based on the ChinaCDN flag:
+        geography_value = "china+core" if args.chinacdn else "core"
+        
         # Build the common enrollment payload:
         payload = {
             "validationType": args.validation_type.lower(),
@@ -407,7 +437,7 @@ def main():
             },
             "networkConfiguration": {
                 "secureNetwork": "standard-tls",
-                "geography": "core",
+                "geography": geography_value,
                 "sniOnly": True
             }
         }
@@ -443,11 +473,11 @@ def main():
             print(json.dumps(payload, indent=2))
             sys.exit(0)
         
-        # Set up the session using the provided edgerc file and account (section)
+        # Set up the session using the provided edgerc file and region (account)
         session, baseurl = setup_session(args.edgerc_file, args.account)
         
         # Send the enrollment creation request to the CPS API
-        create_response = create_enrollment(session, baseurl, payload, args.contract_id)
+        create_response = create_enrollment(session, baseurl, payload, contract_id)
         print("CPS API Enrollment Creation Response:")
         print(json.dumps(create_response, indent=2))
         
@@ -456,7 +486,7 @@ def main():
             enrollment_id = create_response.get("enrollmentId")
             if enrollment_id:
                 print(f"Testing deletion: Deleting enrollment with ID {enrollment_id}...")
-                delete_response = delete_enrollment(session, baseurl, enrollment_id, args.contract_id)
+                delete_response = delete_enrollment(session, baseurl, enrollment_id, contract_id)
                 print("CPS API Enrollment Deletion Response:")
                 print(json.dumps(delete_response, indent=2))
             else:
@@ -465,7 +495,7 @@ def main():
     elif args.operation == "list":
         # Set up the session
         session, baseurl = setup_session(args.edgerc_file, args.account)
-        list_response = list_enrollments(session, baseurl, args.contract_id, args.page, args.pageSize)
+        list_response = list_enrollments(session, baseurl, contract_id, args.page, args.pageSize)
         print("List Enrollments Response:")
         print(json.dumps(list_response, indent=2))
     
@@ -475,7 +505,7 @@ def main():
             sys.exit(1)
         # Set up the session
         session, baseurl = setup_session(args.edgerc_file, args.account)
-        lookup_response = get_enrollment(session, baseurl, args.enrollment_id, args.contract_id)
+        lookup_response = get_enrollment(session, baseurl, args.enrollment_id, contract_id)
         print("Lookup Enrollment Response:")
         print(json.dumps(lookup_response, indent=2))
     
@@ -506,6 +536,9 @@ def main():
                 print(", ".join(missing_fields))
                 sys.exit(1)
         
+        # Set geography based on the ChinaCDN flag:
+        geography_value = "china+core" if args.chinacdn else "core"
+        
         # Build the enrollment update payload (same structure as create)
         payload = {
             "validationType": args.validation_type.lower(),
@@ -523,7 +556,7 @@ def main():
             },
             "networkConfiguration": {
                 "secureNetwork": "standard-tls",
-                "geography": "core",
+                "geography": geography_value,
                 "sniOnly": True
             }
         }
@@ -552,11 +585,11 @@ def main():
                 "title": args.tech_title
             }
         
-        # Set up the session using the provided edgerc file and account (section)
+        # Set up the session using the provided edgerc file and account (region)
         session, baseurl = setup_session(args.edgerc_file, args.account)
         
         # Send the enrollment update request to the CPS API using PUT
-        update_response = update_enrollment(session, baseurl, args.enrollment_id, payload, args.contract_id)
+        update_response = update_enrollment(session, baseurl, args.enrollment_id, payload, contract_id)
         print("CPS API Enrollment Update Response:")
         print(json.dumps(update_response, indent=2))
     
@@ -566,7 +599,7 @@ def main():
             sys.exit(1)
         # Set up the session
         session, baseurl = setup_session(args.edgerc_file, args.account)
-        history_response = get_history_certificates(session, baseurl, args.enrollment_id, args.contract_id, args.page, args.pageSize)
+        history_response = get_history_certificates(session, baseurl, args.enrollment_id, contract_id, args.page, args.pageSize)
         print("Certificate History Response:")
         print(json.dumps(history_response, indent=2))
     
