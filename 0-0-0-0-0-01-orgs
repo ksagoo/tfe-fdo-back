@@ -1,4 +1,9 @@
 
+    # Add additional fields at the end of the payload
+    payload["thirdParty"] = None
+    payload["maxAllowedSanNames"] = 100
+
+
 parser.add_argument("--disallowed_tls_versions", nargs="+", default=["TLSv1", "TLSV1_1"], help="List of disallowed TLS versions (default: TLSv1 TLSV1_1)")
 
 "networkConfiguration": {
