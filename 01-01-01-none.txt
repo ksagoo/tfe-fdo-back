@@ -45,6 +45,677 @@
      --csr_org               : Organization for CSR (Required for create/update)
      --preferred_trust_chain : Preferred trust chain (optional)
      
+     --org_legal_name        : Organization legal name (Required for EV)
+     --org_duns              : Organization DUNS number (Required for EV)
+     --org_registration_number : Organization registration number (Required for EV)
+     --org_registration_country: Organization registration country (Required for EV)
+     
+     --validation_type       : Validation type: ev or dv (default: ev)
+     --ra                    : RA parameter (default: lets-encrypt)
+     --certificate_type      : Certificate type (default: san)
+     --change_management     : Enable change management flag
+     
+     --chinacdn              : Set to true to use China CDN configuration (geography "china+core"); default is false.
+     
+     --admin_email           : Admin contact email (Required for EV)
+     --admin_first_name      : Admin contact first name (Required for EV)
+     --admin_last_name       : Admin contact last name (Required for EV)
+     --admin_phone           : Admin contact phone (Required for EV)
+     --admin_org             : Admin organization name (Required for EV)
+     --admin_address1        : Admin address line one (Required for EV)
+     --admin_address2        : Admin address line two (optional for EV)
+     --admin_city            : Admin city (Required for EV)
+     --admin_region          : Admin region/state (Required for EV)
+     --admin_country         : Admin country (Required for EV)
+     --admin_postal          : Admin postal code (Required for EV)
+     --admin_title           : Admin contact title (Required for EV)
+     
+     --tech_email            : Tech contact email (Required for EV)
+     --tech_first_name       : Tech contact first name (Required for EV)
+     --tech_last_name        : Tech contact last name (Required for EV)
+     --tech_phone            : Tech contact phone (Required for EV)
+     --tech_org              : Tech organization name (Required for EV)
+     --tech_title            : Tech contact title (Required for EV)
+     
+     --create                : (For create operation) If set, sends the enrollment request; otherwise, only outputs the JSON payload.
+     --test                  : Enable testing deletion after creation. Default is true. (Ignored if --create is not set)
+     
+ For List Operation:
+     --page                  : Page number for listing enrollments (default: 1)
+     --pageSize              : Page size for listing enrollments (default: 10)
+     
+ For Lookup Operation:
+     --enrollment_id         : Enrollment ID for lookup (Required for lookup)
+     
+ For Update Operation:
+     --enrollment_id         : Enrollment ID to update (Required for update)
+     (All other parameters are similar to create; provide fields you wish to update.)
+     
+ For History Operation:
+     --enrollment_id         : Enrollment ID for which to retrieve certificate history (Required for history)
+     --page                  : Page number for history results (default: 1)
+     --pageSize              : Page size for history results (default: 10)
+     
+ Common Parameters:
+     --edgerc_file           : Path to the .edgerc file (default: ~/.edgerc.txt)
+     --account               : Region for enrollment (allowed: Global, APAC, EMEA, LATAM, AMER, DEV)
+     
+ Usage Examples:
+     To output the enrollment JSON payload (create) without sending:
+       python cps_enrollment.py --operation create --common_name "example.com" \
+         --csr_org "Example Corp" --account Global \
+         --org_legal_name "Example Corp" --org_duns "012345678" --org_registration_number "123456" --org_registration_country "US" \
+         --admin_email "admin@example.com" --admin_first_name "John" --admin_last_name "Doe" \
+         --admin_phone "800-555-1234" --admin_org "Example Corp" --admin_address1 "123 Main St" \
+         --admin_city "San Diego" --admin_region "CA" --admin_country "US" --admin_postal "92101" \
+         --admin_title "Administrator" \
+         --tech_email "tech@example.com" --tech_first_name "Jane" --tech_last_name "Doe" \
+         --tech_phone "617-555-0111" --tech_org "Example Corp" --tech_title "Engineer"
+     
+     To send the enrollment creation request and delete it after creation (if --test is true):
+       python cps_enrollment.py --operation create --common_name "example.com" --create --test true --account APAC [other parameters...]
+     
+     To list enrollments:
+       python cps_enrollment.py --operation list --account Global --page 1 --pageSize 10
+     
+     To lookup a specific enrollment:
+       python cps_enrollment.py --operation lookup --enrollment_id 678910 --account Global
+     
+     To update an enrollment:
+       python cps_enrollment.py --operation update --enrollment_id 678910 --common_name "new.example.com" \
+         --csr_org "Example Corp" --account Global [other parameters as needed]
+     
+     To retrieve certificate history for an enrollment:
+       python cps_enrollment.py --operation history --enrollment_id 678910 --account Global --page 1 --pageSize 10
+===================================================================================
+"""
+
+import os
+import sys
+import json
+import argparse
+import requests
+from urllib.parse import urljoin
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+
+def replace_empty_with_none(data):
+    """
+    Recursively replace empty string values in data with None.
+    """
+    if isinstance(data, dict):
+        return {k: replace_empty_with_none(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [replace_empty_with_none(item) for item in data]
+    elif isinstance(data, str) and data == "":
+        return None
+    else:
+        return data
+
+def setup_session(edgerc_file, section):
+    """
+    Sets up an authenticated session using credentials from the .edgerc file.
+    The provided section determines which account credentials to use.
+    """
+    try:
+        edgerc = EdgeRc(os.path.expanduser(edgerc_file))
+        baseurl = f"https://{edgerc.get(section, 'host')}"
+        session = requests.Session()
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, section)
+        return session, baseurl
+    except Exception as e:
+        print(f"Error reading .edgerc file: {e}")
+        sys.exit(1)
+
+# Define the region-to-contract mapping
+REGION_SETTINGS = {
+    "Global": {"parent_group_name": "HSBC", "contract_id": "a"},
+    "APAC":   {"parent_group_name": "HSBC", "contract_id": "b"},
+    "EMEA":   {"parent_group_name": "HBC",  "contract_id": "c"},
+    "LATAM":  {"parent_group_name": "HSBC", "contract_id": "d"},
+    "AMER":   {"parent_group_name": "HSBC", "contract_id": "e"},
+    "DEV":    {"parent_group_name": "HSBC", "contract_id": "f"}
+}
+
+def create_enrollment(session, baseurl, payload, contract_id):
+    """
+    Creates a new certificate enrollment using the CPS API.
+    Uses API version v12 for creation and v1 for enrollment status.
+    """
+    path = "/cps/v2/enrollments"
+    url = urljoin(baseurl, path)
+    headers = {
+        "Content-Type": "application/vnd.akamai.cps.enrollment.v12+json",
+        "Accept": "application/vnd.akamai.cps.enrollment-status.v1+json"
+    }
+    querystring = {"contractId": contract_id}
+    
+    try:
+        response = session.post(url, headers=headers, json=payload, params=querystring)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred during enrollment creation: {http_err}")
+        print("Response:", response.text)
+        sys.exit(1)
+    except Exception as err:
+        print(f"Error occurred during enrollment creation: {err}")
+        sys.exit(1)
+    
+    return response.json()
+
+def list_enrollments(session, baseurl, contract_id, page, page_size):
+    """
+    Lists enrollments using the CPS API.
+    Uses API version v11 for listing.
+    """
+    path = "/cps/v2/enrollments"
+    url = urljoin(baseurl, path)
+    headers = {
+        "Accept": "application/vnd.akamai.cps.enrollments.v11+json"
+    }
+    querystring = {"contractId": contract_id, "page": page, "pageSize": page_size}
+    
+    try:
+        response = session.get(url, headers=headers, params=querystring)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred during enrollment listing: {http_err}")
+        print("Response:", response.text)
+        sys.exit(1)
+    except Exception as err:
+        print(f"Error occurred during enrollment listing: {err}")
+        sys.exit(1)
+    
+    return response.json()
+
+def get_enrollment(session, baseurl, enrollment_id, contract_id):
+    """
+    Retrieves details for a specific enrollment using the CPS API.
+    Uses API version v12 for get enrollment.
+    Endpoint: GET /cps/v2/enrollments/{enrollmentId}
+    """
+    path = f"/cps/v2/enrollments/{enrollment_id}"
+    url = urljoin(baseurl, path)
+    headers = {
+        "Accept": "application/vnd.akamai.cps.enrollment.v12+json"
+    }
+    querystring = {"contractId": contract_id}
+    
+    try:
+        response = session.get(url, headers=headers, params=querystring)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred during enrollment lookup: {http_err}")
+        print("Response:", response.text)
+        sys.exit(1)
+    except Exception as err:
+        print(f"Error occurred during enrollment lookup: {err}")
+        sys.exit(1)
+    
+    return response.json()
+
+def update_enrollment(session, baseurl, enrollment_id, payload, contract_id):
+    """
+    Updates an existing enrollment using the CPS API.
+    Uses API version v12 for update.
+    Endpoint: PUT /cps/v2/enrollments/{enrollmentId}
+    """
+    path = f"/cps/v2/enrollments/{enrollment_id}"
+    url = urljoin(baseurl, path)
+    headers = {
+        "Content-Type": "application/vnd.akamai.cps.enrollment.v12+json",
+        "Accept": "application/vnd.akamai.cps.enrollment-status.v1+json"
+    }
+    querystring = {"contractId": contract_id}
+    
+    try:
+        response = session.put(url, headers=headers, json=payload, params=querystring)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred during enrollment update: {http_err}")
+        print("Response:", response.text)
+        sys.exit(1)
+    except Exception as err:
+        print(f"Error occurred during enrollment update: {err}")
+        sys.exit(1)
+    
+    return response.json()
+
+def delete_enrollment(session, baseurl, enrollment_id, contract_id):
+    """
+    Deletes a specific enrollment using the CPS API.
+    Endpoint: DELETE /cps/v2/enrollments/{enrollmentId}
+    """
+    path = f"/cps/v2/enrollments/{enrollment_id}"
+    url = urljoin(baseurl, path)
+    headers = {
+        "Accept": "application/vnd.akamai.cps.enrollment-status.v1+json"
+    }
+    querystring = {"contractId": contract_id}
+    
+    try:
+        response = session.delete(url, headers=headers, params=querystring)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred during enrollment deletion: {http_err}")
+        print("Response:", response.text)
+        sys.exit(1)
+    except Exception as err:
+        print(f"Error occurred during enrollment deletion: {err}")
+        sys.exit(1)
+    
+    return response.json()
+
+def get_history_certificates(session, baseurl, enrollment_id, contract_id, page, page_size):
+    """
+    Retrieves certificate history for a specific enrollment using the CPS API.
+    Endpoint: GET /cps/v2/enrollments/{enrollmentId}/history/certificates
+    Uses API version v2 for certificate history.
+    """
+    path = f"/cps/v2/enrollments/{enrollment_id}/history/certificates"
+    url = urljoin(baseurl, path)
+    headers = {
+        "Accept": "application/vnd.akamai.cps.certificate-history.v2+json"
+    }
+    querystring = {"contractId": contract_id, "page": page, "pageSize": page_size}
+    
+    try:
+        response = session.get(url, headers=headers, params=querystring)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred during certificate history retrieval: {http_err}")
+        print("Response:", response.text)
+        sys.exit(1)
+    except Exception as err:
+        print(f"Error occurred during certificate history retrieval: {err}")
+        sys.exit(1)
+    
+    return response.json()
+
+def main():
+    parser = argparse.ArgumentParser(description="Manage Akamai CPS Certificate Enrollments")
+    parser.add_argument("--operation", required=True, choices=["create", "list", "lookup", "update", "history"],
+                        help="Operation to perform: create, list, lookup, update, history")
+    parser.add_argument("--common_name", help="Common Name (Primary FQDN) for certificate enrollment")
+    parser.add_argument("--san", action="append", help="Additional SAN domains (repeat for multiple)")
+    
+    # CSR details
+    parser.add_argument("--csr_country", default="US", help="Country for CSR (default: US)")
+    parser.add_argument("--csr_state", default="CA", help="State for CSR (default: CA)")
+    parser.add_argument("--csr_locality", default="San Diego", help="Locality for CSR (default: San Diego)")
+    parser.add_argument("--csr_org", help="Organization for CSR (required for create/update)")
+    parser.add_argument("--preferred_trust_chain", default="", help="Preferred trust chain (optional)")
+    
+    # Organization details for EV enrollments
+    parser.add_argument("--org_legal_name", help="Organization legal name (required for EV)")
+    parser.add_argument("--org_duns", help="Organization DUNS number (required for EV)")
+    parser.add_argument("--org_registration_number", help="Organization registration number (required for EV)")
+    parser.add_argument("--org_registration_country", help="Organization registration country (required for EV)")
+    
+    # Enrollment configuration
+    parser.add_argument("--validation_type", default="ev", help="Validation type: ev or dv (default: ev)")
+    parser.add_argument("--ra", default="lets-encrypt", help="RA parameter (default: lets-encrypt)")
+    parser.add_argument("--certificate_type", default="san", help="Certificate type (default: san)")
+    parser.add_argument("--change_management", action="store_true", help="Enable change management")
+    
+    # New parameter: ChinaCDN flag
+    parser.add_argument("--chinacdn", type=str2bool, nargs='?', const=True, default=False,
+                        help="Set to true to use China CDN configuration (geography 'china+core'); default is false (geography 'core')")
+    
+    # Admin Contact details (for EV enrollments)
+    parser.add_argument("--admin_email", help="Admin contact email (required for EV)")
+    parser.add_argument("--admin_first_name", help="Admin contact first name (required for EV)")
+    parser.add_argument("--admin_last_name", help="Admin contact last name (required for EV)")
+    parser.add_argument("--admin_phone", help="Admin contact phone (required for EV)")
+    parser.add_argument("--admin_org", help="Admin organization name (required for EV)")
+    parser.add_argument("--admin_address1", help="Admin address line one (required for EV)")
+    parser.add_argument("--admin_address2", default="", help="Admin address line two (optional for EV)")
+    parser.add_argument("--admin_city", help="Admin city (required for EV)")
+    parser.add_argument("--admin_region", help="Admin region/state (required for EV)")
+    parser.add_argument("--admin_country", help="Admin country (required for EV)")
+    parser.add_argument("--admin_postal", help="Admin postal code (required for EV)")
+    parser.add_argument("--admin_title", help="Admin contact title (required for EV)")
+    
+    # Tech Contact details (for EV enrollments)
+    parser.add_argument("--tech_email", help="Tech contact email (required for EV)")
+    parser.add_argument("--tech_first_name", help="Tech contact first name (required for EV)")
+    parser.add_argument("--tech_last_name", help="Tech contact last name (required for EV)")
+    parser.add_argument("--tech_phone", help="Tech contact phone (required for EV)")
+    parser.add_argument("--tech_org", help="Tech organization name (required for EV)")
+    parser.add_argument("--tech_title", help="Tech contact title (required for EV)")
+    
+    # Pagination parameters for list and history operations
+    parser.add_argument("--page", type=int, default=1, help="Page number (default: 1)")
+    parser.add_argument("--pageSize", type=int, default=10, help="Page size (default: 10)")
+    
+    # For lookup, update, and history operations
+    parser.add_argument("--enrollment_id", help="Enrollment ID for lookup/update/history (required for lookup, update, history)")
+    
+    # edgerc file and account (region) parameter
+    parser.add_argument("--edgerc_file", default="~/.edgerc.txt", help="Path to the .edgerc file (default: ~/.edgerc.txt)")
+    parser.add_argument("--account", default="Global", choices=["Global", "APAC", "EMEA", "LATAM", "AMER", "DEV"],
+                        help="Region for enrollment (allowed: Global, APAC, EMEA, LATAM, AMER, DEV)")
+    
+    # Flag for sending enrollment creation (only applicable for create)
+    parser.add_argument("--create", action="store_true", default=False,
+                        help="If set (for create), sends the enrollment request; otherwise, only outputs the JSON payload.")
+    # Test flag for deletion: defaults to True; pass --test false to disable deletion after creation.
+    parser.add_argument("--test", type=str2bool, nargs='?', const=True, default=True,
+                        help="Enable testing deletion after creation. Default is true. Set to false to disable deletion.")
+    
+    args = parser.parse_args()
+    
+    # Derive contract_id automatically based on the region (account)
+    contract_id = REGION_SETTINGS[args.account]["contract_id"]
+    
+    if args.operation == "create":
+        if not args.common_name:
+            print("Error: --common_name is required for certificate enrollment creation.")
+            sys.exit(1)
+        if not args.csr_org:
+            print("Error: --csr_org is required for certificate enrollment creation.")
+            sys.exit(1)
+        
+        # For EV enrollments, ensure that admin, tech, and org contact details are provided.
+        if args.validation_type.lower() == "ev":
+            missing_fields = []
+            ev_required = [
+                "admin_email", "admin_first_name", "admin_last_name", "admin_phone", "admin_org",
+                "admin_address1", "admin_city", "admin_region", "admin_country", "admin_postal", "admin_title",
+                "tech_email", "tech_first_name", "tech_last_name", "tech_phone", "tech_org", "tech_title",
+                "org_legal_name", "org_duns", "org_registration_number", "org_registration_country"
+            ]
+            for field in ev_required:
+                if getattr(args, field) is None:
+                    missing_fields.append(field)
+            if missing_fields:
+                print("Error: For EV enrollment, the following fields are required:")
+                print(", ".join(missing_fields))
+                sys.exit(1)
+        
+        # Set geography based on the ChinaCDN flag:
+        geography_value = "china+core" if args.chinacdn else "core"
+        
+        # Build the common enrollment payload:
+        payload = {
+            "validationType": args.validation_type.lower(),
+            "ra": args.ra,
+            "certificateType": args.certificate_type,
+            "changeManagement": args.change_management,
+            "csr": {
+                "cn": args.common_name,
+                "sans": [args.common_name] + (args.san if args.san else []),
+                "c": args.csr_country,
+                "st": args.csr_state,
+                "l": args.csr_locality,
+                "o": args.csr_org,
+                "preferredTrustChain": args.preferred_trust_chain
+            },
+            "networkConfiguration": {
+                "secureNetwork": "standard-tls",
+                "geography": geography_value,
+                "sniOnly": True
+            }
+        }
+        
+        # For EV enrollment, include the full admin, tech, and org contact details.
+        if args.validation_type.lower() == "ev":
+            payload["org"] = {
+                "legalName": args.org_legal_name,
+                "duns": args.org_duns,
+                "registrationNumber": args.org_registration_number,
+                "registrationCountry": args.org_registration_country
+            }
+            payload["adminContact"] = {
+                "email": args.admin_email,
+                "firstName": args.admin_first_name,
+                "lastName": args.admin_last_name,
+                "phone": args.admin_phone,
+                "organizationName": args.admin_org,
+                "addressLineOne": args.admin_address1,
+                "addressLineTwo": args.admin_address2,
+                "city": args.admin_city,
+                "region": args.admin_region,
+                "country": args.admin_country,
+                "postalCode": args.admin_postal,
+                "title": args.admin_title
+            }
+            payload["techContact"] = {
+                "email": args.tech_email,
+                "firstName": args.tech_first_name,
+                "lastName": args.tech_last_name,
+                "phone": args.tech_phone,
+                "organizationName": args.tech_org,
+                "title": args.tech_title
+            }
+        
+        # Replace empty strings with None (which will be serialized to null in JSON)
+        payload = replace_empty_with_none(payload)
+        
+        # If the --create flag is not set, output the JSON payload and exit.
+        if not args.create:
+            print("Enrollment JSON payload:")
+            print(json.dumps(payload, indent=2))
+            sys.exit(0)
+        
+        # Set up the session using the provided edgerc file and region (account)
+        session, baseurl = setup_session(args.edgerc_file, args.account)
+        
+        # Send the enrollment creation request to the CPS API
+        create_response = create_enrollment(session, baseurl, payload, contract_id)
+        print("CPS API Enrollment Creation Response:")
+        print(json.dumps(create_response, indent=2))
+        
+        # If testing is enabled, capture the enrollment ID and delete it.
+        if args.test:
+            enrollment_id = create_response.get("enrollmentId")
+            if enrollment_id:
+                print(f"Testing deletion: Deleting enrollment with ID {enrollment_id}...")
+                delete_response = delete_enrollment(session, baseurl, enrollment_id, contract_id)
+                print("CPS API Enrollment Deletion Response:")
+                print(json.dumps(delete_response, indent=2))
+            else:
+                print("Warning: Enrollment ID not found in the response. Skipping deletion.")
+    
+    elif args.operation == "list":
+        # Set up the session
+        session, baseurl = setup_session(args.edgerc_file, args.account)
+        list_response = list_enrollments(session, baseurl, contract_id, args.page, args.pageSize)
+        print("List Enrollments Response:")
+        print(json.dumps(list_response, indent=2))
+    
+    elif args.operation == "lookup":
+        if not args.enrollment_id:
+            print("Error: --enrollment_id is required for lookup operation.")
+            sys.exit(1)
+        # Set up the session
+        session, baseurl = setup_session(args.edgerc_file, args.account)
+        lookup_response = get_enrollment(session, baseurl, args.enrollment_id, contract_id)
+        print("Lookup Enrollment Response:")
+        print(json.dumps(lookup_response, indent=2))
+    
+    elif args.operation == "update":
+        if not args.enrollment_id:
+            print("Error: --enrollment_id is required for update operation.")
+            sys.exit(1)
+        if not args.common_name:
+            print("Error: --common_name is required for enrollment update.")
+            sys.exit(1)
+        if not args.csr_org:
+            print("Error: --csr_org is required for enrollment update.")
+            sys.exit(1)
+        
+        # For EV enrollments, ensure that admin, tech, and org contact details are provided.
+        if args.validation_type.lower() == "ev":
+            missing_fields = []
+            ev_required = [
+                "admin_email", "admin_first_name", "admin_last_name", "admin_phone", "admin_org",
+                "admin_address1", "admin_city", "admin_region", "admin_country", "admin_postal", "admin_title",
+                "tech_email", "tech_first_name", "tech_last_name", "tech_phone", "tech_org", "tech_title",
+                "org_legal_name", "org_duns", "org_registration_number", "org_registration_country"
+            ]
+            for field in ev_required:
+                if getattr(args, field) is None:
+                    missing_fields.append(field)
+            if missing_fields:
+                print("Error: For EV enrollment update, the following fields are required:")
+                print(", ".join(missing_fields))
+                sys.exit(1)
+        
+        # Set geography based on the ChinaCDN flag:
+        geography_value = "china+core" if args.chinacdn else "core"
+        
+        # Build the enrollment update payload (same structure as create)
+        payload = {
+            "validationType": args.validation_type.lower(),
+            "ra": args.ra,
+            "certificateType": args.certificate_type,
+            "changeManagement": args.change_management,
+            "csr": {
+                "cn": args.common_name,
+                "sans": [args.common_name] + (args.san if args.san else []),
+                "c": args.csr_country,
+                "st": args.csr_state,
+                "l": args.csr_locality,
+                "o": args.csr_org,
+                "preferredTrustChain": args.preferred_trust_chain
+            },
+            "networkConfiguration": {
+                "secureNetwork": "standard-tls",
+                "geography": geography_value,
+                "sniOnly": True
+            }
+        }
+        
+        if args.validation_type.lower() == "ev":
+            payload["org"] = {
+                "legalName": args.org_legal_name,
+                "duns": args.org_duns,
+                "registrationNumber": args.org_registration_number,
+                "registrationCountry": args.org_registration_country
+            }
+            payload["adminContact"] = {
+                "email": args.admin_email,
+                "firstName": args.admin_first_name,
+                "lastName": args.admin_last_name,
+                "phone": args.admin_phone,
+                "organizationName": args.admin_org,
+                "addressLineOne": args.admin_address1,
+                "addressLineTwo": args.admin_address2,
+                "city": args.admin_city,
+                "region": args.admin_region,
+                "country": args.admin_country,
+                "postalCode": args.admin_postal,
+                "title": args.admin_title
+            }
+            payload["techContact"] = {
+                "email": args.tech_email,
+                "firstName": args.tech_first_name,
+                "lastName": args.tech_last_name,
+                "phone": args.tech_phone,
+                "organizationName": args.tech_org,
+                "title": args.tech_title
+            }
+        
+        # Replace empty strings with None
+        payload = replace_empty_with_none(payload)
+        
+        # Set up the session using the provided edgerc file and account (region)
+        session, baseurl = setup_session(args.edgerc_file, args.account)
+        
+        # Send the enrollment update request to the CPS API using PUT
+        update_response = update_enrollment(session, baseurl, args.enrollment_id, payload, contract_id)
+        print("CPS API Enrollment Update Response:")
+        print(json.dumps(update_response, indent=2))
+    
+    elif args.operation == "history":
+        if not args.enrollment_id:
+            print("Error: --enrollment_id is required for history operation.")
+            sys.exit(1)
+        # Set up the session
+        session, baseurl = setup_session(args.edgerc_file, args.account)
+        history_response = get_history_certificates(session, baseurl, args.enrollment_id, contract_id, args.page, args.pageSize)
+        print("Certificate History Response:")
+        print(json.dumps(history_response, indent=2))
+    
+    else:
+        print(f"Operation '{args.operation}' is not implemented.")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"""
+===================================================================================
+         Akamai CPS Certificate Enrollment Management Script - Enrollment Operations
+===================================================================================
+ Script Name:
+     cps_enrollment.py
+     
+ Description:
+     This script interacts with the Akamai Certificate Provisioning System (CPS) API to:
+       - Create a new certificate enrollment (supports both DV and EV).
+       - List enrollments.
+       - Lookup (get) a specific enrollment.
+       - Update an existing enrollment.
+       - Retrieve certificate history for a specific enrollment.
+       - (For testing) Optionally delete an enrollment after creation.
+     
+     For enrollment creation and update, the script builds the payload based on the provided
+     CSR details, network configuration, and (if EV) admin/tech contact details.
+     
+     A flag (--create) controls whether the creation payload is sent (if set) or simply printed.
+     The --test flag (default true) controls whether to delete the enrollment after creation.
+     
+     A new parameter --chinacdn (default false) controls the geography setting. If true, geography
+     is "china+core"; otherwise, it is "core".
+     
+     The --account parameter now represents the region and is limited to the allowed regions.
+     Based on the region, the script automatically assigns a contract ID using a lookup.
+     
+ REGION_SETTINGS (example mapping):
+     Global: {"parent_group_name": "HSBC", "contract_id": "a"}
+     APAC:   {"parent_group_name": "HSBC", "contract_id": "b"}
+     EMEA:   {"parent_group_name": "HBC",  "contract_id": "c"}
+     LATAM:  {"parent_group_name": "HSBC", "contract_id": "d"}
+     AMER:   {"parent_group_name": "HSBC", "contract_id": "e"}
+     DEV:    {"parent_group_name": "HSBC", "contract_id": "f"}
+     
+ Parameters:
+     --operation             : Operation to perform: create, list, lookup, update, history (Required)
+     --common_name           : Common Name (Primary FQDN) for certificate enrollment (Required for create)
+     --san                   : Additional SAN domains (repeatable; optional)
+     
+     --csr_country           : Country for CSR (default: US)
+     --csr_state             : State for CSR (default: CA)
+     --csr_locality          : Locality for CSR (default: San Diego)
+     --csr_org               : Organization for CSR (Required for create/update)
+     --preferred_trust_chain : Preferred trust chain (optional)
+     
      --validation_type       : Validation type: ev or dv (default: ev)
      --ra                    : RA parameter (default: lets-encrypt)
      --certificate_type      : Certificate type (default: san)
