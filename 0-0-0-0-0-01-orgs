@@ -1,3 +1,5 @@
+ payload["orgId"] = args.org_id  # Add orgId here as a separate key
+
 """
 ===================================================================================
          Akamai CPS Certificate Enrollment Management Script - Enrollment Operations
