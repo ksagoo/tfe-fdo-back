@@ -1,3 +1,17 @@
+import requests
+
+url = "https://hostname/cps/v2/enrollments"
+
+payload = "{\"adminContact\":{\"addressLineOne\":\"150 Broadway\",\"addressLineTwo\":null,\"city\":\"Cambridge\",\"country\":\"US\",\"email\":\"afero@akamai.com\",\"firstName\":\"R1\",\"lastName\":\"D1\",\"organizationName\":\"Akamai\",\"phone\":\"617-555-0111\",\"postalCode\":\"02142\",\"region\":\"MA\",\"title\":\"Adminstrator\"},\"assignedSlots\":[1234],\"autoRenewalStartTime\":null,\"certificateChainType\":\"default\",\"certificateType\":\"third-party\",\"changeManagement\":true,\"csr\":{\"c\":\"US\",\"cn\":\"www.example.com\",\"l\":\"Cambridge\",\"o\":\"Akamai\",\"ou\":\"WebEx\",\"preferredTrustChain\":null,\"sans\":[\"san1.example.com\",\"san2.example.com\",\"san3.example.com\",\"www.example.com\"],\"st\":\"MA\"},\"enableMultiStackedCertificates\":false,\"id\":\"10001\",\"location\":\"/cps/enrollments/10001\",\"maxAllowedSanNames\":100,\"maxAllowedWildcardSanNames\":100,\"networkConfiguration\":{\"clientMutualAuthentication\":{\"authenticationOptions\":{\"ocsp\":{\"enabled\":false},\"sendCaListToClient\":false},\"setId\":\"Custom_CPS-6134b_B-3-1AHBENT.xml\"},\"disallowedTlsVersions\":[\"TLSv1\",\"TLSv1_1\"],\"dnsNameSettings\":{\"cloneDnsNames\":false,\"dnsNames\":[\"san2.example.com\",\"san1.example.com\"]},\"fipsMode\":true,\"geography\":\"core\",\"mustHaveCiphers\":\"ak-akamai-2020q1\",\"ocspStapling\":\"on\",\"preferredCiphers\":\"ak-akamai-2020q1\",\"quicEnabled\":false,\"secureNetwork\":\"enhanced-tls\",\"sniOnly\":true},\"org\":{\"addressLineOne\":\"150 Broadway\",\"addressLineTwo\":null,\"city\":\"Cambridge\",\"country\":\"US\",\"name\":\"Akamai Technologies\",\"phone\":\"617-555-0111\",\"postalCode\":\"02142\",\"region\":\"MA\"},\"orgId\":645263546,\"pendingChanges\":[{\"changeType\":\"new-certificate\",\"location\":\"/cps-api/enrollments/10001/changes/10002\"}],\"productionSlots\":[1234],\"ra\":\"third-party\",\"signatureAlgorithm\":null,\"stagingSlots\":[1234],\"techContact\":{\"addressLineOne\":\"150 Broadway\",\"addressLineTwo\":null,\"city\":\"Cambridge\",\"country\":\"US\",\"email\":\"jsmith@akamai.com\",\"firstName\":\"R2\",\"lastName\":\"D2\",\"organizationName\":\"Akamai\",\"phone\":\"617-555-0111\",\"postalCode\":\"02142\",\"region\":\"MA\",\"title\":\"Technical Engineer\"},\"thirdParty\":{\"excludeSans\":false},\"validationType\":\"third-party\"}"
+headers = {
+    "accept": "application/vnd.akamai.cps.enrollment-status.v1+json",
+    "content-type": "application/vnd.akamai.cps.enrollment.v12+json"
+}
+
+response = requests.post(url, data=payload, headers=headers)
+
+print(response.text)
+
 """
 ===================================================================================
          Akamai CPS Certificate Enrollment Management Script - Enrollment Operations
