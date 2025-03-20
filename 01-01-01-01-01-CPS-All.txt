@@ -1,3 +1,53 @@
+import argparse
+import json
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate enrollment JSON payload for DNS name settings.")
+    # Add the option to disable cloning; by default, cloneDnsNames is true.
+    parser.add_argument(
+        "--no-clone-dns-names",
+        dest="clone_dns_names",
+        action="store_false",
+        help="Set cloneDnsNames to false (default is true)."
+    )
+    parser.set_defaults(clone_dns_names=True)
+
+    # Accept one or more SAN entries (use --san multiple times)
+    parser.add_argument(
+        "--san",
+        dest="sans",
+        action="append",
+        help="Specify a Subject Alternative Name. Can be provided multiple times (e.g., --san a --san b --san c)."
+    )
+    # Provide a common name as a fallback if no SAN is provided
+    parser.add_argument(
+        "--cn",
+        required=True,
+        help="Common Name to use if no SAN entries are provided."
+    )
+
+    args = parser.parse_args()
+
+    # Use the SAN values if provided; otherwise, fall back to the common name.
+    dns_names = args.sans if args.sans else [args.cn]
+
+    payload = {
+        "dnsNameSettings": {
+            "cloneDnsNames": args.clone_dns_names,
+            "dnsNames": dns_names
+        }
+    }
+
+    print(json.dumps(payload, indent=2))
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+
 python cps_enrollment_creation.py --operation create \
   --common_name "example.com" \
   --csr_org "Example Corp" \
