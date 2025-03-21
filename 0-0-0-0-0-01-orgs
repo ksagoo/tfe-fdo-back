@@ -1,3 +1,15 @@
+def replace_empty_with_none(data):
+    if isinstance(data, dict):
+        return {k: replace_empty_with_none(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [replace_empty_with_none(item) for item in data]
+    elif isinstance(data, str) and data == "":
+        return None
+    else:
+        return data
+
+payload = replace_empty_with_none(payload)
+
 
     # Add additional fields at the end of the payload
     payload["thirdParty"] = None
