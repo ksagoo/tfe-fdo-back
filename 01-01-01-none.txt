@@ -1,3 +1,64 @@
+args = parser.parse_args()
+
+# Look up region settings for the given account key
+region_settings = REGION_SETTINGS[args.account]
+
+session, base_url = setup_session(args.edgerc_file, f"{args.account}_CPS")
+
+# Build your payload (your existing code)
+# payload = { ... }
+
+# Then create enrollment passing the region settings:
+create_response = create_enrollment(session, base_url, payload, region_settings)
+print(json.dumps(create_response, indent=2))
+
+
+REGION_SETTINGS = {
+    "Global": {"parent_group_name": "HSBC-DDos-KSD-PS-2V2WAYR", "contract_id": "P-SAB2RLHY", "switch_key": "D1-ONX012"},
+    "APAC":   {"parent_group_name": "HSBC-APAC-PS-2V1YARH", "contract_id": "P-SAB2RLY", "switch_key": None},
+    "EMEA":   {"parent_group_name": "EMEA-SAB2RLY-PS-2V1WAY", "contract_id": "???", "switch_key": None},
+    "NA-LATAM":  {"parent_group_name": "NA-LATAM-SK", "contract_id": "???", "switch_key": None},
+    "DAEM":   {"parent_group_name": "DAEM", "contract_id": "???", "switch_key": None},
+    "DEV":    {"parent_group_name": "HSBC-Dev-Account", "contract_id": "???", "switch_key": None}
+}
+
+
+def create_enrollment(session, base_url, payload, region_settings):
+    from urllib.parse import urljoin
+
+    # Get the contract_id and optional switch_key from region_settings
+    contract_id = region_settings["contract_id"]
+    switch_key = region_settings.get("switch_key")
+
+    path = "/v2/enrollments"
+    url = urljoin(base_url, path)
+    
+    # Build the query string with contractId; add accountSwitchKey if defined
+    querystring = {"contractId": contract_id}
+    if switch_key:
+        querystring["accountSwitchKey"] = switch_key
+
+    headers = {
+        "Content-Type": "application/vnd.akamai.cps.enrollment.v14+json",
+        "Accept": "application/vnd.akamai.cps.enrollment-status.v1+json"
+    }
+
+    response = session.post(url, headers=headers, json=payload, params=querystring)
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as http_err:
+        print(f"Exception error encountered during enrollment creation: {http_err}")
+        sys.exit(1)
+    except Exception as err:
+        print(f"General exception error during enrollment creation: {err}")
+        sys.exit(1)
+
+    return response.json()
+
+
+
+
+
 def create_enrollment(session, base_url, payload, contract_id):
     from urllib.parse import urljoin
     import json
