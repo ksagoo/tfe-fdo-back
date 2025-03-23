@@ -3,6 +3,13 @@
     "preferredTrustChain": "digicert-sha2-ev-server-chain",
 }
 
+"digicert-ev-chain"
+"digicert-ev"
+"digicert-trust-chain"
+"default-ev-chain"
+
+
+
 
 import argparse
 import requests
