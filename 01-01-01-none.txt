@@ -1,3 +1,9 @@
+
+"csr": {
+    "preferredTrustChain": "digicert-sha2-ev-server-chain",
+}
+
+
 import argparse
 import requests
 from akamai.edgegrid import EdgeGridAuth
