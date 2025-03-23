@@ -1,6 +1,13 @@
+import argparse
 import requests
 
-url = "https://hostname/cps/v2/enrollments"
+def main():
+    parser = argparse.ArgumentParser(description="Send enrollment request to Akamai CPS API")
+    parser.add_argument("--hostname", required=True, help="Hostname of the API endpoint (e.g., https://hostname)")
+    parser.add_argument("--contractId", required=True, help="Contract ID (e.g., K-ONX012)")
+    args = parser.parse_args()
+
+    url = f"{args.hostname}/cps/v2/enrollments?contractId={args.contractId}"
 
 payload = {
     "certificateType": "san",
