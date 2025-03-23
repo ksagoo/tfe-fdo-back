@@ -1,117 +1,77 @@
 import requests
-import json
 
-url = "https://hostname/cps/v2/enrollments?contractId=K-ONX012"
+url = "https://hostname/cps/v2/enrollments"
 
 payload = {
-    "adminContact": {
-        "addressLineOne": "150 Broadway",
-        "addressLineTwo": None,
-        "city": "Cambridge",
-        "country": "US",
-        "email": "afero@akamai.com",
-        "firstName": "R1",
-        "lastName": "D1",
-        "organizationName": "Akamai",
-        "phone": "617-555-0111",
-        "postalCode": "02142",
-        "region": "MA",
-        "title": "Adminstrator"
-    },
-    "assignedSlots": [1234],
-    "autoRenewalStartTime": None,
-    "certificateChainType": "default",
-    "certificateType": "third-party",
+    "certificateType": "san",
     "changeManagement": True,
     "csr": {
-        "c": "US",
-        "cn": "www.example.com",
-        "l": "Cambridge",
-        "o": "Akamai",
-        "ou": "WebEx",
+        "c": "GB",
+        "cn": "dev1-example.com",
+        "l": "London",
+        "o": "HSBC",
         "preferredTrustChain": None,
-        "sans": [
-            "san1.example.com",
-            "san2.example.com",
-            "san3.example.com",
-            "www.example.com"
-        ],
-        "st": "MA"
+        "sans": ["dev1-example.com"]
     },
-    "enableMultiStackedCertificates": False,
-    "id": "10001",
-    "location": "/cps/enrollments/10001",
-    "maxAllowedSanNames": 100,
-    "maxAllowedWildcardSanNames": 100,
+    "enableMultiStackedCertificates": True,
     "networkConfiguration": {
         "clientMutualAuthentication": {
             "authenticationOptions": {
-                "ocsp": {
-                    "enabled": False
-                }
-            },
-            "sendCaListToClient": False,
-            "setId": "Custom_CPS-6134b_B-3-1AHBENT.xml"
+                "ocsp": {"enabled": True},
+                "sendCaListToClient": True
+            }
         },
-        "disallowedTlsVersions": [
-            "TLSv1",
-            "TLSv1_1"
-        ],
         "dnsNameSettings": {
-            "cloneDnsNames": False,
-            "dnsNames": [
-                "san2.example.com",
-                "san1.example.com"
-            ]
+            "cloneDnsNames": True,
+            "dnsNames": ["dev1-example.com"]
         },
-        "fipsMode": True,
         "geography": "core",
-        "mustHaveCiphers": "ak-akamai-2020q1",
-        "ocspStapling": "on",
-        "preferredCiphers": "ak-akamai-2020q1",
         "quicEnabled": False,
         "secureNetwork": "enhanced-tls",
-        "sniOnly": True
+        "sniOnly": True,
+        "disallowedTlsVersions": ["TLSv1", "TLSv1_1"],
+        "mustHaveCiphers": "ak-akamai-2020q1",
+        "ocspStapling": "on",
+        "preferredCiphers": "ak-akamai-2020q1"
     },
+    "ra": "symantec",
+    "validationType": "ev",
+    "signatureAlgorithm": "SHA-256",
+    "maxAllowedSanNames": 100,
+    "maxAllowedWildcardSanNames": 25,
     "org": {
-        "addressLineOne": "150 Broadway",
-        "addressLineTwo": None,
-        "city": "Cambridge",
-        "country": "US",
-        "name": "Akamai Technologies",
-        "phone": "617-555-0111",
-        "postalCode": "02142",
-        "region": "MA"
+        "name": "HSBC Group Management Services Limited",
+        "addressLineOne": "8 Canada Square",
+        "city": "London",
+        "country": "GB",
+        "phone": "+442079918888",
+        "postalCode": "E14 5HQ",
+        "region": None
     },
-    "orgId": 645263546,
-    "pendingChanges": [
-        {
-            "changeType": "new-certificate",
-            "location": "/cps-api/enrollments/10001/changes/10002"
-        }
-    ],
-    "productionSlots": [1234],
-    "ra": "third-party",
-    "signatureAlgorithm": None,
-    "stagingSlots": [1234],
+    "orgId": 1413747,
     "techContact": {
-        "addressLineOne": "150 Broadway",
+        "addressLineOne": None,
         "addressLineTwo": None,
-        "city": "Cambridge",
-        "country": "US",
-        "email": "jsmith@akamai.com",
-        "firstName": "R2",
-        "lastName": "D2",
-        "organizationName": "Akamai",
-        "phone": "617-555-0111",
-        "postalCode": "02142",
-        "region": "MA",
-        "title": "Technical Engineer"
+        "city": None,
+        "email": "hsbcholdingsplc@akamai.com",
+        "firstName": "Hemanth",
+        "lastName": "Shekar",
+        "organizationName": None,
+        "phone": "441784225489",
+        "postalCode": None,
+        "region": None,
+        "title": None
     },
-    "thirdParty": {
-        "excludeSans": False
-    },
-    "validationType": "third-party"
+    "adminContact": {
+        "email": "elbieta.m.tucspash@hsbc.com",
+        "firstName": "Elbieta M",
+        "lastName": "Tucspash",
+        "country": None,
+        "city": None,
+        "addressLineOne": None,
+        "organizationName": None,
+        "phone": "+48 12 3993192"
+    }
 }
 
 headers = {
@@ -119,11 +79,8 @@ headers = {
     "content-type": "application/vnd.akamai.cps.enrollment.v12+json"
 }
 
-# Use 'json=payload' so requests will serialize the Python dictionary to JSON.
 response = requests.post(url, json=payload, headers=headers)
-
 print(response.text)
-
 
 
 
