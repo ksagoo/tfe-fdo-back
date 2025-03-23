@@ -1,3 +1,30 @@
+import time
+import requests
+
+# Assume create_response is obtained from your create enrollment function
+create_response = {
+    "changes": ["/cps/v2/enrollments/2534/changes/2534"],
+    "enrollment": "/cps/v2/enrollments/2534"
+}
+
+# Optionally wait to allow the pending change to be processed
+time.sleep(60)
+
+# Extract the enrollment URL from the create response
+enrollment_url = create_response.get("enrollment")  # e.g., "/cps/v2/enrollments/2534"
+
+# Construct the full URL including the query parameter
+base_url = "https://hostname"  # Update with your actual host
+delete_url = f"{base_url}{enrollment_url}?allow-cancel-pending-changes=true"
+
+# Set the headers as required by the API
+headers = {"accept": "application/vnd.akamai.cps.enrollment-status.v1+json"}
+
+# Make the DELETE request
+response = requests.delete(delete_url, headers=headers)
+print(response.text)
+
+
 
 "csr": {
     "preferredTrustChain": "digicert-sha2-ev-server-chain",
