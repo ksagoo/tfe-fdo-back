@@ -1,3 +1,30 @@
+The warning about "Defaulting to user installation because normal site-packages is not writeable" simply means that pip isn’t installing packages into the system directory because you don’t have administrator rights. This isn’t an error—it’s just a heads‑up that pip is using your user directory instead.
+
+The error about "Could not find a version that satisfies the requirement request" (or "No matching distribution found for requests") is more concerning. Here are some steps to troubleshoot:
+
+    Check the Package Name:
+    Ensure you’re installing the correct package. The popular HTTP library is named requests (with an “s” at the end). Running:
+
+pip install requests
+
+instead of something like pip install request can resolve this issue.
+
+Upgrade pip:
+An outdated pip might have trouble finding packages. Upgrade it by running:
+
+python -m pip install --upgrade pip
+
+Network Issues:
+The connection retry warning indicates pip might be having trouble connecting to PyPI. Make sure your internet connection is stable, and check if any firewall or proxy settings are interfering. If you are behind a proxy, you may need to configure pip accordingly.
+
+Run with Verbose Output:
+Running pip with the -v flag (e.g., pip install -v requests) can provide more details about what’s going wrong.
+
+Virtual Environment (Optional):
+Consider using a virtual environment to manage packages locally. This can help avoid permission issues and keep dependencies isolated.
+
+
+
 def replace_empty_with_none(data):
     if isinstance(data, dict):
         new_dict = {}
