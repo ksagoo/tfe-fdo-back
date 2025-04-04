@@ -1,102 +1,57 @@
-The warning about "Defaulting to user installation because normal site-packages is not writeable" simply means that pip isn’t installing packages into the system directory because you don’t have administrator rights. This isn’t an error—it’s just a heads‑up that pip is using your user directory instead.
-import os
-import argparse
-import requests
-import json
-from akamai.edgegrid import EdgeGridAuth, EdgeRc
 from urllib.parse import urljoin
 
-def setup_session(edgerc_file, section_name):
-    try:
-        edgerc = EdgeRc(edgerc_file)
-        base_url = f"https://{edgerc.get(section_name, 'host')}/"
-        session = requests.Session()
-        session.auth = EdgeGridAuth(
-            client_token=edgerc.get(section_name, 'client_token'),
-            client_secret=edgerc.get(section_name, 'client_secret'),
-            access_token=edgerc.get(section_name, 'access_token')
-        )
-        return session, base_url
-    except Exception as e:
-        print(f"Error reading .edgerc file: {e}")
-        exit(1)
-
-def get_configs(session, base_url):
-    url = urljoin(base_url, "appsec/v1/configs")
-    headers = {"accept": "application/json"}
-    response = session.get(url, headers=headers)
+def common_name_exists(session, base_url, contract_id, common_name):
+    """
+    Checks whether the provided common_name is already used in an existing enrollment.
+    It does so by paging through enrollments and comparing the 'cn' field in the CSR.
+    Returns True if a match is found; otherwise, returns False.
+    """
+    page = 1
+    page_size = 100  # Adjust as needed
+    common_name = common_name.lower()
     
-    if response.status_code == 200:
-        return response.json().get("configurations", [])
-    else:
-        print(f"Failed to fetch configurations. Status Code: {response.status_code}")
-        print(response.text)
-        exit(1)
+    while True:
+        path = "/v2/enrollments"
+        url = urljoin(base_url, path)
+        headers = {
+            "Accept": "application/vnd.akamai.cps.enrollments.v11+json"
+        }
+        params = {"contractId": contract_id, "page": page, "pageSize": page_size}
+        
+        response = session.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        enrollments = data.get("enrollments", [])
+        if not enrollments:
+            break
+        
+        for enrollment in enrollments:
+            csr = enrollment.get("csr", {})
+            if csr.get("cn", "").lower() == common_name:
+                return True
+        
+        # If the API provides total enrollment count, break if we've processed all pages.
+        total = data.get("total", None)
+        if total is not None and page * page_size >= total:
+            break
+        
+        page += 1
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Retrieve all Akamai configuration names and details"
-    )
-    parser.add_argument("--edgerc", default=os.path.expanduser("~/.edgerc"),
-                        help="Path to the .edgerc file (default: ~/.edgerc)")
-    parser.add_argument("--section", default="default",
-                        help="Section of the .edgerc file to use (default: default)")
-    args = parser.parse_args()
+    return False
 
-    session, base_url = setup_session(args.edgerc, args.section)
-    configs = get_configs(session, base_url)
+# Example usage in your main function (within the create operation branch):
 
-    if configs:
-        print("Configurations found:")
-        for config in configs:
-            print(json.dumps(config, indent=4))
-    else:
-        print("No configurations found.")
+if args.operation == "create":
+    # Set up session and base URL
+    session, base_url = setup_session(args.edgerc_file, args.account)
+    contract_id = REGION_SETTINGS[args.account]["contract_id"]
 
-if __name__ == "__main__":
-    main()
-
-
-
-
-The error about "Could not find a version that satisfies the requirement request" (or "No matching distribution found for requests") is more concerning. Here are some steps to troubleshoot:
-
-    Check the Package Name:
-    Ensure you’re installing the correct package. The popular HTTP library is named requests (with an “s” at the end). Running:
-
-pip install requests
-
-instead of something like pip install request can resolve this issue.
-
-Upgrade pip:
-An outdated pip might have trouble finding packages. Upgrade it by running:
-
-python -m pip install --upgrade pip
-
-Network Issues:
-The connection retry warning indicates pip might be having trouble connecting to PyPI. Make sure your internet connection is stable, and check if any firewall or proxy settings are interfering. If you are behind a proxy, you may need to configure pip accordingly.
-
-Run with Verbose Output:
-Running pip with the -v flag (e.g., pip install -v requests) can provide more details about what’s going wrong.
-
-Virtual Environment (Optional):
-Consider using a virtual environment to manage packages locally. This can help avoid permission issues and keep dependencies isolated.
-
-
-
-def replace_empty_with_none(data):
-    if isinstance(data, dict):
-        new_dict = {}
-        for key, value in data.items():
-            new_dict[key] = replace_empty_with_none(value)
-        return new_dict
-    elif isinstance(data, list):
-        return [replace_empty_with_none(item) for item in data]
-    elif isinstance(data, str):
-        # Strip whitespace to catch strings that are only spaces.
-        return None if data.strip() == "" else data
-    else:
-        return data
-
-
-converted = replace_empty_with_none(tech_contact)
+    # Check if the common name is already in use
+    if common_name_exists(session, base_url, contract_id, args.common_name):
+        print(f"Error: The common name '{args.common_name}' is already used in an existing enrollment.")
+        sys.exit(1)
+    
+    # Otherwise, proceed with creating the enrollment
+    create_response = create_enrollment(session, base_url, payload, contract_id)
+    print(json.dumps(create_response, indent=2))
