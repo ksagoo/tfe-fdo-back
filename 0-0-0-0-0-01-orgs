@@ -1,29 +1,64 @@
+import subprocess
 import socket
+import json
+import sys
+from urllib.parse import urljoin
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+
+def domain_exists_dig(domain):
+    try:
+        result = subprocess.check_output(["dig", "+short", domain], universal_newlines=True)
+        result = result.strip()
+        if result:
+            print(f"[dig] {domain} resolves to: {result}")
+            return True
+        else:
+            print(f"[dig] {domain} did not return any result.")
+            return False
+    except Exception as e:
+        print(f"[dig] Error running dig: {e}")
+        return False
 
 def domain_exists_socket(domain):
     try:
         ip = socket.gethostbyname(domain)
-        print(f"{domain} resolves to {ip}.")
+        print(f"[socket] {domain} resolves to: {ip}")
         return True
     except socket.gaierror:
-        print(f"{domain} does not resolve.")
+        print(f"[socket] {domain} does not resolve (socket.gaierror).")
         return False
 
+def domain_resolves(domain):
+    # Try using dig first; if that fails, fallback to socket.
+    if domain_exists_dig(domain):
+        return True
+    else:
+        print("Falling back to socket method...")
+        return domain_exists_socket(domain)
 
 def can_create_enrollment(session, base_url, contract_id, common_name):
-    # Check if the domain resolves via DNS.
-    if not domain_exists_socket(common_name):
-        print(f"Domain {common_name} does not resolve in DNS.")
+    # Check that the domain resolves in DNS.
+    if not domain_resolves(common_name):
+        print(f"Error: The common name '{common_name}' does not resolve in DNS.")
         return False
-    
-    # Check if the common name is already in an enrollment.
+
+    # Check that the common name isn't already used.
     if common_name_exists(session, base_url, contract_id, common_name):
-        print(f"Common name {common_name} is already in use in an existing enrollment.")
+        print(f"Error: The common name '{common_name}' is already in use.")
         return False
 
     return True
 
-# Then in your main code:
-if args.operation == "create":
-    if not can_create_enrollment(session, base_url, contract_id, args.common_name):
+
+
+
+main()
+    # Check if we can create an enrollment with this common name.
+    if not can_create_enrollment(session, base_url, contract_id, common_name):
+        print("Aborting enrollment creation.")
         sys.exit(1)
+    else:
+        print("All checks passed. Proceeding with enrollment creation.")
+
+
