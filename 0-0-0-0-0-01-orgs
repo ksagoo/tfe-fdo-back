@@ -1,57 +1,29 @@
-from urllib.parse import urljoin
+import socket
 
-def common_name_exists(session, base_url, contract_id, common_name):
-    """
-    Checks whether the provided common_name is already used in an existing enrollment.
-    It does so by paging through enrollments and comparing the 'cn' field in the CSR.
-    Returns True if a match is found; otherwise, returns False.
-    """
-    page = 1
-    page_size = 100  # Adjust as needed
-    common_name = common_name.lower()
+def domain_exists_socket(domain):
+    try:
+        ip = socket.gethostbyname(domain)
+        print(f"{domain} resolves to {ip}.")
+        return True
+    except socket.gaierror:
+        print(f"{domain} does not resolve.")
+        return False
+
+
+def can_create_enrollment(session, base_url, contract_id, common_name):
+    # Check if the domain resolves via DNS.
+    if not domain_exists_socket(common_name):
+        print(f"Domain {common_name} does not resolve in DNS.")
+        return False
     
-    while True:
-        path = "/v2/enrollments"
-        url = urljoin(base_url, path)
-        headers = {
-            "Accept": "application/vnd.akamai.cps.enrollments.v11+json"
-        }
-        params = {"contractId": contract_id, "page": page, "pageSize": page_size}
-        
-        response = session.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        data = response.json()
-        
-        enrollments = data.get("enrollments", [])
-        if not enrollments:
-            break
-        
-        for enrollment in enrollments:
-            csr = enrollment.get("csr", {})
-            if csr.get("cn", "").lower() == common_name:
-                return True
-        
-        # If the API provides total enrollment count, break if we've processed all pages.
-        total = data.get("total", None)
-        if total is not None and page * page_size >= total:
-            break
-        
-        page += 1
+    # Check if the common name is already in an enrollment.
+    if common_name_exists(session, base_url, contract_id, common_name):
+        print(f"Common name {common_name} is already in use in an existing enrollment.")
+        return False
 
-    return False
+    return True
 
-# Example usage in your main function (within the create operation branch):
-
+# Then in your main code:
 if args.operation == "create":
-    # Set up session and base URL
-    session, base_url = setup_session(args.edgerc_file, args.account)
-    contract_id = REGION_SETTINGS[args.account]["contract_id"]
-
-    # Check if the common name is already in use
-    if common_name_exists(session, base_url, contract_id, args.common_name):
-        print(f"Error: The common name '{args.common_name}' is already used in an existing enrollment.")
+    if not can_create_enrollment(session, base_url, contract_id, args.common_name):
         sys.exit(1)
-    
-    # Otherwise, proceed with creating the enrollment
-    create_response = create_enrollment(session, base_url, payload, contract_id)
-    print(json.dumps(create_response, indent=2))
