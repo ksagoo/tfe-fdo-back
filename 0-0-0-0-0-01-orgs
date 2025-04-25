@@ -1,43 +1,33 @@
-def domain_exists_nslookup(domain):
-    """
-    Uses nslookup to check if the domain resolves.
-    Returns True if nslookup returns a valid response,
-    or False if it indicates the domain doesn't exist.
-    """
-    try:
-        result = subprocess.check_output(["nslookup", domain], universal_newlines=True)
-        # If nslookup finds no address, the output will include phrases like "Non-existent domain"
-        if "Non-existent domain" in result or "can't find" in result.lower():
-            print(f"[nslookup] {domain} did not resolve.")
-            return False
-        print(f"[nslookup] {domain} resolved successfully.")
-        return True
-    except Exception as e:
-        print(f"Error running nslookup: {e}")
-        return False
+h1. Why Akamai Native APIs Are the Superior Automation Choice
 
-def can_create_enrollment(session, base_url, contract_id, common_name):
-    """
-    Checks if a new enrollment can be created for the given common name.
-    It verifies two things:
-      1. The domain resolves via nslookup.
-      2. The common name is not already in use in an existing enrollment.
-    """
-    if not domain_exists_nslookup(common_name):
-        print(f"Error: The common name '{common_name}' does not resolve in DNS.")
-        return False
+h2. Summary
+Akamai’s native REST-based APIs give you instant, unrestricted access to every service (Access Groups, Security Config, Site Delivery, CPS, DNS) with unparalleled control, transparency, and scale. While Terraform offers a convenient IaC wrapper, it inevitably lags on new features, hides raw request details, and constrains complex logic.  
 
-    if common_name_exists(session, base_url, contract_id, common_name):
-        print(f"Error: The common name '{common_name}' is already in use.")
-        return False
+h2. Key Advantages of Akamai APIs
+* *Immediate, Unrestricted Access* — All endpoints (public, beta, private) from Day 1; no provider-update delays.  
+* *Unparalleled Control & Flexibility* — Full scripting power: loops, conditionals, retries, custom headers/payloads.  
+* *Unified Auth & Toolchain* — One EdgeGrid credential set; use Python, Go, Java, curl or your language of choice.  
+* *Transparent Debugging & Versioning* — See raw HTTP requests/responses; pin exact API versions via headers.  
+* *Massive Scale & Performance* — Fan-out parallel calls, bespoke rate-limit/back-off strategies for bulk operations.  
+* *Tailored State Management* — You decide where/how to store state and detect drift—no opaque state file.
 
-    return True
+h2. Detailed Comparison
 
-    # Then check:
-    if not can_create_enrollment(session, base_url, contract_id, common_name):
-        print("Cannot create enrollment; aborting.")
-        sys.exit(1)
-    else:
-        print("All checks passed; you can proceed to create the enrollment.")
+|| *Aspect* || *Akamai APIs – Why They Win* || *Minor Trade-Off* ||
+| *Feature Coverage* | • Immediate access to **every** endpoint—including betas/private.<br/>• Instant adoption of new services and schema changes. | • You’ll proactively monitor Akamai changelogs (can be automated). |
+| *Control & Workflow* | • Full scripting flexibility for conditional logic, loops, back-off, retries.<br/>• Exact payload/header tuning. | • Requires writing your own orchestration code (ideal if you have dev expertise). |
+| *Authentication & Tooling* | • Single EdgeGrid auth for all services.<br/>• Language-agnostic SDKs and HTTP clients. | • No single “terraform”-style CLI—teams use their preferred tooling. |
+| *Debug & Versioning* | • Full visibility of raw HTTP traffic and error payloads.<br/>• Explicit API version pinning via headers. | • No built-in “plan” preview—implement a lightweight dry-run check. |
+| *Scale & Performance* | • Easy parallel/batched calls for bulk DNS, CPS, Delivery updates.<br/>• Custom rate-limit/back-off logic. | • You design concurrency/async patterns (perfect if you have threading or async expertise). |
+| *State & Idempotency* | • Freedom to choose state store (DB, Git, etc.) and drift-detection logic.<br/>• Full control over create/update/delete semantics. | • You’ll build or integrate a small state tracker (gives exactly the behavior you need). |
 
+h2. Bottom Line  
+Akamai’s native APIs deliver **instant feature access**, **extreme flexibility**, and **transparent debugging**, making them the clear winner for any multi-service automation strategy. Terraform’s convenience can’t match the agility and control you get when you script directly against Akamai’s platform.
 
+---
+
+h3. Next Steps for Adoption  
+# Set up shared EdgeGrid libraries and standard “dry-run” helper.  
+# Build a lightweight state tracker (YAML/JSON/Git-based).  
+# Kick off pilot automations for DNS and CPS using these APIs—measure velocity gains.  
+# Document best practices in your Confluence “Akamai Automation” space.  
