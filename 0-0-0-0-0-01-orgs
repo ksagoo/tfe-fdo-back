@@ -1,33 +1,52 @@
-h1. Why Akamai Native APIs Are the Superior Automation Choice
+h1. Akamai Automation: Security Risk Assessment and Architectural Considerations
 
-h2. Summary
-Akamai’s native REST-based APIs give you instant, unrestricted access to every service (Access Groups, Security Config, Site Delivery, CPS, DNS) with unparalleled control, transparency, and scale. While Terraform offers a convenient IaC wrapper, it inevitably lags on new features, hides raw request details, and constrains complex logic.  
+h2. Background
 
-h2. Key Advantages of Akamai APIs
-* *Immediate, Unrestricted Access* — All endpoints (public, beta, private) from Day 1; no provider-update delays.  
-* *Unparalleled Control & Flexibility* — Full scripting power: loops, conditionals, retries, custom headers/payloads.  
-* *Unified Auth & Toolchain* — One EdgeGrid credential set; use Python, Go, Java, curl or your language of choice.  
-* *Transparent Debugging & Versioning* — See raw HTTP requests/responses; pin exact API versions via headers.  
-* *Massive Scale & Performance* — Fan-out parallel calls, bespoke rate-limit/back-off strategies for bulk operations.  
-* *Tailored State Management* — You decide where/how to store state and detect drift—no opaque state file.
+Two solutions have been developed to automate Akamai resource management:
 
-h2. Detailed Comparison
+* *Solution 1*: A semi-manual process where engineers clone a repository containing Akamai API and Terraform scripts to their local machines. The `.edgerc` credentials file (containing API keys) is stored _locally and permanently_. Updates are made via Jupyter notebooks.
 
-|| *Aspect* || *Akamai APIs – Why They Win* || *Minor Trade-Off* ||
-| *Feature Coverage* | • Immediate access to **every** endpoint—including betas/private.<br/>• Instant adoption of new services and schema changes. | • You’ll proactively monitor Akamai changelogs (can be automated). |
-| *Control & Workflow* | • Full scripting flexibility for conditional logic, loops, back-off, retries.<br/>• Exact payload/header tuning. | • Requires writing your own orchestration code (ideal if you have dev expertise). |
-| *Authentication & Tooling* | • Single EdgeGrid auth for all services.<br/>• Language-agnostic SDKs and HTTP clients. | • No single “terraform”-style CLI—teams use their preferred tooling. |
-| *Debug & Versioning* | • Full visibility of raw HTTP traffic and error payloads.<br/>• Explicit API version pinning via headers. | • No built-in “plan” preview—implement a lightweight dry-run check. |
-| *Scale & Performance* | • Easy parallel/batched calls for bulk DNS, CPS, Delivery updates.<br/>• Custom rate-limit/back-off logic. | • You design concurrency/async patterns (perfect if you have threading or async expertise). |
-| *State & Idempotency* | • Freedom to choose state store (DB, Git, etc.) and drift-detection logic.<br/>• Full control over create/update/delete semantics. | • You’ll build or integrate a small state tracker (gives exactly the behavior you need). |
+* *Solution 2*: A *centralised*, fully automated self-service solution integrated with a Jira Front Door form, Jenkins pipelines, and ephemeral containers. API credentials are securely stored in *HashiCorp Vault*, and `.edgerc` files are created temporarily and deleted after use.
 
-h2. Bottom Line  
-Akamai’s native APIs deliver **instant feature access**, **extreme flexibility**, and **transparent debugging**, making them the clear winner for any multi-service automation strategy. Terraform’s convenience can’t match the agility and control you get when you script directly against Akamai’s platform.
+h2. Key Security Concerns and Risk Analysis
 
----
+|| Aspect || Solution 1 (Local) || Solution 2 (Centralised CI/CD) ||
+| API Key Handling | Keys stored in plain text on local machines | Keys pulled securely from HashiCorp Vault |
+| Key Distribution | Shared over Zoom (manual) | Managed centrally and updated via secure workflows |
+| Storage Persistence | `.edgerc` file persists on disk indefinitely | `.edgerc` file created at runtime and destroyed |
+| Environment Scope | Local desktops/laptops or VMs (inconsistent) | Controlled, containerised CI/CD environment |
+| Audit and Traceability | Difficult to enforce centrally | Fully auditable via Jenkins, Jira, and Vault |
+| API Key Rotation | No automated process; manual intervention only | Can integrate automated key rotation directly with Vault |
+| Production Suitability | Already used in prod; flagged as high risk | Still under development; can be made production-ready |
 
-h3. Next Steps for Adoption  
-# Set up shared EdgeGrid libraries and standard “dry-run” helper.  
-# Build a lightweight state tracker (YAML/JSON/Git-based).  
-# Kick off pilot automations for DNS and CPS using these APIs—measure velocity gains.  
-# Document best practices in your Confluence “Akamai Automation” space.  
+h2. Why Solution 2 Security Controls Cannot Be Applied to Solution 1
+
+* *Decentralised Execution*:  
+Solution 1 executes from multiple local environments with no consistent runtime or infrastructure. There is no central authority or automation pipeline to control or trigger key rotation securely.
+
+* *No Secure Credential Broker*:  
+Engineers access and manage `.edgerc` files individually. Introducing a central broker like Vault would require a complete re-architecture, since local scripts cannot be guaranteed to securely authenticate, retrieve, or rotate secrets.
+
+* *Persistent Plaintext Storage*:  
+API credentials stored in `.edgerc` files are at risk of compromise from:
+** Accidental commits to Git repositories
+** Malware or local security breaches
+** Laptops being lost, stolen, or repurposed
+
+* *Lack of Ephemeral Infrastructure*:  
+In contrast to ephemeral containers in Solution 2, which discard credentials post-execution, local environments retain sensitive data for undefined durations, increasing the attack surface.
+
+* *No Centralised Policy Enforcement*:  
+Solution 1 lacks enforceable policies for access control, auditing, or credential lifecycle management. Each engineer is responsible for maintaining secrets—introducing inconsistencies and human error.
+
+h2. Conclusion and Recommendations
+
+While Solution 1 has proven functional, its design poses significant security risks, especially regarding *API key storage and rotation*. The architecture fundamentally lacks secure credential management capabilities. Attempting to retrofit Vault integration without moving execution to a centralised or ephemeral environment would not mitigate the key risks.
+
+*Recommendations:*
+* Immediately initiate a transition plan toward deprecating Solution 1 for production use.
+* Accelerate development and approval of Solution 2, incorporating:
+** Automated API key rotation from Akamai to Vault
+** Removal of manual credential sharing
+** Mandatory use of short-lived containers or secure runners
+* For any interim use of Solution 1, introduce strict local security policies, frequent manual key rotation, and file encryption with clear usage guidelines.
