@@ -6,18 +6,18 @@ Two solutions have been developed to automate Akamai resource management:
 
 * *Solution 1*: A semi-manual process where engineers clone a repository containing Akamai API and Terraform scripts to their local machines. The `.edgerc` credentials file (containing API keys) is stored _locally and permanently_. Updates are made via Jupyter notebooks.
 
-* *Solution 2*: A *centralised*, fully automated self-service solution integrated with a Jira Front Door form, Jenkins pipelines, and ephemeral containers. API credentials are securely stored in *HashiCorp Vault*, and `.edgerc` files are created temporarily and deleted after use.
+* *Solution 2*: A *centralised*, fully automated self-service solution integrated with a Jira Front Door form, Jenkins pipelines, and ephemeral containers. API credentials are securely stored in *HashiCorp Vault*, and `.edgerc` files are created temporarily and deleted after use. *Solution 2 is currently in development, and the key rotation and key transfer workflows will be implemented in readiness for production approval.*
 
 h2. Key Security Concerns and Risk Analysis
 
 || Aspect || Solution 1 (Local) || Solution 2 (Centralised CI/CD) ||
-| API Key Handling | Keys stored in plain text on local machines | Keys pulled securely from HashiCorp Vault |
-| Key Distribution | Shared over Zoom (manual) | Managed centrally and updated via secure workflows |
-| Storage Persistence | `.edgerc` file persists on disk indefinitely | `.edgerc` file created at runtime and destroyed |
+| API Key Handling | Keys stored in plain text on local machines | Keys will be pulled securely from HashiCorp Vault (in development) |
+| Key Distribution | Shared over Zoom (manual) | Will be managed centrally and updated via secure workflows |
+| Storage Persistence | `.edgerc` file persists on disk indefinitely | `.edgerc` file will be created at runtime and destroyed |
 | Environment Scope | Local desktops/laptops or VMs (inconsistent) | Controlled, containerised CI/CD environment |
-| Audit and Traceability | Difficult to enforce centrally | Fully auditable via Jenkins, Jira, and Vault |
-| API Key Rotation | No automated process; manual intervention only | Can integrate automated key rotation directly with Vault |
-| Production Suitability | Already used in prod; flagged as high risk | Still under development; can be made production-ready |
+| Audit and Traceability | Difficult to enforce centrally | Will be fully auditable via Jenkins, Jira, and Vault |
+| API Key Rotation | No automated process; manual intervention only | Planned integration of automated key rotation via Vault |
+| Production Suitability | Already used in prod; flagged as high risk | Still under development; will be hardened for production readiness |
 
 h2. Why Solution 2 Security Controls Cannot Be Applied to Solution 1
 
@@ -41,7 +41,7 @@ Solution 1 lacks enforceable policies for access control, auditing, or credentia
 
 h2. Why API Key Rotation and Transfer in Solution 2 Cannot Be Used in Solution 1
 
-Although Solution 2 provides a secure, automated approach to API key management—including rotation and transfer using HashiCorp Vault and ephemeral containers—this design is fundamentally incompatible with Solution 1’s local/desktop-based execution model.
+Although Solution 2 will provide a secure, automated approach to API key management—including rotation and transfer using HashiCorp Vault and ephemeral containers—this design is fundamentally incompatible with Solution 1’s local/desktop-based execution model.
 
 * *No Centralised Runtime Environment*:  
 Solution 2 runs inside a controlled Jenkins pipeline and container where Vault clients and trusted authentication mechanisms can be securely embedded and managed. In contrast, Solution 1 runs on individual engineer desktops/laptops or VMs, which are inconsistent and outside enterprise control.
@@ -50,7 +50,7 @@ Solution 2 runs inside a controlled Jenkins pipeline and container where Vault c
 Vault uses trusted identity sources (like Kubernetes service accounts, AppRoles, or OIDC) to grant access to secrets. Local machines cannot securely authenticate to Vault without storing sensitive tokens or credentials locally, which reintroduces the same security risk.
 
 * *No Enforcement or Audit Controls*:  
-Solution 2 operations are logged and auditable. Solution 1 has no centralized way to enforce or audit access to the keys once retrieved.
+Solution 2 operations will be logged and auditable. Solution 1 has no centralized way to enforce or audit access to the keys once retrieved.
 
 * *Persistence Risk*:  
 Even with Vault integration, engineers using Solution 1 are likely to store the keys in `.edgerc` files, reintroducing persistent plaintext storage risks.
