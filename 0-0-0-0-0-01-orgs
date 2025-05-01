@@ -29,8 +29,8 @@ Engineers access and manage `.edgerc` files individually. Introducing a central 
 
 * *Persistent Plaintext Storage*:  
 API credentials stored in `.edgerc` files are at risk of compromise from:
-** Accidental commits to Git repositories
-** Malware or local security breaches
+** Accidental commits to Git repositories  
+** Malware or local security breaches  
 ** Laptops being lost, stolen, or repurposed
 
 * *Lack of Ephemeral Infrastructure*:  
@@ -39,6 +39,25 @@ In contrast to ephemeral containers in Solution 2, which discard credentials pos
 * *No Centralised Policy Enforcement*:  
 Solution 1 lacks enforceable policies for access control, auditing, or credential lifecycle management. Each engineer is responsible for maintaining secrets—introducing inconsistencies and human error.
 
+h2. Why API Key Rotation and Transfer in Solution 2 Cannot Be Used in Solution 1
+
+Although Solution 2 provides a secure, automated approach to API key management—including rotation and transfer using HashiCorp Vault and ephemeral containers—this design is fundamentally incompatible with Solution 1’s local/desktop-based execution model.
+
+* *No Centralised Runtime Environment*:  
+Solution 2 runs inside a controlled Jenkins pipeline and container where Vault clients and trusted authentication mechanisms can be securely embedded and managed. In contrast, Solution 1 runs on individual engineer desktops/laptops or VMs, which are inconsistent and outside enterprise control.
+
+* *No Secure Authentication Path to Vault*:  
+Vault uses trusted identity sources (like Kubernetes service accounts, AppRoles, or OIDC) to grant access to secrets. Local machines cannot securely authenticate to Vault without storing sensitive tokens or credentials locally, which reintroduces the same security risk.
+
+* *No Enforcement or Audit Controls*:  
+Solution 2 operations are logged and auditable. Solution 1 has no centralized way to enforce or audit access to the keys once retrieved.
+
+* *Persistence Risk*:  
+Even with Vault integration, engineers using Solution 1 are likely to store the keys in `.edgerc` files, reintroducing persistent plaintext storage risks.
+
+* *Manual & Unscalable Key Transfer*:  
+There is no mechanism to automatically push or update keys on user machines. Key updates would require manual distribution, defeating automation and scalability goals.
+
 h2. Conclusion and Recommendations
 
 While Solution 1 has proven functional, its design poses significant security risks, especially regarding *API key storage and rotation*. The architecture fundamentally lacks secure credential management capabilities. Attempting to retrofit Vault integration without moving execution to a centralised or ephemeral environment would not mitigate the key risks.
@@ -46,7 +65,7 @@ While Solution 1 has proven functional, its design poses significant security ri
 *Recommendations:*
 * Immediately initiate a transition plan toward deprecating Solution 1 for production use.
 * Accelerate development and approval of Solution 2, incorporating:
-** Automated API key rotation from Akamai to Vault
-** Removal of manual credential sharing
+** Automated API key rotation from Akamai to Vault  
+** Removal of manual credential sharing  
 ** Mandatory use of short-lived containers or secure runners
 * For any interim use of Solution 1, introduce strict local security policies, frequent manual key rotation, and file encryption with clear usage guidelines.
