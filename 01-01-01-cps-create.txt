@@ -1,280 +1,138 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
 ===================================================================================
-         Akamai CPS Certificate Enrollment Management Script - Enrollment Creation
+                           Akamai IAM Client Credential Management Script
 ===================================================================================
- Script Name:
-     cps_enrollment_creation.py
-     
- Description:
-     This script interacts with the Akamai Certificate Provisioning System (CPS) API to:
-       - Create a new certificate enrollment.
-     
-     It supports both DV and EV certificate enrollment creation by accepting the
-     required parameters for the CSR, network configuration, and contact details.
-     
-     A flag (--create) controls whether the enrollment request is sent (if set) or 
-     if the script only outputs the JSON payload.
-     
-     A new parameter --chinacdn (default false) controls the geography setting. If true,
-     "geography" is set to "china+core"; otherwise, it is "core".
-     
-     Additionally, the --account parameter (allowed values: Global, APAC, EMEA, LATAM, AMER, DEV)
-     is used to automatically derive the contract ID from a predefined mapping.
-     
- REGION_SETTINGS (example mapping):
-     Global: {"parent_group_name": "HSBC", "contract_id": "a"}
-     APAC:   {"parent_group_name": "HSBC", "contract_id": "b"}
-     EMEA:   {"parent_group_name": "HBC",  "contract_id": "c"}
-     LATAM:  {"parent_group_name": "HSBC", "contract_id": "d"}
-     AMER:   {"parent_group_name": "HSBC", "contract_id": "e"}
-     DEV:    {"parent_group_name": "HSBC", "contract_id": "f"}
-     
- Parameters:
-     --operation             : Operation to perform (only "create" is supported here) (Required)
-     --common_name           : Common Name (Primary FQDN) for certificate enrollment (Required for create)
-     --san                   : Additional SAN domains (repeatable; optional)
-     
-     --csr_country           : Country for the CSR (default: US)
-     --csr_state             : State for the CSR (default: CA)
-     --csr_locality          : Locality for the CSR (default: San Diego)
-     --csr_org               : Organization for the CSR (Required for create)
-     --preferred_trust_chain : Preferred trust chain (optional)
-     
-     --validation_type       : Validation type: ev or dv (default: ev)
-     --ra                    : RA parameter (default: lets-encrypt)
-     --certificate_type      : Certificate type (default: san)
-     --change_management     : Enable change management flag (set flag for true)
-     
-     --chinacdn              : Set to true to use China CDN configuration (geography "china+core"); default is false.
-     
-     --admin_email           : Admin contact email (Required for EV)
-     --admin_first_name      : Admin contact first name (Required for EV)
-     --admin_last_name       : Admin contact last name (Required for EV)
-     --admin_phone           : Admin contact phone (Required for EV)
-     --admin_org             : Admin organization name (Required for EV)
-     --admin_address1        : Admin address line one (Required for EV)
-     --admin_address2        : Admin address line two (optional)
-     --admin_city            : Admin city (Required for EV)
-     --admin_region          : Admin region/state (Required for EV)
-     --admin_country         : Admin country (Required for EV)
-     --admin_postal          : Admin postal code (Required for EV)
-     --admin_title           : Admin contact title (Required for EV)
-     
-     --tech_email            : Tech contact email (Required for EV)
-     --tech_first_name       : Tech contact first name (Required for EV)
-     --tech_last_name        : Tech contact last name (Required for EV)
-     --tech_phone            : Tech contact phone (Required for EV)
-     --tech_org              : Tech organization name (Required for EV)
-     --tech_title            : Tech contact title (Required for EV)
-     
-     --edgerc_file           : Path to the .edgerc file (default: ~/.edgerc.txt)
-     --account               : Region for enrollment (allowed: Global, APAC, EMEA, LATAM, AMER, DEV). Default is Global.
-     --create                : If set, sends the enrollment request; if not set, only outputs the JSON payload.
-     
- Usage Example (output JSON without sending):
-     python cps_enrollment_creation.py --operation create --common_name "example.com" \
-         --csr_org "Example Corp" --account Global \
-         --admin_email "admin@example.com" --admin_first_name "John" --admin_last_name "Doe" \
-         --admin_phone "800-555-1234" --admin_org "Example Corp" --admin_address1 "123 Main St" \
-         --admin_city "San Diego" --admin_region "CA" --admin_country "US" --admin_postal "92101" \
-         --admin_title "Administrator" \
-         --tech_email "tech@example.com" --tech_first_name "Jane" --tech_last_name "Doe" \
-         --tech_phone "617-555-0111" --tech_org "Example Corp" --tech_title "Engineer"
-     
- Usage Example (send enrollment request):
-     python cps_enrollment_creation.py --operation create --common_name "example.com" --create --account APAC --chinacdn true [other parameters...]
+Script Name:
+    Akamai IAM Credential Rotation Script
+
+Description:
+    This script authenticates using EdgeGrid and interacts with Akamai's IAM API to:
+    - List all API clients and their IDs
+    - List all credentials for a specific API client
+    - Rotate client credentials (generate new client token/secret/access token)
+    - Optionally delete older credentials
+
+Parameters:
+    --list_clients               : Lists all available API clients and exits
+    --client_id (optional)       : ID of the API client to manage credentials for
+    --rotate (optional)          : Rotate credentials for the client. Default is 'N'
+    --delete_old (optional)      : Delete previous credentials after rotation. Default is 'N'
+    --edgerc (optional)          : Path to the .edgerc file. Default is '~/.edgerc'
+    --section (optional)         : Section in the .edgerc file. Default is 'default'
+
+Usage:
+    - List all API clients:
+        python manage_iam_credentials.py --list_clients
+
+    - Rotate and delete old:
+        python manage_iam_credentials.py --client_id abc123 --rotate Y --delete_old Y
 ===================================================================================
 """
 
 import os
-import sys
-import json
 import argparse
 import requests
-from urllib.parse import urljoin
+import json
 from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
 
-def str2bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ("yes", "true", "t", "y", "1"):
-        return True
-    elif v.lower() in ("no", "false", "f", "n", "0"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Boolean value expected.")
 
-def setup_session(edgerc_file, region):
-    """
-    Sets up an authenticated session using credentials from the .edgerc file.
-    The provided region determines which account credentials to use.
-    """
+def setup_session(edgerc_path, section):
     try:
-        edgerc = EdgeRc(os.path.expanduser(edgerc_file))
-        baseurl = f"https://{edgerc.get(region, 'host')}"
+        edgerc = EdgeRc(edgerc_path)
+        base_url = f"https://{edgerc.get(section, 'host')}/"
         session = requests.Session()
-        session.auth = EdgeGridAuth.from_edgerc(edgerc, region)
-        return session, baseurl
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, section)
+        return session, base_url
     except Exception as e:
-        print(f"Error reading .edgerc file: {e}")
-        sys.exit(1)
+        print(f"Failed to load EdgeGrid credentials: {e}")
+        exit(1)
 
-# Define the region-to-contract mapping
-REGION_SETTINGS = {
-    "Global": {"parent_group_name": "HSBC", "contract_id": "a"},
-    "APAC":   {"parent_group_name": "HSBC", "contract_id": "b"},
-    "EMEA":   {"parent_group_name": "HBC",  "contract_id": "c"},
-    "LATAM":  {"parent_group_name": "HSBC", "contract_id": "d"},
-    "AMER":   {"parent_group_name": "HSBC", "contract_id": "e"},
-    "DEV":    {"parent_group_name": "HSBC", "contract_id": "f"}
-}
 
-def create_enrollment(session, baseurl, payload, contract_id):
-    """
-    Creates a new certificate enrollment using the CPS API.
-    Uses API version v9 for creation.
-    """
-    path = "/cps/v2/enrollments"
-    url = urljoin(baseurl, path)
-    headers = {
-        "Content-Type": "application/vnd.akamai.cps.enrollment.v9+json",
-        "Accept": "application/vnd.akamai.cps.enrollment-status.v9+json"
-    }
-    querystring = {"contractId": contract_id}
-    
-    try:
-        response = session.post(url, headers=headers, json=payload, params=querystring)
-        response.raise_for_status()
-    except requests.exceptions.HTTPError as http_err:
-        print(f"HTTP error occurred during enrollment creation: {http_err}")
-        print("Response:", response.text)
-        sys.exit(1)
-    except Exception as err:
-        print(f"Error occurred during enrollment creation: {err}")
-        sys.exit(1)
-    
-    return response.json()
+def list_api_clients(session, base_url):
+    url = urljoin(base_url, "identity-management/v3/api-clients")
+    response = session.get(url)
+    if response.status_code == 200:
+        clients = response.json().get("apiClients", [])
+        print("Available API Clients:")
+        for client in clients:
+            print(f"  - clientId: {client['clientId']}")
+            print(f"    name:     {client['name']}")
+            print(f"    desc:     {client.get('description', '')}\n")
+        return clients
+    else:
+        print(f"Failed to list API clients: {response.status_code}")
+        print(response.text)
+        return []
 
-def main():
-    parser = argparse.ArgumentParser(description="Manage Akamai CPS Certificate Enrollments (Creation)")
-    parser.add_argument("--operation", required=True, choices=["create"],
-                        help="Operation to perform (currently only 'create' is implemented)")
-    parser.add_argument("--common_name", help="Common Name (Primary FQDN) for certificate enrollment", required=True)
-    parser.add_argument("--san", action="append", help="Additional SAN domains (repeat for multiple)")
-    
-    # CSR details
-    parser.add_argument("--csr_country", default="US", help="Country for CSR (default: US)")
-    parser.add_argument("--csr_state", default="CA", help="State for CSR (default: CA)")
-    parser.add_argument("--csr_locality", default="San Diego", help="Locality for CSR (default: San Diego)")
-    parser.add_argument("--csr_org", help="Organization for CSR", required=True)
-    parser.add_argument("--preferred_trust_chain", default="", help="Preferred trust chain (optional)")
-    
-    # Enrollment configuration
-    parser.add_argument("--validation_type", default="ev", help="Validation type: ev or dv (default: ev)")
-    parser.add_argument("--ra", default="lets-encrypt", help="RA parameter (default: lets-encrypt)")
-    parser.add_argument("--certificate_type", default="san", help="Certificate type (default: san)")
-    parser.add_argument("--change_management", action="store_true", help="Enable change management")
-    
-    # New parameter: ChinaCDN flag
-    parser.add_argument("--chinacdn", type=str2bool, nargs='?', const=True, default=False,
-                        help="Set to true to use China CDN configuration (geography 'china+core'); default is false (geography 'core')")
-    
-    # Admin Contact details (for EV enrollments)
-    parser.add_argument("--admin_email", help="Admin contact email (Required for EV)", required=True)
-    parser.add_argument("--admin_first_name", help="Admin contact first name (Required for EV)", required=True)
-    parser.add_argument("--admin_last_name", help="Admin contact last name (Required for EV)", required=True)
-    parser.add_argument("--admin_phone", help="Admin contact phone (Required for EV)", required=True)
-    parser.add_argument("--admin_org", help="Admin organization name (Required for EV)", required=True)
-    parser.add_argument("--admin_address1", help="Admin address line one (Required for EV)", required=True)
-    parser.add_argument("--admin_address2", default="", help="Admin address line two (optional)")
-    parser.add_argument("--admin_city", help="Admin city (Required for EV)", required=True)
-    parser.add_argument("--admin_region", help="Admin region/state (Required for EV)", required=True)
-    parser.add_argument("--admin_country", help="Admin country (Required for EV)", required=True)
-    parser.add_argument("--admin_postal", help="Admin postal code (Required for EV)", required=True)
-    parser.add_argument("--admin_title", help="Admin contact title (Required for EV)", required=True)
-    
-    # Tech Contact details (for EV enrollments)
-    parser.add_argument("--tech_email", help="Tech contact email (Required for EV)", required=True)
-    parser.add_argument("--tech_first_name", help="Tech contact first name (Required for EV)", required=True)
-    parser.add_argument("--tech_last_name", help="Tech contact last name (Required for EV)", required=True)
-    parser.add_argument("--tech_phone", help="Tech contact phone (Required for EV)", required=True)
-    parser.add_argument("--tech_org", help="Tech organization name (Required for EV)", required=True)
-    parser.add_argument("--tech_title", help="Tech contact title (Required for EV)", required=True)
-    
-    # edgerc file and account (region) parameter
-    parser.add_argument("--edgerc_file", default="~/.edgerc.txt", help="Path to the .edgerc file (default: ~/.edgerc.txt)")
-    parser.add_argument("--account", default="Global", choices=["Global", "APAC", "EMEA", "LATAM", "AMER", "DEV"],
-                        help="Region for enrollment (allowed: Global, APAC, EMEA, LATAM, AMER, DEV). Default is Global.")
-    
-    # Flag for sending enrollment creation (if set, the request is sent; otherwise, only outputs the JSON payload)
-    parser.add_argument("--create", action="store_true", default=False,
-                        help="If set, sends the enrollment request; otherwise, only outputs the JSON payload.")
-    
-    args = parser.parse_args()
-    
-    # Derive contract_id automatically based on the region (account)
-    contract_id = REGION_SETTINGS[args.account]["contract_id"]
-    
-    # Build the common enrollment payload:
-    geography_value = "china+core" if args.chinacdn else "core"
-    payload = {
-        "validationType": args.validation_type.lower(),
-        "ra": args.ra,
-        "certificateType": args.certificate_type,
-        "changeManagement": args.change_management,
-        "csr": {
-            "cn": args.common_name,
-            "sans": [args.common_name] + (args.san if args.san else []),
-            "c": args.csr_country,
-            "st": args.csr_state,
-            "l": args.csr_locality,
-            "o": args.csr_org,
-            "preferredTrustChain": args.preferred_trust_chain
-        },
-        "networkConfiguration": {
-            "secureNetwork": "standard-tls",
-            "geography": geography_value,
-            "sniOnly": True
-        },
-        "adminContact": {
-            "email": args.admin_email,
-            "firstName": args.admin_first_name,
-            "lastName": args.admin_last_name,
-            "phone": args.admin_phone,
-            "organizationName": args.admin_org,
-            "addressLineOne": args.admin_address1,
-            "addressLineTwo": args.admin_address2,
-            "city": args.admin_city,
-            "region": args.admin_region,
-            "country": args.admin_country,
-            "postalCode": args.admin_postal,
-            "title": args.admin_title
-        },
-        "techContact": {
-            "email": args.tech_email,
-            "firstName": args.tech_first_name,
-            "lastName": args.tech_last_name,
-            "phone": args.tech_phone,
-            "organizationName": args.tech_org,
-            "title": args.tech_title
-        }
-    }
-    
-    # If the --create flag is not set, output the JSON payload and exit.
-    if not args.create:
-        print("Enrollment JSON payload:")
-        print(json.dumps(payload, indent=2))
-        sys.exit(0)
-    
-    # Set up the session using the provided edgerc file and region (account)
-    session, baseurl = setup_session(args.edgerc_file, args.account)
-    
-    # Send the enrollment creation request to the CPS API
-    response = create_enrollment(session, baseurl, payload, contract_id)
-    
-    print("CPS API Enrollment Creation Response:")
-    print(json.dumps(response, indent=2))
+
+def list_client_credentials(session, base_url, client_id):
+    url = urljoin(base_url, f"identity-management/v3/api-clients/{client_id}/credentials")
+    resp = session.get(url)
+    if resp.status_code == 200:
+        creds = resp.json().get("credentials", [])
+        print(f"Credentials for client ID {client_id}:")
+        for cred in creds:
+            print(f"  - ID: {cred['credentialId']}, Created: {cred['createdDate']}, Status: {cred['status']}")
+        return creds
+    else:
+        print(f"Failed to list credentials (status code {resp.status_code}): {resp.text}")
+        return []
+
+
+def rotate_client_credentials(session, base_url, client_id):
+    url = urljoin(base_url, f"identity-management/v3/api-clients/{client_id}/credentials")
+    resp = session.post(url)
+    if resp.status_code == 201:
+        data = resp.json()
+        print("New credential created:")
+        print(json.dumps(data, indent=4))
+        return data["credentialId"]
+    else:
+        print(f"Failed to create new credentials: {resp.status_code}")
+        print(resp.text)
+        return None
+
+
+def delete_credential(session, base_url, client_id, credential_id):
+    url = urljoin(base_url, f"identity-management/v3/api-clients/{client_id}/credentials/{credential_id}")
+    resp = session.delete(url)
+    if resp.status_code == 204:
+        print(f"Deleted old credential: {credential_id}")
+    else:
+        print(f"Failed to delete credential {credential_id}: {resp.status_code}")
+        print(resp.text)
+
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Manage IAM API client credentials via Akamai API")
+
+    parser.add_argument("--list_clients", action="store_true", help="List all available API clients")
+    parser.add_argument("--client_id", help="The API client ID")
+    parser.add_argument("--rotate", choices=["Y", "N"], default="N", help="Rotate credentials (default: N)")
+    parser.add_argument("--delete_old", choices=["Y", "N"], default="N", help="Delete previous credentials (default: N)")
+    parser.add_argument("--edgerc", default=os.path.expanduser("~/.edgerc"), help="Path to .edgerc file")
+    parser.add_argument("--section", default="default", help="Section in .edgerc")
+
+    args = parser.parse_args()
+    session, base_url = setup_session(args.edgerc, args.section)
+
+    if args.list_clients:
+        list_api_clients(session, base_url)
+        exit(0)
+
+    if not args.client_id:
+        print("Error: --client_id is required unless --list_clients is used")
+        exit(1)
+
+    existing_credentials = list_client_credentials(session, base_url, args.client_id)
+
+    if args.rotate == "Y":
+        new_credential_id = rotate_client_credentials(session, base_url, args.client_id)
+        if args.delete_old == "Y" and new_credential_id:
+            for cred in existing_credentials:
+                if cred["credentialId"] != new_credential_id:
+                    delete_credential(session, base_url, args.client_id, cred["credentialId"])
