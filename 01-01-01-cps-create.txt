@@ -73,7 +73,8 @@ def list_client_credentials(session, base_url, client_id):
         print(f"Credentials for client ID {client_id}:")
         for cred in creds:
             print(f"  - ID: {cred['credentialId']}, Created: {cred['createdDate']}, Status: {cred['status']}")
-        return creds    else:
+        return creds
+    else:
         print(f"Failed to list credentials (status code {resp.status_code}): {resp.text}")
         return []
 
