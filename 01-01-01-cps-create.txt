@@ -25,10 +25,10 @@ Parameters:
 
 Usage:
     - List all API clients:
-        python manage_iam_credentials.py --list_clients
+        python akamai_manage_iam_creds.py --list_clients
 
     - Rotate and delete old:
-        python manage_iam_credentials.py --client_id abc123 --rotate Y --delete_old Y
+        python akamai_manage_iam_creds.py --client_id abc123 --rotate Y --delete_old Y
 ===================================================================================
 """
 
