@@ -1,71 +1,199 @@
-h1. Akamai Automation: Security Risk Assessment and Architectural Considerations
+"""
+===================================================================================
+                         Akamai Security Configuration Cloner Script
+===================================================================================
+Script Name:
+    Akamai Security Configuration Cloner Script
+Description:
+    This script clones an existing Akamai AppSec configuration using Akamai's EdgeGrid API. 
+    It reads configuration details from Terraform-based SC-*.tf and PL-*.tf files (or passed-in files), then:
+      - Authenticates using an .edgerc file
+      - Exports the specified security configuration
+      - Creates a new configuration with the provided name
+      - Clones match targets, security policies, client lists, rate policies,
+        bot categories, custom rules, reputation profile actions, WAF group tunings,
+        individual WAF rule overrides, slow POST protection settings, and can load
+        custom rate limits from a rate_limits.json file
 
-h2. Background
+Parameters:
+    --edgerc (required)           : Path to the .edgerc file for authentication
+    --section (required)          : Section name in the .edgerc file
+    --new_config_name (required) : Name of the new configuration to create
+    --sc_file (required)          : Path to SC-<name>.tf file defining configuration block
+    --pl_file (optional)          : Path to PL-<name>.tf file with policy details (currently used for ID listing)
+    --rate_limits_file (optional): Path to a rate_limits.json file with rate policy templates
 
-Two solutions have been developed to automate Akamai resource management:
+===================================================================================
+"""
 
-* *Solution 1*: A semi-manual process where engineers clone a repository containing Akamai API and Terraform scripts to their local machines. The `.edgerc` credentials file (containing API keys) is stored _locally and permanently_. Updates are made via Jupyter notebooks.
+import argparse
+import json
+import os
+import sys
+import requests
+import hcl
+from akamai.edgegrid import EdgeGridAuth
+from akamai.edgegrid.edgegrid import EdgeRc
 
-* *Solution 2*: A *centralised*, fully automated self-service solution integrated with a Jira Front Door form, Jenkins pipelines, and ephemeral containers. API credentials are securely stored in *HashiCorp Vault*, and `.edgerc` files are created temporarily and deleted after use. *Solution 2 is currently in development, and the key rotation and key transfer workflows will be implemented in readiness for production approval.*
+def setup_session(edgerc_file, section_name):
+    try:
+        edgerc = EdgeRc(edgerc_file)
+        base_url = f"https://{edgerc.get(section_name, 'host')}/".rstrip('/') + '/'
+        session = requests.Session()
+        session.auth = EdgeGridAuth.from_edgerc(edgerc, section_name)
+        print("Session setup successful.")
+        return session, base_url
+    except Exception as e:
+        print(f"Failed to set up session: {e}")
+        sys.exit(1)
 
-h2. Key Security Concerns and Risk Analysis
+def parse_tf_config(sc_file):
+    with open(sc_file, 'r') as f:
+        data = hcl.load(f)
+    mod = data["module"]["akamai-application-security"]
+    return {
+        "configuration_name": mod["configuration_name"],
+        "configuration_description": mod.get("configuration_description", ""),
+        "access_group": mod.get("accessGroup"),
+        "edgerc_config_section": mod.get("edgerc_config_section", "default"),
+        "client_lists": list(mod.get("client_lists", {}).keys()),
+        "policies": list(mod.get("policies", {}).keys())
+    }
 
-|| Aspect || Solution 1 (Local) || Solution 2 (Centralised CI/CD) ||
-| API Key Handling | Keys stored in plain text on local machines | Keys will be pulled securely from HashiCorp Vault (in development) |
-| Key Distribution | Shared over Zoom (manual) | Will be managed centrally and updated via secure workflows |
-| Storage Persistence | `.edgerc` file persists on disk indefinitely | `.edgerc` file will be created at runtime and destroyed |
-| Environment Scope | Local desktops/laptops or VMs (inconsistent) | Controlled, containerised CI/CD environment |
-| Audit and Traceability | Difficult to enforce centrally | Will be fully auditable via Jenkins, Jira, and Vault |
-| API Key Rotation | No automated process; manual intervention only | Planned integration of automated key rotation via Vault |
-| Production Suitability | Already used in prod; flagged as high risk | Still under development; will be hardened for production readiness |
+def parse_policy_ids(pl_file):
+    if not pl_file:
+        return []
+    with open(pl_file, 'r') as f:
+        data = hcl.load(f)
+    local_block = data.get("locals", {})
+    return list(local_block.keys())
 
-h2. Why Solution 2 Security Controls Cannot Be Applied to Solution 1
+def get_config_metadata(session, base_url, config_name):
+    resp = session.get(base_url + "appsec/v1/configs")
+    for c in resp.json().get("configurations", []):
+        if c["name"] == config_name:
+            return c["id"], c["latestVersion"]
+    print(f"Config '{config_name}' not found.")
+    sys.exit(1)
 
-* *Decentralised Execution*:  
-Solution 1 executes from multiple local environments with no consistent runtime or infrastructure. There is no central authority or automation pipeline to control or trigger key rotation securely.
+def export_config(session, base_url, config_id, version):
+    url = f"{base_url}appsec/v1/export/configs/{config_id}/versions/{version}"
+    resp = session.get(url)
+    return resp.json()
 
-* *No Secure Credential Broker*:  
-Engineers access and manage `.edgerc` files individually. Introducing a central broker like Vault would require a complete re-architecture, since local scripts cannot be guaranteed to securely authenticate, retrieve, or rotate secrets.
+def create_new_config(session, base_url, name, description, group):
+    url = base_url + "appsec/v1/configs"
+    payload = { "name": name, "description": description, "accessGroup": group }
+    resp = session.post(url, json=payload)
+    return resp.json()["id"]
 
-* *Persistent Plaintext Storage*:  
-API credentials stored in `.edgerc` files are at risk of compromise from:
-** Accidental commits to Git repositories  
-** Malware or local security breaches  
-** Laptops being lost, stolen, or repurposed
+def get_match_targets(session, base_url, config_id, version):
+    resp = session.get(f"{base_url}appsec/v1/configs/{config_id}/versions/{version}/match-targets")
+    return resp.json().get("matchTargets", [])
 
-* *Lack of Ephemeral Infrastructure*:  
-In contrast to ephemeral containers in Solution 2, which discard credentials post-execution, local environments retain sensitive data for undefined durations, increasing the attack surface.
+def post_match_target(session, base_url, config_id, version, target):
+    clean = {k: v for k, v in target.items() if k not in ("id", "_links")}
+    session.post(f"{base_url}appsec/v1/configs/{config_id}/versions/{version}/match-targets", json=clean)
 
-* *No Centralised Policy Enforcement*:  
-Solution 1 lacks enforceable policies for access control, auditing, or credential lifecycle management. Each engineer is responsible for maintaining secrets—introducing inconsistencies and human error.
+def clone_security_policies(session, base_url, config_json, new_id):
+    for p in config_json.get("securityPolicies", []):
+        clean = {k: v for k, v in p.items() if k not in ("id", "_links")}
+        session.post(f"{base_url}appsec/v1/configs/{new_id}/versions/1/security-policies", json=clean)
 
-h2. Why API Key Rotation and Transfer in Solution 2 Cannot Be Used in Solution 1
+def clone_client_lists(session, base_url, config_json, new_id):
+    for cl in config_json.get("clientLists", []):
+        clean = {k: v for k, v in cl.items() if k not in ("id", "_links")}
+        session.post(f"{base_url}appsec/v1/configs/{new_id}/client-lists", json=clean)
 
-Although Solution 2 will provide a secure, automated approach to API key management—including rotation and transfer using HashiCorp Vault and ephemeral containers—this design is fundamentally incompatible with Solution 1’s local/desktop-based execution model.
+def clone_rate_policies(session, base_url, config_json, new_id):
+    for rp in config_json.get("ratePolicies", []):
+        clean = {k: v for k, v in rp.items() if k not in ("id", "_links")}
+        session.post(f"{base_url}appsec/v1/configs/{new_id}/versions/1/rate-policies", json=clean)
 
-* *No Centralised Runtime Environment*:  
-Solution 2 runs inside a controlled Jenkins pipeline and container where Vault clients and trusted authentication mechanisms can be securely embedded and managed. In contrast, Solution 1 runs on individual engineer desktops/laptops or VMs, which are inconsistent and outside enterprise control.
+def clone_bot_categories(session, base_url, config_json, new_id):
+    for bot in config_json.get("customBotCategories", []):
+        clean = {k: v for k, v in bot.items() if k not in ("id", "_links")}
+        session.post(f"{base_url}appsec/v1/configs/{new_id}/versions/1/custom-bot-categories", json=clean)
 
-* *No Secure Authentication Path to Vault*:  
-Vault uses trusted identity sources (like Kubernetes service accounts, AppRoles, or OIDC) to grant access to secrets. Local machines cannot securely authenticate to Vault without storing sensitive tokens or credentials locally, which reintroduces the same security risk.
+def clone_custom_rules(session, base_url, config_json, new_id):
+    for rule in config_json.get("customRules", []):
+        clean = {k: v for k, v in rule.items() if k not in ("id", "_links")}
+        session.post(f"{base_url}appsec/v1/configs/{new_id}/versions/1/custom-rules", json=clean)
 
-* *No Enforcement or Audit Controls*:  
-Solution 2 operations will be logged and auditable. Solution 1 has no centralized way to enforce or audit access to the keys once retrieved.
+def clone_reputation_profiles(session, base_url, config_json, new_id):
+    for p in config_json.get("securityPolicies", []):
+        for action in p.get("clientReputation", {}).get("reputationProfileActions", []):
+            payload = { "rules": [ { "action": action["action"], "id": action["id"] } ] }
+            session.put(f"{base_url}appsec/v1/configs/{new_id}/versions/1/security-policies/{p['id']}/reputation-profiles", json=payload)
 
-* *Persistence Risk*:  
-Even with Vault integration, engineers using Solution 1 are likely to store the keys in `.edgerc` files, reintroducing persistent plaintext storage risks.
+def clone_waf_group_actions(session, base_url, config_json, new_id):
+    for p in config_json.get("securityPolicies", []):
+        policy_id = p["id"]
+        groups = config_json.get("rules", {}).get("groups", [])
+        if groups:
+            session.put(f"{base_url}appsec/v1/configs/{new_id}/versions/1/security-policies/{policy_id}/rules", json={"rules": groups})
 
-* *Manual & Unscalable Key Transfer*:  
-There is no mechanism to automatically push or update keys on user machines. Key updates would require manual distribution, defeating automation and scalability goals.
+def clone_waf_rule_overrides(session, base_url, config_json, new_id):
+    for p in config_json.get("securityPolicies", []):
+        for o in config_json.get("rules", {}).get("overrides", []):
+            session.put(f"{base_url}appsec/v1/configs/{new_id}/versions/1/security-policies/{p['id']}/rules/{o['ruleId']}", json={"action": o["action"]})
 
-h2. Conclusion and Recommendations
+def clone_slow_post_protection(session, base_url, config_json, new_id):
+    protections = config_json.get("protections", {}).get("slowPostProtection", {})
+    for p in config_json.get("securityPolicies", []):
+        if p["id"] in protections:
+            payload = {"slowPostProtection": protections[p["id"]]}
+            session.put(f"{base_url}appsec/v1/configs/{new_id}/versions/1/security-policies/{p['id']}/protections", json=payload)
 
-While Solution 1 has proven functional, its design poses significant security risks, especially regarding *API key storage and rotation*. The architecture fundamentally lacks secure credential management capabilities. Attempting to retrofit Vault integration without moving execution to a centralised or ephemeral environment would not mitigate the key risks.
+def apply_custom_rate_limits(session, base_url, new_id, rate_file, replacements):
+    if not rate_file or not os.path.isfile(rate_file):
+        return
+    with open(rate_file) as f:
+        raw = f.read()
+    for k, v in replacements.items():
+        raw = raw.replace("${" + k + "}", v)
+    data = json.loads(raw)
+    session.post(f"{base_url}appsec/v1/configs/{new_id}/versions/1/rate-policies", json=data)
 
-*Recommendations:*
-* Immediately initiate a transition plan toward deprecating Solution 1 for production use.
-* Accelerate development and approval of Solution 2, incorporating:
-** Automated API key rotation from Akamai to Vault  
-** Removal of manual credential sharing  
-** Mandatory use of short-lived containers or secure runners
-* For any interim use of Solution 1, introduce strict local security policies, frequent manual key rotation, and file encryption with clear usage guidelines.
+def main():
+    parser = argparse.ArgumentParser(description="Clone Akamai AppSec Config using API")
+    parser.add_argument("--edgerc", required=True)
+    parser.add_argument("--section", required=True)
+    parser.add_argument("--new_config_name", required=True)
+    parser.add_argument("--sc_file", required=True)
+    parser.add_argument("--pl_file", required=False)
+    parser.add_argument("--rate_limits_file", required=False)
+    args = parser.parse_args()
+
+    session, base_url = setup_session(args.edgerc, args.section)
+    tf_data = parse_tf_config(args.sc_file)
+    policy_ids = parse_policy_ids(args.pl_file)
+
+    config_id, version = get_config_metadata(session, base_url, tf_data["configuration_name"])
+    config_json = export_config(session, base_url, config_id, version)
+
+    new_id = create_new_config(session, base_url, args.new_config_name, tf_data["configuration_description"], tf_data["access_group"])
+    for t in get_match_targets(session, base_url, config_id, version):
+        post_match_target(session, base_url, new_id, 1, t)
+
+    clone_security_policies(session, base_url, config_json, new_id)
+    clone_client_lists(session, base_url, config_json, new_id)
+    clone_rate_policies(session, base_url, config_json, new_id)
+    clone_bot_categories(session, base_url, config_json, new_id)
+    clone_custom_rules(session, base_url, config_json, new_id)
+    clone_reputation_profiles(session, base_url, config_json, new_id)
+    clone_waf_group_actions(session, base_url, config_json, new_id)
+    clone_waf_rule_overrides(session, base_url, config_json, new_id)
+    clone_slow_post_protection(session, base_url, config_json, new_id)
+
+    if args.rate_limits_file:
+        replacements = {
+            "sec_config_name": args.new_config_name,
+            "rate_controls_bypass_list": tf_data["client_lists"][0] if tf_data["client_lists"] else ""
+        }
+        apply_custom_rate_limits(session, base_url, new_id, args.rate_limits_file, replacements)
+
+    print("Configuration cloned successfully.")
+
+if __name__ == "__main__":
+    main()
