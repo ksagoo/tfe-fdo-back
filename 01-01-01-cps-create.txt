@@ -69,12 +69,11 @@ def list_client_credentials(session, base_url, client_id):
     url = urljoin(base_url, f"identity-management/v3/api-clients/{client_id}/credentials")
     resp = session.get(url)
     if resp.status_code == 200:
-        creds = resp.json().get("credentials", [])
+        creds = resp.json()  # It's a list, not a dict
         print(f"Credentials for client ID {client_id}:")
         for cred in creds:
             print(f"  - ID: {cred['credentialId']}, Created: {cred['createdDate']}, Status: {cred['status']}")
-        return creds
-    else:
+        return creds    else:
         print(f"Failed to list credentials (status code {resp.status_code}): {resp.text}")
         return []
 
