@@ -53,12 +53,12 @@ def list_api_clients(session, base_url):
     url = urljoin(base_url, "identity-management/v3/api-clients")
     response = session.get(url)
     if response.status_code == 200:
-        clients = response.json()  # Direct list
+        clients = response.json()
         print("Available API Clients:")
         for client in clients:
             print(f"  - clientId: {client['clientId']}")
-            print(f"    name:     {client['name']}")
-            print(f"    desc:     {client.get('description', '')}\n")
+            print(f"    name:     {client.get('name', '(no name)')}")
+            print(f"    desc:     {client.get('description', '(no description)')}\n")
         return clients
     else:
         print(f"Failed to list API clients: {response.status_code}")
