@@ -16,6 +16,10 @@ Description:
 Parameters:
     --edgerc (optional)          : Path to the .edgerc file for authentication (default: ~/.edgerc)
     --section (optional)         : Section name in the .edgerc file (default: default)
+    --dry-run (optional)         : If specified, only print what would be deleted without actually deleting it
+
+Usage:
+    python script.py --edgerc ~/.edgerc --section ELEVATED --dry-run
 ===================================================================================
 """
 
@@ -107,6 +111,7 @@ def main():
     parser = argparse.ArgumentParser(description="Delete temporary match targets and policies from Akamai config")
     parser.add_argument("--edgerc", default="~/.edgerc", help="Path to .edgerc file")
     parser.add_argument("--section", default="default", help="Section name in .edgerc file")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be deleted without making changes")
     args = parser.parse_args()
 
     config = getTFConfigValues()
@@ -120,13 +125,20 @@ def main():
             if any(dummy in websiteTarget.get("hostnames", []) for dummy in [
                 "dummy.hsbsctesting.com", "dummy-apac.hostname", "dummy-apac-cn.hostname",
                 "dummy-emea.hostname", "dummy-latam.hostname", "dummy-amer.hostname"]):
-                print("Deleting Match-target", sec_config_id, ver, websiteTarget["id"], websiteTarget["hostnames"])
-                delMatchTarget(session, base_url, sec_config_id, ver, websiteTarget["id"])
+                print("[MATCH TARGET] Found:", websiteTarget["hostnames"])
+                if args.dry_run:
+                    print("[DRY-RUN] Would delete match target:", websiteTarget["id"])
+                else:
+                    print("Deleting Match-target", sec_config_id, ver, websiteTarget["id"], websiteTarget["hostnames"])
+                    delMatchTarget(session, base_url, sec_config_id, ver, websiteTarget["id"])
 
         for secPolicy in config_json["securityPolicies"]:
             if secPolicy["name"] == "Security Policy Template":
-                print("Deleting Policy", sec_config_id, ver, secPolicy["name"], secPolicy["id"])
-                delPolicy(session, base_url, sec_config_id, ver, secPolicy["id"])
+                if args.dry_run:
+                    print("[DRY-RUN] Would delete policy:", secPolicy["name"], secPolicy["id"])
+                else:
+                    print("Deleting Policy", sec_config_id, ver, secPolicy["name"], secPolicy["id"])
+                    delPolicy(session, base_url, sec_config_id, ver, secPolicy["id"])
 
 
 if __name__ == "__main__":
