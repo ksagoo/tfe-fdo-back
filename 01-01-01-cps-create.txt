@@ -31,14 +31,12 @@ Usage:
         python akamai_manage_iam_creds.py --client_id abc123 --rotate Y --delete_old Y
 ===================================================================================
 """
-
 import os
 import argparse
 import requests
 import json
 from akamai.edgegrid import EdgeGridAuth, EdgeRc
 from urllib.parse import urljoin
-
 
 def setup_session(edgerc_path, section):
     try:
@@ -51,12 +49,11 @@ def setup_session(edgerc_path, section):
         print(f"Failed to load EdgeGrid credentials: {e}")
         exit(1)
 
-
 def list_api_clients(session, base_url):
     url = urljoin(base_url, "identity-management/v3/api-clients")
     response = session.get(url)
     if response.status_code == 200:
-        clients = response.json().get("apiClients", [])
+        clients = response.json()  # Direct list
         print("Available API Clients:")
         for client in clients:
             print(f"  - clientId: {client['clientId']}")
@@ -67,7 +64,6 @@ def list_api_clients(session, base_url):
         print(f"Failed to list API clients: {response.status_code}")
         print(response.text)
         return []
-
 
 def list_client_credentials(session, base_url, client_id):
     url = urljoin(base_url, f"identity-management/v3/api-clients/{client_id}/credentials")
@@ -82,7 +78,6 @@ def list_client_credentials(session, base_url, client_id):
         print(f"Failed to list credentials (status code {resp.status_code}): {resp.text}")
         return []
 
-
 def rotate_client_credentials(session, base_url, client_id):
     url = urljoin(base_url, f"identity-management/v3/api-clients/{client_id}/credentials")
     resp = session.post(url)
@@ -96,7 +91,6 @@ def rotate_client_credentials(session, base_url, client_id):
         print(resp.text)
         return None
 
-
 def delete_credential(session, base_url, client_id, credential_id):
     url = urljoin(base_url, f"identity-management/v3/api-clients/{client_id}/credentials/{credential_id}")
     resp = session.delete(url)
@@ -105,7 +99,6 @@ def delete_credential(session, base_url, client_id, credential_id):
     else:
         print(f"Failed to delete credential {credential_id}: {resp.status_code}")
         print(resp.text)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Manage IAM API client credentials via Akamai API")
