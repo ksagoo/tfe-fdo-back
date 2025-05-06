@@ -1,39 +1,35 @@
 """
 ===================================================================================
-                         Akamai Security Configuration Cloner Script
+                         Akamai Security Policy Cleanup Script
 ===================================================================================
 Script Name:
-    Akamai Security Configuration Cloner Script
+    Akamai Security Policy Cleanup Script
 Description:
-    This script clones an existing Akamai AppSec configuration using Akamai's EdgeGrid API. 
-    It reads configuration details from Terraform-based SC-*.tf and PL-*.tf files (or passed-in files), then:
-      - Authenticates using an .edgerc file
-      - Exports the specified security configuration
-      - Creates a new configuration with the provided name
-      - Clones match targets, security policies, client lists, rate policies,
-        bot categories, custom rules, reputation profile actions, WAF group tunings,
-        individual WAF rule overrides, slow POST protection settings, and can load
-        custom rate limits from a rate_limits.json file
+    This script deletes temporary match targets and security policies from an Akamai AppSec
+    configuration using the EdgeGrid API. It reads configuration details from a Terraform-based
+    SC-*.tf file and:
+      - Authenticates using a .edgerc file and section
+      - Retrieves the specified security configuration and version
+      - Deletes any match targets that use predefined dummy hostnames
+      - Deletes the policy named "Security Policy Template" if found
 
 Parameters:
-    --edgerc (required)           : Path to the .edgerc file for authentication
-    --section (required)          : Section name in the .edgerc file
-    --new_config_name (required) : Name of the new configuration to create
-    --sc_file (required)          : Path to SC-<name>.tf file defining configuration block
-    --pl_file (optional)          : Path to PL-<name>.tf file with policy details (currently used for ID listing)
-    --rate_limits_file (optional): Path to a rate_limits.json file with rate policy templates
-
+    --edgerc (optional)          : Path to the .edgerc file for authentication (default: ~/.edgerc)
+    --section (optional)         : Section name in the .edgerc file (default: default)
 ===================================================================================
 """
 
+#!/usr/bin/env python3
+
 import argparse
 import json
-import os
+import hcl
+import glob
 import sys
 import requests
-import hcl
 from akamai.edgegrid import EdgeGridAuth
-from akamai.edgegrid.edgegrid import EdgeRc
+from akamai.edgegrid.edgeRc import EdgeRc
+
 
 def setup_session(edgerc_file, section_name):
     try:
@@ -47,206 +43,91 @@ def setup_session(edgerc_file, section_name):
         print(f"Failed to set up session: {e}")
         sys.exit(1)
 
-def parse_tf_config(sc_file):
-    with open(sc_file, 'r') as f:
-        data = hcl.load(f)
-    mod = data["module"]["akamai-application-security"]
-    return {
-        "configuration_name": mod["configuration_name"],
-        "configuration_description": mod.get("configuration_description", ""),
-        "access_group": mod.get("accessGroup"),
-        "edgerc_config_section": mod.get("edgerc_config_section", "default"),
-        "client_lists": list(mod.get("client_lists", {}).keys()),
-        "policies": list(mod.get("policies", {}).keys())
-    }
 
-def parse_policy_ids(pl_file):
-    if not pl_file:
-        return []
-    with open(pl_file, 'r') as f:
-        data = hcl.load(f)
-    local_block = data.get("locals", {})
-    return list(local_block.keys())
+def getTFConfigValues():
+    SC_file = glob.glob("SC-*.tf")
+    if not SC_file:
+        print("No SC-*.tf file found.")
+        sys.exit(1)
 
-def get_config_metadata(session, base_url, config_name):
-    resp = session.get(base_url + "appsec/v1/configs")
-    for c in resp.json().get("configurations", []):
-        if c["name"] == config_name:
-            return c["id"], c["latestVersion"]
-    print(f"Config '{config_name}' not found.")
-    sys.exit(1)
+    with open(SC_file[0], "r") as fp:
+        SC_data = hcl.load(fp)
+    return SC_data["module"]["akamai-application-security"]
 
-def export_config(session, base_url, config_id, version):
-    url = f"{base_url}appsec/v1/export/configs/{config_id}/versions/{version}"
-    resp = session.get(url)
-    return resp.json()
 
-def create_new_config(session, base_url, name, description, group):
-    url = base_url + "appsec/v1/configs"
-    payload = { "name": name, "description": description, "accessGroup": group }
-    resp = session.post(url, json=payload)
-    return resp.json()["id"]
+def getConfig(session, base_url, configuration_name):
+    path = f"{base_url}appsec/v1/configs"
+    result = session.get(path)
 
-def get_match_targets(session, base_url, config_id, version):
-    resp = session.get(f"{base_url}appsec/v1/configs/{config_id}/versions/{version}/match-targets")
-    return resp.json().get("matchTargets", [])
+    if result.status_code != 200:
+        print(result.status_code, result.reason, result.content)
+        sys.exit(1)
 
-def post_match_target(session, base_url, config_id, version, target):
-    clean = {k: v for k, v in target.items() if k not in ("id", "_links")}
-    session.post(f"{base_url}appsec/v1/configs/{config_id}/versions/{version}/match-targets", json=clean)
+    configurations = result.json()["configurations"]
+    for config in configurations:
+        if config["name"] == configuration_name:
+            return config["id"], config["latestVersion"]
+    return False, False
 
-def clone_security_policies(session, base_url, config_json, new_id):
-    for p in config_json.get("securityPolicies", []):
-        clean = {k: v for k, v in p.items() if k not in ("id", "_links")}
-        session.post(f"{base_url}appsec/v1/configs/{new_id}/versions/1/security-policies", json=clean)
 
-def clone_client_lists(session, base_url, config_json, new_id):
-    for cl in config_json.get("clientLists", []):
-        clean = {k: v for k, v in cl.items() if k not in ("id", "_links")}
-        session.post(f"{base_url}appsec/v1/configs/{new_id}/client-lists", json=clean)
+def getSecConfig(session, base_url, configID, version):
+    url = f"{base_url}appsec/v1/export/configs/{configID}/versions/{version}"
+    result = session.get(url)
 
-def clone_rate_policies(session, base_url, config_json, new_id):
-    for rp in config_json.get("ratePolicies", []):
-        clean = {k: v for k, v in rp.items() if k not in ("id", "_links")}
-        session.post(f"{base_url}appsec/v1/configs/{new_id}/versions/1/rate-policies", json=clean)
+    if result.status_code == 200:
+        return result.json()
+    else:
+        print(result.status_code, result.reason, result.content)
+        sys.exit(1)
 
-def clone_bot_categories(session, base_url, config_json, new_id):
-    for bot in config_json.get("customBotCategories", []):
-        clean = {k: v for k, v in bot.items() if k not in ("id", "_links")}
-        session.post(f"{base_url}appsec/v1/configs/{new_id}/versions/1/custom-bot-categories", json=clean)
 
-def clone_custom_rules(session, base_url, config_json, new_id):
-    for rule in config_json.get("customRules", []):
-        clean = {k: v for k, v in rule.items() if k not in ("id", "_links")}
-        session.post(f"{base_url}appsec/v1/configs/{new_id}/versions/1/custom-rules", json=clean)
+def delMatchTarget(session, base_url, configID, version, targetId):
+    url = f"{base_url}appsec/v1/configs/{configID}/versions/{version}/match-targets/{targetId}"
+    result = session.delete(url)
 
-def clone_reputation_profiles(session, base_url, config_json, new_id):
-    for p in config_json.get("securityPolicies", []):
-        for action in p.get("clientReputation", {}).get("reputationProfileActions", []):
-            payload = { "rules": [ { "action": action["action"], "id": action["id"] } ] }
-            session.put(f"{base_url}appsec/v1/configs/{new_id}/versions/1/security-policies/{p['id']}/reputation-profiles", json=payload)
+    if result.status_code == 204:
+        return True
+    else:
+        print(result.status_code, result.reason, result.content)
+        sys.exit(1)
 
-def clone_waf_group_actions(session, base_url, config_json, new_id):
-    for p in config_json.get("securityPolicies", []):
-        policy_id = p["id"]
-        groups = config_json.get("rules", {}).get("groups", [])
-        if groups:
-            session.put(f"{base_url}appsec/v1/configs/{new_id}/versions/1/security-policies/{policy_id}/rules", json={"rules": groups})
 
-def clone_waf_rule_overrides(session, base_url, config_json, new_id):
-    for p in config_json.get("securityPolicies", []):
-        for o in config_json.get("rules", {}).get("overrides", []):
-            session.put(f"{base_url}appsec/v1/configs/{new_id}/versions/1/security-policies/{p['id']}/rules/{o['ruleId']}", json={"action": o["action"]})
+def delPolicy(session, base_url, configID, version, policyID):
+    url = f"{base_url}appsec/v1/configs/{configID}/versions/{version}/security-policies/{policyID}"
+    result = session.delete(url)
 
-def clone_slow_post_protection(session, base_url, config_json, new_id):
-    protections = config_json.get("protections", {}).get("slowPostProtection", {})
-    for p in config_json.get("securityPolicies", []):
-        if p["id"] in protections:
-            payload = {"slowPostProtection": protections[p["id"]]}
-            session.put(f"{base_url}appsec/v1/configs/{new_id}/versions/1/security-policies/{p['id']}/protections", json=payload)
+    if result.status_code == 204:
+        return True
+    else:
+        print(result.status_code, result.reason, result.content)
+        sys.exit(1)
 
-def apply_custom_rate_limits(session, base_url, new_id, rate_file, replacements):
-    if not rate_file or not os.path.isfile(rate_file):
-        return
-    with open(rate_file) as f:
-        raw = f.read()
-    for k, v in replacements.items():
-        raw = raw.replace("${" + k + "}", v)
-    data = json.loads(raw)
-    session.post(f"{base_url}appsec/v1/configs/{new_id}/versions/1/rate-policies", json=data)
 
 def main():
-    parser = argparse.ArgumentParser(description="Clone Akamai AppSec Config using API")
-    parser.add_argument("--edgerc", required=True)
-    parser.add_argument("--section", required=True)
-    parser.add_argument("--new_config_name", required=True)
-    parser.add_argument("--sc_file", required=True)
-    parser.add_argument("--pl_file", required=False)
-    parser.add_argument("--rate_limits_file", required=False)
+    parser = argparse.ArgumentParser(description="Delete temporary match targets and policies from Akamai config")
+    parser.add_argument("--edgerc", default="~/.edgerc", help="Path to .edgerc file")
+    parser.add_argument("--section", default="default", help="Section name in .edgerc file")
     args = parser.parse_args()
 
-    session, base_url = setup_session(args.edgerc, args.section)
-    tf_data = parse_tf_config(args.sc_file)
-    policy_ids = parse_policy_ids(args.pl_file)
+    config = getTFConfigValues()
+    session, base_url = setup_session(args.edgerc, config.get("edgerc_config_section", args.section))
+    sec_config_id, ver = getConfig(session, base_url, config["configuration_name"])
 
-    config_id, version = get_config_metadata(session, base_url, tf_data["configuration_name"])
-    config_json = export_config(session, base_url, config_id, version)
+    if sec_config_id:
+        config_json = getSecConfig(session, base_url, sec_config_id, ver)
 
-    new_id = create_new_config(session, base_url, args.new_config_name, tf_data["configuration_description"], tf_data["access_group"])
-    for t in get_match_targets(session, base_url, config_id, version):
-        post_match_target(session, base_url, new_id, 1, t)
+        for websiteTarget in config_json["matchTargets"]["websiteTargets"]:
+            if any(dummy in websiteTarget.get("hostnames", []) for dummy in [
+                "dummy.hsbsctesting.com", "dummy-apac.hostname", "dummy-apac-cn.hostname",
+                "dummy-emea.hostname", "dummy-latam.hostname", "dummy-amer.hostname"]):
+                print("Deleting Match-target", sec_config_id, ver, websiteTarget["id"], websiteTarget["hostnames"])
+                delMatchTarget(session, base_url, sec_config_id, ver, websiteTarget["id"])
 
-    clone_security_policies(session, base_url, config_json, new_id)
-    clone_client_lists(session, base_url, config_json, new_id)
-    clone_rate_policies(session, base_url, config_json, new_id)
-    clone_bot_categories(session, base_url, config_json, new_id)
-    clone_custom_rules(session, base_url, config_json, new_id)
-    clone_reputation_profiles(session, base_url, config_json, new_id)
-    clone_waf_group_actions(session, base_url, config_json, new_id)
-    clone_waf_rule_overrides(session, base_url, config_json, new_id)
-    clone_slow_post_protection(session, base_url, config_json, new_id)
+        for secPolicy in config_json["securityPolicies"]:
+            if secPolicy["name"] == "Security Policy Template":
+                print("Deleting Policy", sec_config_id, ver, secPolicy["name"], secPolicy["id"])
+                delPolicy(session, base_url, sec_config_id, ver, secPolicy["id"])
 
-    if args.rate_limits_file:
-        replacements = {
-            "sec_config_name": args.new_config_name,
-            "rate_controls_bypass_list": tf_data["client_lists"][0] if tf_data["client_lists"] else ""
-        }
-        apply_custom_rate_limits(session, base_url, new_id, args.rate_limits_file, replacements)
-
-    print("Configuration cloned successfully.")
 
 if __name__ == "__main__":
     main()
-
-{
-  "name": "${sec_config_name} Page View Requests",
-  "additionalMatchOptions": [
-    {
-      "positiveMatch": false,
-      "type": "NetworkListCondition",
-      "values": [
-        "${rate_controls_bypass_list}"
-      ]
-    },
-    {
-      "positiveMatch": false,
-      "type": "RequestMethodCondition",
-      "values": [
-        "POST"
-      ]
-    }
-  ],
-  "averageThreshold": 12,
-  "burstThreshold": 18,
-  "burstWindow": 5,
-  "counterType": "per_edge",
-  "clientIdentifier": "ip",
-  "description": "A popular brute force attack that consists of sending a large number of requests for base page, HTML page or XHR requests (usually non-cacheable).",
-  "fileExtensions": {
-    "positiveMatch": false,
-    "values": [
-      "aif", "aiff", "au", "avi", "bin", "cab", "cbr", "cct", "cdf", "class", "csv",
-      "dcr", "doc", "docx", "dtd", "ejs", "ejss", "eot", "eps", "exe", "flv", "gcf",
-      "gff", "gif", "grv", "hdml", "hdp", "hqx", "ico", "ini", "jar", "jp2", "jpeg",
-      "jpg", "js", "jxr", "mid", "midi", "mov", "mp3", "mp4", "nc", "ogv", "otc",
-      "otf", "pct", "pdf", "pict", "pls", "png", "pcx", "ppt", "pptx", "ps", "pws",
-      "svg", "svgz", "swa", "swf", "tif", "tiff", "ttc", "ttf", "txt", "vbs", "w32",
-      "wav", "wbmp", "wdp", "webm", "webp", "wml", "wmlc", "wmls", "wmlsc", "woff",
-      "woff2", "xls", "xlsx", "xsd", "zip"
-    ]
-  },
-  "matchType": "path",
-  "pathMatchType": "Custom",
-  "pathUriPositiveMatch": true,
-  "queryParameters": [
-    {
-      "name": "imagePath",
-      "positiveMatch": false,
-      "valueInRange": false,
-      "values": ["*"]
-    }
-  ],
-  "requestType": "ClientRequest",
-  "sameActionOnIpv6": false,
-  "type": "WAF"
-}
