@@ -1,25 +1,51 @@
+"""
+===================================================================================
+                         Akamai Security Configuration Cloner Script
+===================================================================================
+Script Name:
+    Akamai Security Configuration Cloner Script
+Description:
+    This script clones an existing Akamai AppSec configuration using the EdgeGrid API.
+    It reads configuration details from a Terraform-based SC-*.tf file (and optionally a PL-*.tf file), and:
+      - Authenticates using a .edgerc file and section
+      - Retrieves and exports the existing configuration
+      - Creates a new security configuration using the specified name
+      - Clones all relevant components into the new configuration:
+          • Match Targets
+          • Security Policies
+          • Client Lists
+          • Rate Policies
+          • Bot Categories
+          • Custom Rules
+          • Reputation Profile Actions
+          • WAF Group Tunings
+          • WAF Rule Overrides
+          • Slow POST Protection
+          • Custom Rate Limits (via rate_limits.json file)
+      - Supports dry-run mode to preview all changes without applying them
+
+Parameters:
+    --edgerc (required)           : Path to the .edgerc file for authentication
+    --section (required)          : Section name in the .edgerc file
+    --new_config_name (required) : Name of the new configuration to create
+    --sc_file (required)          : Path to SC-<name>.tf file defining configuration block
+    --pl_file (optional)          : Path to PL-<name>.tf file with policy IDs (optional)
+    --rate_limits_file (optional): Path to a rate_limits.json file with custom rate limit rules
+    --dry_run (optional)          : If specified, only print what would be cloned without applying it
+
+Usage:
+    python akamai-application-security.py --edgerc ~/.edgerc --section ELEVATED --new_config_name "ClonedAppSec" --sc_file SC-MyAppSec.tf --dry_run
+===================================================================================
+"""
+
 #!/usr/bin/env python3
+
 import argparse
 import json
 import configparser
 import re
 import requests
 from akamai.edgegrid import EdgeGridAuth
-
-"""
-This script clones an Akamai Application Security configuration via the EdgeGrid API.
-It creates a new security configuration with a specified name and duplicates the source configuration's match targets, security policies, custom rules, reputation profile settings, WAF protections (attack group actions and rule overrides), slow POST settings, rate policy definitions, and their assignments.
-Usage:
-    clone_appsec_config.py --edgerc <path> --section <section_name> --new_config_name <name> --sc_file <SC-file.tf> --pl_file <PL-file.tf> --rate_limits_file <rate_file.json> [--dry_run]
-Parameters:
-    --edgerc           Path to the .edgerc credentials file for Akamai API authentication.
-    --section          Section name within the .edgerc file to use for credentials.
-    --new_config_name  Name for the new cloned security configuration.
-    --sc_file          Path to the Terraform file (SC-*.tf) containing source config metadata (contractId, groupId, configId, etc).
-    --pl_file          Path to the Terraform file (PL-*.tf) containing source security policy details (policy IDs, names, prefixes).
-    --rate_limits_file Path to a file (JSON format) containing rate policy definitions exported from the source config.
-    --dry_run          If provided, the script will not make any changes and will only print the actions it would take and the associated API payloads.
-"""
 
 def load_edgerc(edgerc_path, section):
     '''Load Akamai EdgeGrid credentials from .edgerc file.'''
@@ -639,152 +665,4 @@ def main():
         print("Cloning complete. Review the new configuration and activate as needed.")
 
 if __name__ == '__main__':
-    main()
-
-
-
-"""
-===================================================================================
-                         Akamai Security Policy Cleanup Script
-===================================================================================
-Script Name:
-    Akamai Security Policy Cleanup Script
-Description:
-    This script deletes temporary match targets and security policies from an Akamai AppSec
-    configuration using the EdgeGrid API. It reads configuration details from a Terraform-based
-    SC-*.tf file and:
-      - Authenticates using a .edgerc file and section
-      - Retrieves the specified security configuration and version
-      - Deletes any match targets that use predefined dummy hostnames
-      - Deletes the policy named "Security Policy Template" if found
-
-Parameters:
-    --edgerc (optional)          : Path to the .edgerc file for authentication (default: ~/.edgerc)
-    --section (optional)         : Section name in the .edgerc file (default: default)
-    --dry-run (optional)         : If specified, only print what would be deleted without actually deleting it
-
-Usage:
-    python script.py --edgerc ~/.edgerc --section ELEVATED --dry-run
-===================================================================================
-"""
-
-#!/usr/bin/env python3
-
-import argparse
-import json
-import hcl
-import glob
-import sys
-import requests
-from akamai.edgegrid import EdgeGridAuth
-from akamai.edgegrid.edgeRc import EdgeRc
-
-
-def setup_session(edgerc_file, section_name):
-    try:
-        edgerc = EdgeRc(edgerc_file)
-        base_url = f"https://{edgerc.get(section_name, 'host')}/".rstrip('/') + '/'
-        session = requests.Session()
-        session.auth = EdgeGridAuth.from_edgerc(edgerc, section_name)
-        print("Session setup successful.")
-        return session, base_url
-    except Exception as e:
-        print(f"Failed to set up session: {e}")
-        sys.exit(1)
-
-
-def getTFConfigValues():
-    SC_file = glob.glob("SC-*.tf")
-    if not SC_file:
-        print("No SC-*.tf file found.")
-        sys.exit(1)
-
-    with open(SC_file[0], "r") as fp:
-        SC_data = hcl.load(fp)
-    return SC_data["module"]["akamai-application-security"]
-
-
-def getConfig(session, base_url, configuration_name):
-    path = f"{base_url}appsec/v1/configs"
-    result = session.get(path)
-
-    if result.status_code != 200:
-        print(result.status_code, result.reason, result.content)
-        sys.exit(1)
-
-    configurations = result.json()["configurations"]
-    for config in configurations:
-        if config["name"] == configuration_name:
-            return config["id"], config["latestVersion"]
-    return False, False
-
-
-def getSecConfig(session, base_url, configID, version):
-    url = f"{base_url}appsec/v1/export/configs/{configID}/versions/{version}"
-    result = session.get(url)
-
-    if result.status_code == 200:
-        return result.json()
-    else:
-        print(result.status_code, result.reason, result.content)
-        sys.exit(1)
-
-
-def delMatchTarget(session, base_url, configID, version, targetId):
-    url = f"{base_url}appsec/v1/configs/{configID}/versions/{version}/match-targets/{targetId}"
-    result = session.delete(url)
-
-    if result.status_code == 204:
-        return True
-    else:
-        print(result.status_code, result.reason, result.content)
-        sys.exit(1)
-
-
-def delPolicy(session, base_url, configID, version, policyID):
-    url = f"{base_url}appsec/v1/configs/{configID}/versions/{version}/security-policies/{policyID}"
-    result = session.delete(url)
-
-    if result.status_code == 204:
-        return True
-    else:
-        print(result.status_code, result.reason, result.content)
-        sys.exit(1)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Delete temporary match targets and policies from Akamai config")
-    parser.add_argument("--edgerc", default="~/.edgerc", help="Path to .edgerc file")
-    parser.add_argument("--section", default="default", help="Section name in .edgerc file")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would be deleted without making changes")
-    args = parser.parse_args()
-
-    config = getTFConfigValues()
-    session, base_url = setup_session(args.edgerc, config.get("edgerc_config_section", args.section))
-    sec_config_id, ver = getConfig(session, base_url, config["configuration_name"])
-
-    if sec_config_id:
-        config_json = getSecConfig(session, base_url, sec_config_id, ver)
-
-        for websiteTarget in config_json["matchTargets"]["websiteTargets"]:
-            if any(dummy in websiteTarget.get("hostnames", []) for dummy in [
-                "dummy.hsbsctesting.com", "dummy-apac.hostname", "dummy-apac-cn.hostname",
-                "dummy-emea.hostname", "dummy-latam.hostname", "dummy-amer.hostname"]):
-                print("[MATCH TARGET] Found:", websiteTarget["hostnames"])
-                if args.dry_run:
-                    print("[DRY-RUN] Would delete match target:", websiteTarget["id"])
-                else:
-                    print("Deleting Match-target", sec_config_id, ver, websiteTarget["id"], websiteTarget["hostnames"])
-                    delMatchTarget(session, base_url, sec_config_id, ver, websiteTarget["id"])
-
-        for secPolicy in config_json["securityPolicies"]:
-            if secPolicy["name"] == "Security Policy Template":
-                if args.dry_run:
-                    print("[DRY-RUN] Would delete policy:", secPolicy["name"], secPolicy["id"])
-                else:
-                    print("Deleting Policy", sec_config_id, ver, secPolicy["name"], secPolicy["id"])
-                    delPolicy(session, base_url, sec_config_id, ver, secPolicy["id"])
-
-
-if __name__ == "__main__":
     main()
