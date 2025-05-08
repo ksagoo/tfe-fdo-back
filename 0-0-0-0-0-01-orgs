@@ -1,9 +1,11 @@
+#!/usr/bin/env python3
+
 """
 ===================================================================================
-                         Akamai Security Configuration Cloner Script
+                     Akamai Application Security Configuration Create and Import Script
 ===================================================================================
 Script Name:
-    Akamai Security Configuration Cloner Script
+    akamai-create-and-import-sc.py
 Description:
     This script clones an existing Akamai AppSec configuration using the EdgeGrid API.
     It reads configuration details from a Terraform-based SC-*.tf file (and optionally a PL-*.tf file), and:
@@ -34,553 +36,517 @@ Parameters:
     --dry_run (optional)          : If specified, only print what would be cloned without applying it
 
 Usage:
-    python akamai-application-security.py --edgerc ~/.edgerc --section ELEVATED --new_config_name "ClonedAppSec" --sc_file SC-MyAppSec.tf --dry_run
+    python akamai-create-and-import-sc.py --edgerc ~/.edgerc --section ELEVATED \
+        --new_config_name "ClonedAppSec" --sc_file SC-MyAppSec.tf --pl_file PL-MyAppSec.tf --dry_run
 ===================================================================================
 """
-
-#!/usr/bin/env python3
 
 import argparse
 import json
 import configparser
 import re
+import os
 import requests
 from akamai.edgegrid import EdgeGridAuth
 
 def load_edgerc(edgerc_path, section):
-    '''Load Akamai EdgeGrid credentials from .edgerc file.'''
-    config = configparser.ConfigParser()
-    config.read(edgerc_path)
-    if section not in config:
-        raise ValueError(f"Section '{section}' not found in {edgerc_path}")
-    sect = config[section]
-    host = sect.get('host')
-    client_token = sect.get('client_token')
-    client_secret = sect.get('client_secret')
-    access_token = sect.get('access_token')
-    if not host or not client_token or not client_secret or not access_token:
-        raise ValueError(f"Missing required credentials in section '{section}'")
-    return host, client_token, client_secret, access_token
+    """Load Akamai EdgeGrid credentials from .edgerc file."""
+    try:
+        config = configparser.ConfigParser()
+        config.read(edgerc_path)
+        if section not in config:
+            raise ValueError(f"Section '{section}' not found in {edgerc_path}")
+        sect = config[section]
+        host = sect.get('host')
+        client_token = sect.get('client_token')
+        client_secret = sect.get('client_secret')
+        access_token = sect.get('access_token')
+        if not host or not client_token or not client_secret or not access_token:
+            raise ValueError(f"Missing required credentials in section '{section}'")
+        return host, client_token, client_secret, access_token
+    except Exception as e:
+        raise RuntimeError(f"Failed to load .edgerc credentials: {e}")
 
-def parse_tf_files(sc_file_path, pl_file_path):
-    '''Parse the Terraform files for config and policy metadata.'''
-    with open(sc_file_path, 'r') as f:
-        sc_text = f.read()
-    with open(pl_file_path, 'r') as f:
-        pl_text = f.read()
-    # Extract needed values from SC file
-    contract_id_match = re.search(r'contract_id\s*=\s*"?([^"\n]+)"?', sc_text)
-    group_id_match   = re.search(r'group_id\s*=\s*"?([^"\n]+)"?', sc_text)
-    config_id_match  = re.search(r'config_id\s*=\s*"?([^"\n]+)"?', sc_text)
-    version_match    = re.search(r'latest_version\s*=\s*"?([^"\n]+)"?', sc_text)
-    if not (contract_id_match and group_id_match and config_id_match):
-        raise ValueError("Failed to parse SC file for contract_id, group_id, or config_id")
-    contract_id = contract_id_match.group(1).strip()
-    group_id = group_id_match.group(1).strip()
-    # group_id might be numeric in quotes or not, ensure it's numeric string for API
-    group_id = group_id.strip('"')
-    config_id = config_id_match.group(1).strip()
-    config_id = config_id.strip('"')
-    # Cast numeric ids to int if they appear numeric
-    if config_id.isdigit():
-        config_id = int(config_id)
-    if group_id.isdigit():
-        group_id = int(group_id)
-    # Use provided latest_version or default to 1 if not found
-    if version_match:
-        src_version = version_match.group(1).strip().strip('"')
-        src_version = int(src_version) if src_version.isdigit() else src_version
-    else:
-        src_version = None
-    # Extract policies from PL file
-    policy_ids = re.findall(r'security_policy_id\s*=\s*"([^"]+)"', pl_text)
-    policy_names = re.findall(r'security_policy_name\s*=\s*"([^"]+)"', pl_text)
-    policy_prefixes = re.findall(r'security_policy_prefix\s*=\s*"([^"]+)"', pl_text)
-    policies = []
-    for pid, pname, ppre in zip(policy_ids, policy_names, policy_prefixes):
-        policies.append({
-            "id": pid,
-            "name": pname,
-            "prefix": ppre
-        })
-    if not policies:
-        raise ValueError("No security policies found in PL file.")
-    return contract_id, group_id, config_id, src_version, policies
+def parse_tf_files(sc_file_path, pl_file_path=None):
+    """Parse the Terraform SC and PL files to extract config and policy metadata."""
+    try:
+        with open(sc_file_path, 'r') as f:
+            sc_text = f.read()
 
-def clone_match_targets(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run):
-    '''Clone match targets from source config to new config.'''
-    url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/match-targets"
-    resp = session.get(url)
-    resp.raise_for_status()
-    match_targets = resp.json().get("matchTargets", [])
-    for mt in match_targets:
-        # Prepare payload for new match target
-        new_mt = mt.copy()
-        # Remove identifying or read-only fields
-        new_mt.pop("matchTargetId", None)
-        new_mt.pop("configurationId", None)
-        new_mt.pop("configId", None)
-        new_mt.pop("version", None)
-        # Replace security policy reference with new policy id
-        orig_pol_id = mt.get("securityPolicyId")
-        if orig_pol_id in policy_map:
-            new_mt["securityPolicyId"] = policy_map[orig_pol_id]
-        else:
-            # If not found, skip or warn
-            print(f"Warning: original policy {orig_pol_id} not found in policy map for match target")
-            continue
-        if dry_run:
-            print(f"Dry-run: Would create match target in new config {dest_config_id} (version {dest_version}) with payload:")
-            print(json.dumps(new_mt, indent=2))
-        else:
-            tgt_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/match-targets"
-            r = session.post(tgt_url, json=new_mt)
-            if r.status_code not in (200, 201):
-                print(f"Error cloning match target: {r.status_code} - {r.text}")
-            else:
-                print(f"Cloned match target for policy {new_mt['securityPolicyId']} to new config.")
+        contract_id = re.search(r'contract_id\s*=\s*"([^"]+)"', sc_text)
+        group_id = re.search(r'group_id\s*=\s*"([^"]+)"', sc_text)
+        config_id = re.search(r'config_id\s*=\s*"([^"]+)"', sc_text)
+        version = re.search(r'latest_version\s*=\s*"([^"]+)"', sc_text)
 
-def clone_security_policies(session, host, src_config_id, src_version, dest_config_id, dest_version, policies, dry_run):
-    '''Clone security policies from source config to new config. Returns a mapping of original policy ID to new policy ID.'''
+        if not (contract_id and group_id and config_id):
+            raise ValueError("SC file must include contract_id, group_id, and config_id")
+
+        contract_id = contract_id.group(1)
+        group_id = group_id.group(1)
+        config_id = int(config_id.group(1))
+        src_version = int(version.group(1)) if version else None
+
+        policies = []
+        if pl_file_path:
+            with open(pl_file_path, 'r') as f:
+                pl_text = f.read()
+            ids = re.findall(r'security_policy_id\s*=\s*"([^"]+)"', pl_text)
+            names = re.findall(r'security_policy_name\s*=\s*"([^"]+)"', pl_text)
+            prefixes = re.findall(r'security_policy_prefix\s*=\s*"([^"]+)"', pl_text)
+            for pid, name, prefix in zip(ids, names, prefixes):
+                policies.append({"id": pid, "name": name, "prefix": prefix})
+        return contract_id, group_id, config_id, src_version, policies
+    except Exception as e:
+        raise RuntimeError(f"Error parsing Terraform files: {e}")
+
+def clone_security_policies(session, host, src_config_id, src_version, dest_config_id, dest_version, policies, dry_run, summary):
+    """Clone security policies from source config to new config."""
     policy_map = {}
-    for pol in policies:
-        payload = {
-            "securityPolicyName": pol["name"],
-            "securityPolicyPrefix": pol["prefix"],
-            # Create with default security settings
-            "defaultSettings": True
-        }
-        if dry_run:
-            print(f"Dry-run: Would create security policy in config {dest_config_id} with payload:")
-            print(json.dumps(payload, indent=2))
-            # Assign a placeholder new policy ID for mapping (for use in further dry-run steps)
-            placeholder_id = f"{pol['prefix']}_NEW"
-            policy_map[pol["id"]] = placeholder_id
-        else:
-            url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies"
-            r = session.post(url, json=payload)
-            if r.status_code not in (200, 201):
-                print(f"Error creating security policy '{pol['name']}': {r.status_code} - {r.text}")
-                continue
-            new_policy = r.json()
-            new_policy_id = new_policy.get("securityPolicyId")
-            policy_map[pol["id"]] = new_policy_id
-            print(f"Created new security policy '{pol['name']}' (new ID: {new_policy_id})")
+    try:
+        for pol in policies:
+            payload = {
+                "securityPolicyName": pol["name"],
+                "securityPolicyPrefix": pol["prefix"],
+                "defaultSettings": True
+            }
+            if dry_run:
+                print(f"Dry-run: Would create security policy '{pol['name']}' with payload:")
+                print(json.dumps(payload, indent=2))
+                policy_map[pol["id"]] = f"{pol['prefix']}_NEW"
+            else:
+                url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies"
+                resp = session.post(url, json=payload)
+                if resp.status_code not in (200, 201):
+                    print(f"Error creating policy {pol['name']}: {resp.status_code} - {resp.text}")
+                    continue
+                new_policy_id = resp.json().get("securityPolicyId")
+                policy_map[pol["id"]] = new_policy_id
+                summary["security_policies"] += 1
+                print(f"Created new security policy '{pol['name']}' (ID: {new_policy_id})")
+    except Exception as e:
+        print(f"[ERROR] Exception in clone_security_policies: {e}")
     return policy_map
 
-def clone_client_lists(session, host, src_config_id, src_version, contract_id, group_id, dry_run):
-    '''Clone any client (network) lists referenced in the source configuration to the new configuration. Returns a mapping of original list ID to new list ID.'''
+def clone_client_lists(session, host, src_config_id, src_version, contract_id, group_id, dry_run, summary):
+    """Clone client (network) lists referenced in the source configuration."""
     client_list_map = {}
-    # Get all client lists (network lists) for the account (or group)
-    lists_url = f"https://{host}/client-list/v1/lists?contractId={contract_id}&groupId={group_id}"
-    resp = session.get(lists_url)
-    resp.raise_for_status()
-    all_lists = resp.json().get("lists", [])
-    # Find list IDs referenced in source config's custom rules or rate policies conditions
-    referenced_list_ids = set()
-    # Check custom rules for network list references
-    cr_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/custom-rules"
-    cr_resp = session.get(cr_url)
-    cr_resp.raise_for_status()
-    custom_rules = cr_resp.json().get("customRules", [])
-    for rule in custom_rules:
-        rule_json = json.dumps(rule)
-        if "listId" in rule_json or "networkListId" in rule_json:
-            try:
-                rule_dict = rule if isinstance(rule, dict) else json.loads(rule_json)
-            except:
-                rule_dict = None
-            if rule_dict:
-                def find_list_ids(obj):
-                    if isinstance(obj, dict):
-                        for k, v in obj.items():
-                            if k.lower() in ("listid", "networklistid"):
-                                referenced_list_ids.add(str(v))
-                            else:
-                                find_list_ids(v)
-                    elif isinstance(obj, list):
-                        for i in obj:
-                            find_list_ids(i)
-                find_list_ids(rule_dict)
-    # Check rate policy conditions for network lists
-    rp_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/rate-policies"
-    rp_resp = session.get(rp_url)
-    if rp_resp.status_code == 200:
-        rate_policies = rp_resp.json().get("ratePolicies", [])
-        for rp in rate_policies:
-            rp_json = json.dumps(rp)
-            if "listId" in rp_json or "networkListId" in rp_json:
-                try:
-                    rp_dict = rp if isinstance(rp, dict) else json.loads(rp_json)
-                except:
-                    rp_dict = None
-                if rp_dict:
-                    def find_list_ids(obj):
-                        if isinstance(obj, dict):
-                            for k, v in obj.items():
-                                if k.lower() in ("listid", "networklistid"):
-                                    referenced_list_ids.add(str(v))
-                                else:
-                                    find_list_ids(v)
-                        elif isinstance(obj, list):
-                            for i in obj:
-                                find_list_ids(i)
-                    find_list_ids(rp_dict)
-    # Clone each referenced list
-    for orig_list_id in referenced_list_ids:
-        orig_list = None
-        for lst in all_lists:
-            if str(lst.get("listId")) == str(orig_list_id) or str(lst.get("uniqueId", "")) == str(orig_list_id):
-                orig_list = lst
-                break
-        if not orig_list:
-            continue
-        new_list_payload = {
-            "name": orig_list.get("name"),
-            "type": orig_list.get("type"),
-            "contractId": contract_id,
-            "groupId": group_id,
-            "description": orig_list.get("description", ""),
-            "tags": orig_list.get("tags", []),
-            "items": []
-        }
-        # Retrieve items of the list if not present in summary
-        items = orig_list.get("items")
-        if items is None:
-            items_url = f"https://{host}/client-list/v1/lists/{orig_list_id}/items"
-            items_resp = session.get(items_url)
-            if items_resp.status_code == 200:
-                items_data = items_resp.json().get("list", {}).get("items") or items_resp.json().get("items")
-                if items_data is not None:
-                    items = items_data
-        if items:
-            for it in items:
-                entry = {"value": it.get("value")}
-                if it.get("description") is not None:
-                    entry["description"] = it.get("description")
-                if it.get("expirationDate") is not None:
-                    entry["expirationDate"] = it.get("expirationDate")
-                if it.get("tags") is not None:
-                    entry["tags"] = it.get("tags")
-                new_list_payload["items"].append(entry)
-        if dry_run:
-            print(f"Dry-run: Would create client list '{new_list_payload['name']}' (type {new_list_payload['type']}) with payload:")
-            print(json.dumps(new_list_payload, indent=2))
-            client_list_map[str(orig_list_id)] = "NEW_LIST_ID"
-        else:
-            cl_url = f"https://{host}/client-list/v1/lists"
-            r = session.post(cl_url, json=new_list_payload)
-            if r.status_code not in (200, 201):
-                print(f"Error creating client list {orig_list_id}: {r.status_code} - {r.text}")
+    try:
+        # Fetch all network lists available in the destination
+        lists_url = f"https://{host}/client-list/v1/lists?contractId={contract_id}&groupId={group_id}"
+        resp = session.get(lists_url)
+        resp.raise_for_status()
+        all_lists = resp.json().get("lists", [])
+
+        # Identify referenced list IDs from custom rules
+        referenced_list_ids = set()
+        cr_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/custom-rules"
+        cr_resp = session.get(cr_url)
+        if cr_resp.status_code == 200:
+            for rule in cr_resp.json().get("customRules", []):
+                matches = re.findall(r'"(listId|networkListId)"\s*:\s*"([^"]+)"', json.dumps(rule))
+                for _, list_id in matches:
+                    referenced_list_ids.add(list_id)
+
+        # Also check for network lists in rate policies
+        rp_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/rate-policies"
+        rp_resp = session.get(rp_url)
+        if rp_resp.status_code == 200:
+            for rp in rp_resp.json().get("ratePolicies", []):
+                matches = re.findall(r'"(listId|networkListId)"\s*:\s*"([^"]+)"', json.dumps(rp))
+                for _, list_id in matches:
+                    referenced_list_ids.add(list_id)
+
+        for old_id in referenced_list_ids:
+            orig = next(
+                (l for l in all_lists if str(l.get("listId")) == old_id or str(l.get("uniqueId")) == old_id),
+                None
+            )
+
+            if not orig:
+                print(f"Warning: Referenced network list {old_id} not found.")
+                continue
+
+            # Check if a list with the same name and type already exists
+            existing = next(
+                (l for l in all_lists if l.get("name") == orig.get("name") and l.get("type") == orig.get("type")),
+                None
+            )
+            if existing:
+                print(f"Info: Network list '{orig.get('name')}' already exists. Skipping clone.")
+                client_list_map[old_id] = existing.get("uniqueId") or existing.get("listId")
+                continue
+
+            # Prepare list creation payload
+            payload = {
+                "name": orig.get("name"),
+                "type": orig.get("type"),
+                "contractId": contract_id,
+                "groupId": group_id,
+                "description": orig.get("description", ""),
+                "tags": orig.get("tags", []),
+                "items": []
+            }
+
+            items = orig.get("items")
+            if items is None:
+                items_url = f"https://{host}/client-list/v1/lists/{old_id}/items"
+                items_resp = session.get(items_url)
+                if items_resp.status_code == 200:
+                    items = items_resp.json().get("items", [])
+
+            for item in items or []:
+                entry = {"value": item.get("value")}
+                if item.get("description"):
+                    entry["description"] = item["description"]
+                if item.get("expirationDate"):
+                    entry["expirationDate"] = item["expirationDate"]
+                if item.get("tags"):
+                    entry["tags"] = item["tags"]
+                payload["items"].append(entry)
+
+            if dry_run:
+                print(f"Dry-run: Would create network list '{payload['name']}' with:")
+                print(json.dumps(payload, indent=2))
+                client_list_map[old_id] = f"NEW_LIST_{old_id}"
+                summary["client_lists"] += 1
             else:
-                new_list = r.json()
-                new_list_id = new_list.get("uniqueId") or new_list.get("listId")
-                client_list_map[str(orig_list_id)] = str(new_list_id)
-                print(f"Cloned client list '{new_list_payload['name']}' (new ID: {new_list_id})")
+                create_url = f"https://{host}/client-list/v1/lists"
+                post_resp = session.post(create_url, json=payload)
+                if post_resp.status_code in (200, 201):
+                    new_id = post_resp.json().get("uniqueId") or post_resp.json().get("listId")
+                    client_list_map[old_id] = new_id
+                    summary["client_lists"] += 1
+                    print(f"Cloned client list '{payload['name']}' (ID: {new_id})")
+                else:
+                    print(f"Error cloning list {old_id}: {post_resp.status_code} - {post_resp.text}")
+    except Exception as e:
+        print(f"[ERROR] Exception in clone_client_lists: {e}")
     return client_list_map
 
-def clone_custom_rules(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, client_list_map, dry_run):
-    '''Clone custom security rules from source to new config. Returns a mapping of original custom rule ID to new custom rule ID.'''
+def clone_custom_rules(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, client_list_map, dry_run, summary):
+    """Clone custom rules from source to destination config."""
     rule_map = {}
-    url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/custom-rules"
-    resp = session.get(url)
-    resp.raise_for_status()
-    custom_rules = resp.json().get("customRules", [])
-    # Get custom rule actions in source
-    actions_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/custom-rules/actions"
-    actions_resp = session.get(actions_url)
-    custom_rule_actions = actions_resp.json().get("customRuleActions", []) if actions_resp.status_code == 200 else []
-    for rule in custom_rules:
-        rule_id = rule.get("id") or rule.get("customRuleId")
-        new_rule_payload = {
-            "name": rule.get("name"),
-            "description": rule.get("description"),
-            "condition": rule.get("condition"),
-            "endpoint": rule.get("endpoint"),
-            "version": rule.get("version")
-        }
-        # Replace network list IDs in custom rule conditions
-        def replace_list_ids(obj):
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    if k.lower() in ("listid", "networklistid"):
-                        if str(v) in client_list_map:
-                            obj[k] = client_list_map[str(v)]
-                    else:
-                        replace_list_ids(v)
-            elif isinstance(obj, list):
-                for i in obj:
-                    replace_list_ids(i)
-        replace_list_ids(new_rule_payload)
-        if dry_run:
-            print(f"Dry-run: Would create custom rule '{new_rule_payload['name']}' with payload:")
-            print(json.dumps(new_rule_payload, indent=2))
-            new_rule_id = f"CR_{rule_id}_NEW"
-            rule_map[rule_id] = new_rule_id
-        else:
-            cr_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/custom-rules"
-            r = session.post(cr_url, json=new_rule_payload)
-            if r.status_code not in (200, 201):
-                print(f"Error creating custom rule '{new_rule_payload.get('name')}': {r.status_code} - {r.text}")
-                continue
-            new_rule = r.json()
-            new_rule_id = new_rule.get("id") or new_rule.get("customRuleId")
-            rule_map[rule_id] = new_rule_id
-            print(f"Created custom rule '{new_rule_payload['name']}' (new ID: {new_rule_id})")
-        # Assign custom rule to policies with correct action
-        related_actions = [act for act in custom_rule_actions if act.get("customRuleId") == rule_id]
-        for act in related_actions:
-            orig_policy_id = act.get("securityPolicyId")
-            action_mode = act.get("action")
-            if not action_mode or orig_policy_id not in policy_map:
-                continue
-            new_pol_id = policy_map[orig_policy_id]
-            if dry_run:
-                print(f"Dry-run: Would assign custom rule {new_rule_payload['name']} to policy {new_pol_id} with action '{action_mode}'")
-            else:
-                cra_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/custom-rules/{new_rule_id}"
-                payload = {"action": action_mode}
-                ar = session.put(cra_url, json=payload)
-                if ar.status_code not in (200, 204):
-                    print(f"Warning: Failed to set action for custom rule {new_rule_id} in policy {new_pol_id}: {ar.status_code} - {ar.text}")
-    return rule_map
-
-def clone_reputation_profiles(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run):
-    '''Clone client reputation profiles and their assignments from source to new config.'''
-    rep_profile_map = {}
-    list_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/reputation-profiles"
-    resp = session.get(list_url)
-    profiles = resp.json().get("reputationProfiles", []) if resp.status_code == 200 else []
-    for prof in profiles:
-        prof_id = prof.get("id") or prof.get("reputationProfileId")
-        prof_name = prof.get("name")
-        is_default = prof.get("isDefault", False) or (prof_name and prof_name.lower() == "default")
-        if is_default:
-            continue  # skip default profile creation
-        get_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/reputation-profiles/{prof_id}"
-        prof_detail = session.get(get_url).json() if not dry_run else prof
-        new_prof_payload = {
-            "name": prof_detail.get("name"),
-            "description": prof_detail.get("description", "")
-        }
-        for key, val in prof_detail.items():
-            if key in ("id", "reputationProfileId", "configId", "version", "name", "description"):
-                continue
-            new_prof_payload[key] = val
-        if dry_run:
-            print(f"Dry-run: Would create reputation profile '{new_prof_payload['name']}' with payload:")
-            print(json.dumps(new_prof_payload, indent=2))
-            rep_profile_map[prof_id] = f"NEW_REP_PROFILE_{prof_id}"
-        else:
-            create_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/reputation-profiles"
-            r = session.post(create_url, json=new_prof_payload)
-            if r.status_code not in (200, 201):
-                print(f"Error creating reputation profile '{new_prof_payload.get('name')}': {r.status_code} - {r.text}")
-                continue
-            new_prof = r.json()
-            new_prof_id = new_prof.get("id") or new_prof.get("reputationProfileId")
-            rep_profile_map[prof_id] = new_prof_id
-            print(f"Created reputation profile '{new_prof_payload['name']}' (new ID: {new_prof_id})")
-    # Clone reputation profile actions (assign profiles to policies with same actions)
-    actions_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/reputation-profiles/actions"
-    actions_resp = session.get(actions_url)
-    rep_actions = actions_resp.json().get("reputationProfileActions", []) if actions_resp.status_code == 200 else []
-    for act in rep_actions:
-        orig_prof_id = act.get("reputationProfileId")
-        orig_policy_id = act.get("securityPolicyId")
-        action_mode = act.get("action")
-        if orig_policy_id not in policy_map or not action_mode:
-            continue
-        # Determine new profile ID (handle default profile)
-        if orig_prof_id in rep_profile_map:
-            new_prof_id = rep_profile_map[orig_prof_id]
-        else:
-            # default profile case
-            new_profiles = session.get(f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/reputation-profiles").json().get("reputationProfiles", []) if not dry_run else []
-            new_prof_id = orig_prof_id
-            for np in new_profiles:
-                if np.get("isDefault") or (np.get("name", "").lower() == "default"):
-                    new_prof_id = np.get("id") or np.get("reputationProfileId")
-                    break
-        new_pol_id = policy_map[orig_policy_id]
-        if dry_run:
-            print(f"Dry-run: Would assign reputation profile {new_prof_id} to policy {new_pol_id} with action '{action_mode}'")
-        else:
-            rep_assign_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/reputation-profiles/{new_prof_id}"
-            payload = {"action": action_mode}
-            pr = session.put(rep_assign_url, json=payload)
-            if pr.status_code not in (200, 204):
-                print(f"Warning: Failed to set reputation profile action for profile {new_prof_id} on policy {new_pol_id}: {pr.status_code} - {pr.text}")
-
-def clone_bot_categories(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run):
-    '''Clone Bot Manager category actions and exceptions from source policies to new policies.'''
-    for orig_pol_id, new_pol_id in policy_map.items():
-        # Bot category actions
-        actions_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{orig_pol_id}/bot-category-actions"
-        resp = session.get(actions_url)
-        bot_actions = resp.json() if resp.status_code == 200 else None
-        if bot_actions is not None:
-            if dry_run:
-                print(f"Dry-run: Would set bot category actions for policy {new_pol_id} with the following configuration:")
-                print(json.dumps(bot_actions, indent=2))
-            else:
-                put_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/bot-category-actions"
-                r = session.put(put_url, json=bot_actions)
-                if r.status_code not in (200, 204):
-                    print(f"Warning: Failed to set bot category actions for policy {new_pol_id}: {r.status_code} - {r.text}")
-        # Bot category exceptions
-        exc_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{orig_pol_id}/bot-category-exceptions"
-        exc_resp = session.get(exc_url)
-        bot_exceptions = exc_resp.json() if exc_resp.status_code == 200 else None
-        if bot_exceptions is not None:
-            if dry_run:
-                print(f"Dry-run: Would set bot category exceptions for policy {new_pol_id} with the following configuration:")
-                print(json.dumps(bot_exceptions, indent=2))
-            else:
-                put_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/bot-category-exceptions"
-                pr = session.put(put_url, json=bot_exceptions)
-                if pr.status_code not in (200, 204):
-                    print(f"Warning: Failed to set bot category exceptions for policy {new_pol_id}: {pr.status_code} - {pr.text}")
-
-def clone_waf_group_actions(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run):
-    '''Clone WAF attack group action settings from source policies to new policies.'''
-    for orig_pol_id, new_pol_id in policy_map.items():
-        url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{orig_pol_id}/attack-groups"
+    try:
+        url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/custom-rules"
         resp = session.get(url)
         if resp.status_code != 200:
-            continue
-        attack_groups = resp.json().get("attackGroups", [])
-        for group in attack_groups:
-            group_id = group.get("attackGroupId") or group.get("id")
-            action_mode = group.get("action")
-            if action_mode is None:
-                continue
-            if dry_run:
-                print(f"Dry-run: Would set attack group {group_id} action to '{action_mode}' on new policy {new_pol_id}")
-            else:
-                put_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/attack-groups/{group_id}"
-                payload = {"action": action_mode}
-                r = session.put(put_url, json=payload)
-                if r.status_code not in (200, 204):
-                    print(f"Warning: Failed to set action for attack group {group_id} on policy {new_pol_id}: {r.status_code} - {r.text}")
+            print(f"Error fetching custom rules: {resp.status_code} - {resp.text}")
+            return rule_map
+        custom_rules = resp.json().get("customRules", [])
 
-def clone_waf_rule_overrides(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run):
-    '''Clone individual WAF rule overrides (actions or disablements) from source to new config.'''
-    for orig_pol_id, new_pol_id in policy_map.items():
-        # List evaluation (non-blocking) rules in source policy
-        eval_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{orig_pol_id}/evaluation-rules"
-        eval_resp = session.get(eval_url)
-        eval_rules = eval_resp.json().get("evaluationRules", []) if eval_resp.status_code == 200 else []
-        for rule in eval_rules:
-            rule_id = rule.get("ruleId") or rule.get("id")
-            action_mode = rule.get("action") or "alert"
-            if action_mode and action_mode.lower() != "deny":
+        actions_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/custom-rules/actions"
+        actions_resp = session.get(actions_url)
+        custom_rule_actions = actions_resp.json().get("customRuleActions", []) if actions_resp.status_code == 200 else []
+
+        for rule in custom_rules:
+            rule_id = rule.get("id") or rule.get("customRuleId")
+            if not rule_id:
+                continue
+
+            new_rule = {
+                "name": rule.get("name"),
+                "description": rule.get("description"),
+                "condition": rule.get("condition"),
+                "endpoint": rule.get("endpoint"),
+                "version": rule.get("version"),
+            }
+
+            def replace_ids(obj):
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        if isinstance(v, (dict, list)):
+                            replace_ids(v)
+                        elif k.lower() in ("listid", "networklistid") and str(v) in client_list_map:
+                            obj[k] = client_list_map[str(v)]
+                elif isinstance(obj, list):
+                    for item in obj:
+                        replace_ids(item)
+
+            replace_ids(new_rule)
+
+            if dry_run:
+                print(f"Dry-run: Would create custom rule '{new_rule['name']}' with:")
+                print(json.dumps(new_rule, indent=2))
+                new_rule_id = f"NEW_RULE_{rule_id}"
+            else:
+                cr_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/custom-rules"
+                r = session.post(cr_url, json=new_rule)
+                if r.status_code not in (200, 201):
+                    print(f"Error creating custom rule '{new_rule['name']}': {r.status_code} - {r.text}")
+                    continue
+                new_rule_id = r.json().get("id") or r.json().get("customRuleId")
+                summary["custom_rules"] += 1
+                print(f"Created custom rule '{new_rule['name']}' (ID: {new_rule_id})")
+
+            rule_map[rule_id] = new_rule_id
+
+            for action in [a for a in custom_rule_actions if a.get("customRuleId") == rule_id]:
+                orig_pol_id = action.get("securityPolicyId")
+                action_mode = action.get("action")
+                if not action_mode or orig_pol_id not in policy_map:
+                    continue
+                new_pol_id = policy_map[orig_pol_id]
+
                 if dry_run:
-                    print(f"Dry-run: Would set WAF rule {rule_id} action to '{action_mode}' on new policy {new_pol_id}")
+                    print(f"Dry-run: Would assign rule '{new_rule['name']}' to policy {new_pol_id} with action '{action_mode}'")
                 else:
-                    ra_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/rules/{rule_id}"
+                    assign_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/custom-rules/{new_rule_id}"
                     payload = {"action": action_mode}
-                    rr = session.put(ra_url, json=payload)
-                    if rr.status_code not in (200, 204):
-                        print(f"Warning: Failed to set action for rule {rule_id} on policy {new_pol_id}: {rr.status_code} - {rr.text}")
-        # Copy any rule exceptions for each attack group
-        ag_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{orig_pol_id}/attack-groups"
-        ag_resp = session.get(ag_url)
-        if ag_resp.status_code != 200:
-            continue
-        attack_groups = ag_resp.json().get("attackGroups", [])
-        for group in attack_groups:
-            group_id = group.get("attackGroupId") or group.get("id")
-            exc_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{orig_pol_id}/attack-groups/{group_id}/exceptions"
-            exc_resp = session.get(exc_url)
-            if exc_resp.status_code != 200:
+                    ar = session.put(assign_url, json=payload)
+                    if ar.status_code not in (200, 204):
+                        print(f"Warning: Failed to assign rule {new_rule_id} to policy {new_pol_id}: {ar.status_code} - {ar.text}")
+    except Exception as e:
+        print(f"[ERROR] Exception in clone_custom_rules: {e}")
+    return rule_map
+
+def clone_reputation_profiles(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run, summary):
+    """Clone reputation profile actions from source to destination configuration."""
+    try:
+        for old_policy_id, new_policy_id in policy_map.items():
+            url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{old_policy_id}/reputation-profiles"
+            resp = session.get(url)
+            if resp.status_code != 200:
+                print(f"Error fetching reputation profiles for policy {old_policy_id}: {resp.status_code} - {resp.text}")
                 continue
-            exceptions_data = exc_resp.json()
+            profiles = resp.json().get("reputationProfiles", [])
+            for profile in profiles:
+                if dry_run:
+                    print(f"Dry-run: Would assign reputation profile {profile['id']} to policy {new_policy_id}")
+                else:
+                    assign_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_policy_id}/reputation-profiles/{profile['id']}"
+                    payload = {"action": profile.get("action")}
+                    r = session.put(assign_url, json=payload)
+                    if r.status_code not in (200, 204):
+                        print(f"Error assigning reputation profile {profile['id']} to policy {new_policy_id}: {r.status_code} - {r.text}")
+                    else:
+                        summary["reputation_profiles"] += 1
+                        print(f"Assigned reputation profile {profile['id']} to policy {new_policy_id}")
+    except Exception as e:
+        print(f"[ERROR] Exception in clone_reputation_profiles: {e}")
+
+def clone_bot_categories(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run, summary):
+    """Clone bot category actions from source to destination configuration."""
+    try:
+        for old_policy_id, new_policy_id in policy_map.items():
+            url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{old_policy_id}/bot-manager-settings"
+            resp = session.get(url)
+            if resp.status_code != 200:
+                print(f"Error fetching bot settings for policy {old_policy_id}: {resp.status_code} - {resp.text}")
+                continue
+            settings = resp.json()
             if dry_run:
-                print(f"Dry-run: Would apply the following exceptions for attack group {group_id} on new policy {new_pol_id}:")
-                print(json.dumps(exceptions_data, indent=2))
+                print(f"Dry-run: Would update bot settings for policy {new_policy_id} with:")
+                print(json.dumps(settings, indent=2))
             else:
-                put_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/attack-groups/{group_id}/exceptions"
-                pr = session.put(put_url, json=exceptions_data)
-                if pr.status_code not in (200, 204):
-                    print(f"Warning: Failed to set exceptions for attack group {group_id} on policy {new_pol_id}: {pr.status_code} - {pr.text}")
+                update_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_policy_id}/bot-manager-settings"
+                r = session.put(update_url, json=settings)
+                if r.status_code not in (200, 204):
+                    print(f"Error updating bot settings for policy {new_policy_id}: {r.status_code} - {r.text}")
+                else:
+                    summary["bot_categories"] += 1
+                    print(f"Updated bot settings for policy {new_policy_id}")
+    except Exception as e:
+        print(f"[ERROR] Exception in clone_bot_categories: {e}")
 
-def clone_slow_post_protection(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run):
-    '''Clone slow POST protection settings from source to new config.'''
-    for orig_pol_id, new_pol_id in policy_map.items():
-        get_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{orig_pol_id}/slow-post"
-        resp = session.get(get_url)
-        if resp.status_code != 200:
-            continue
-        slow_post_settings = resp.json()
-        if dry_run:
-            print(f"Dry-run: Would set slow POST protection for policy {new_pol_id} with settings:")
-            print(json.dumps(slow_post_settings, indent=2))
-        else:
-            put_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/slow-post"
-            r = session.put(put_url, json=slow_post_settings)
-            if r.status_code not in (200, 204):
-                print(f"Warning: Failed to configure slow POST for policy {new_pol_id}: {r.status_code} - {r.text}")
-
-def clone_rate_policies(session, host, src_config_id, src_version, dest_config_id, dest_version, rate_file_data, dry_run):
-    '''Clone rate limit policies (definitions) from source to new config. Returns a mapping of original rate policy ID to new rate policy ID.'''
-    rate_policy_map = {}
-    if rate_file_data is not None:
-        rate_policies = rate_file_data.get("ratePolicies")
-        if rate_policies is None and isinstance(rate_file_data, list):
-            rate_policies = rate_file_data
-        if rate_policies is None:
-            rate_policies = rate_file_data
-    else:
-        rp_list_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/rate-policies"
-        rp_resp = session.get(rp_list_url)
-        rate_policies = rp_resp.json().get("ratePolicies", []) if rp_resp.status_code == 200 else []
-    for rp in rate_policies:
-        orig_rate_id = rp.get("id") or rp.get("ratePolicyId")
-        new_rp_payload = rp.copy()
-        for key in ["id", "ratePolicyId", "configId", "version"]:
-            new_rp_payload.pop(key, None)
-        if dry_run:
-            print(f"Dry-run: Would create rate policy '{rp.get('name')}' with payload:")
-            print(json.dumps(new_rp_payload, indent=2))
-            rate_policy_map[orig_rate_id] = f"NEW_RATE_{orig_rate_id}"
-        else:
-            create_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/rate-policies"
-            r = session.post(create_url, json=new_rp_payload)
-            if r.status_code not in (200, 201):
-                print(f"Error creating rate policy '{rp.get('name')}': {r.status_code} - {r.text}")
+def clone_waf_group_actions(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run, summary):
+    """Clone WAF group actions from source to destination configuration."""
+    try:
+        for old_policy_id, new_policy_id in policy_map.items():
+            url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{old_policy_id}/attack-groups"
+            resp = session.get(url)
+            if resp.status_code != 200:
+                print(f"Error fetching attack groups for policy {old_policy_id}: {resp.status_code} - {resp.text}")
                 continue
-            new_rp = r.json()
-            new_rate_id = new_rp.get("id") or new_rp.get("ratePolicyId")
-            rate_policy_map[orig_rate_id] = new_rate_id
-            print(f"Created rate policy '{rp.get('name')}' (new ID: {new_rate_id})")
+            groups = resp.json().get("attackGroups", [])
+            for group in groups:
+                if dry_run:
+                    print(f"Dry-run: Would assign action '{group['action']}' to attack group {group['group']}")
+                else:
+                    assign_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_policy_id}/attack-groups/{group['group']}"
+                    payload = {"action": group.get("action")}
+                    r = session.put(assign_url, json=payload)
+                    if r.status_code not in (200, 204):
+                        print(f"Error assigning action to attack group {group['group']} in policy {new_policy_id}: {r.status_code} - {r.text}")
+                    else:
+                        summary["waf_group_actions"] += 1
+                        print(f"Assigned action '{group['action']}' to attack group {group['group']} in policy {new_policy_id}")
+    except Exception as e:
+        print(f"[ERROR] Exception in clone_waf_group_actions: {e}")
+
+def clone_waf_rule_overrides(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run, summary):
+    """Clone WAF rule overrides from source to destination configuration."""
+    try:
+        for old_policy_id, new_policy_id in policy_map.items():
+            url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{old_policy_id}/rules"
+            resp = session.get(url)
+            if resp.status_code != 200:
+                print(f"Error fetching rules for policy {old_policy_id}: {resp.status_code} - {resp.text}")
+                continue
+            rules = resp.json().get("rules", [])
+            for rule in rules:
+                if dry_run:
+                    print(f"Dry-run: Would set action '{rule['action']}' for rule {rule['ruleId']}")
+                else:
+                    assign_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_policy_id}/rules/{rule['ruleId']}"
+                    payload = {"action": rule.get("action")}
+                    r = session.put(assign_url, json=payload)
+                    if r.status_code not in (200, 204):
+                        print(f"Error setting action for rule {rule['ruleId']} in policy {new_policy_id}: {r.status_code} - {r.text}")
+                    else:
+                        summary["waf_rule_overrides"] += 1
+                        print(f"Set action '{rule['action']}' for rule {rule['ruleId']} in policy {new_policy_id}")
+    except Exception as e:
+        print(f"[ERROR] Exception in clone_waf_rule_overrides: {e}")
+
+def clone_slow_post_protection(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run, summary):
+    """Clone slow POST protection settings from source to destination configuration."""
+    try:
+        for old_policy_id, new_policy_id in policy_map.items():
+            url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{old_policy_id}/slow-post"
+            resp = session.get(url)
+            if resp.status_code != 200:
+                print(f"Error fetching slow POST settings for policy {old_policy_id}: {resp.status_code} - {resp.text}")
+                continue
+            settings = resp.json()
+            if dry_run:
+                print(f"Dry-run: Would update slow POST settings for policy {new_policy_id} with:")
+                print(json.dumps(settings, indent=2))
+            else:
+                update_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_policy_id}/slow-post"
+                r = session.put(update_url, json=settings)
+                if r.status_code not in (200, 204):
+                    print(f"Error updating slow POST settings for policy {new_policy_id}: {r.status_code} - {r.text}")
+                else:
+                    summary["slow_post_protection"] += 1
+                    print(f"Updated slow POST settings for policy {new_policy_id}")
+    except Exception as e:
+        print(f"[ERROR] Exception in clone_slow_post_protection: {e}")
+
+def clone_rate_policies(session, host, src_config_id, src_version, dest_config_id, dest_version, rate_file_data, dry_run, summary):
+    """Clone rate limit policies from source to new config. Returns mapping of original to new rate policy IDs."""
+    rate_policy_map = {}
+
+    try:
+        if rate_file_data is not None:
+            rate_policies = rate_file_data.get("ratePolicies")
+            if rate_policies is None and isinstance(rate_file_data, list):
+                rate_policies = rate_file_data
+            if rate_policies is None:
+                rate_policies = rate_file_data
+        else:
+            rp_list_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/rate-policies"
+            rp_resp = session.get(rp_list_url)
+            rate_policies = rp_resp.json().get("ratePolicies", []) if rp_resp.status_code == 200 else []
+
+        for rp in rate_policies:
+            orig_rate_id = rp.get("id") or rp.get("ratePolicyId")
+            new_rp_payload = rp.copy()
+
+            for key in ["id", "ratePolicyId", "configId", "version"]:
+                new_rp_payload.pop(key, None)
+
+            if dry_run:
+                print(f"Dry-run: Would create rate policy '{rp.get('name')}' with payload:")
+                print(json.dumps(new_rp_payload, indent=2))
+                rate_policy_map[orig_rate_id] = f"NEW_RATE_{orig_rate_id}"
+            else:
+                create_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/rate-policies"
+                r = session.post(create_url, json=new_rp_payload)
+                if r.status_code not in (200, 201):
+                    print(f"Error creating rate policy '{rp.get('name')}': {r.status_code} - {r.text}")
+                    continue
+                new_rp = r.json()
+                new_rate_id = new_rp.get("id") or new_rp.get("ratePolicyId")
+                rate_policy_map[orig_rate_id] = new_rate_id
+                summary["rate_policies"] += 1
+                print(f"Created rate policy '{rp.get('name')}' (new ID: {new_rate_id})")
+    except Exception as e:
+        print(f"[ERROR] Failed to clone rate policies: {e}")
+
     return rate_policy_map
 
 def apply_custom_rate_limits(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, rate_policy_map, dry_run):
-    '''Assign the cloned rate limit policies to the new config's security policies with the same actions as in the source config.'''
-    for orig_pol_id, new_pol_id in policy_map.items():
-        for orig_rate_id, new_rate_id in rate_policy_map.items():
-            action_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{orig_pol_id}/rate-policies/{orig_rate_id}"
-            resp = session.get(action_url)
-            if resp.status_code != 200:
+    """Assign cloned rate policies to the destination configuration."""
+    try:
+        for orig_pol_id, new_pol_id in policy_map.items():
+            if not new_pol_id:
+                print(f"Warning: Skipping unknown policy ID: {orig_pol_id}")
                 continue
-            action_data = resp.json()
-            ipv4_action = action_data.get("ipv4Action")
-            ipv6_action = action_data.get("ipv6Action")
-            if (not ipv4_action or ipv4_action.lower() == "none") and (not ipv6_action or ipv6_action.lower() == "none"):
-                continue
-            if dry_run:
-                print(f"Dry-run: Would set rate policy {new_rate_id} action on policy {new_pol_id}: ipv4='{ipv4_action}', ipv6='{ipv6_action}'")
-            else:
-                put_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/rate-policies/{new_rate_id}"
-                payload = {}
-                if ipv4_action: payload["ipv4Action"] = ipv4_action
-                if ipv6_action: payload["ipv6Action"] = ipv6_action
-                if not payload:
+            for orig_rate_id, new_rate_id in rate_policy_map.items():
+                action_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/security-policies/{orig_pol_id}/rate-policies/{orig_rate_id}"
+                resp = session.get(action_url)
+                if resp.status_code != 200:
                     continue
-                pr = session.put(put_url, json=payload)
-                if pr.status_code not in (200, 204):
-                    print(f"Warning: Failed to set rate policy {new_rate_id} actions on policy {new_pol_id}: {pr.status_code} - {pr.text}")
+
+                action_data = resp.json()
+                ipv4_action = action_data.get("ipv4Action")
+                ipv6_action = action_data.get("ipv6Action")
+
+                if (not ipv4_action or ipv4_action.lower() == "none") and (not ipv6_action or ipv6_action.lower() == "none"):
+                    continue
+
+                if dry_run:
+                    print(f"Dry-run: Would set rate policy {new_rate_id} action on policy {new_pol_id}: "
+                          f"ipv4='{ipv4_action}', ipv6='{ipv6_action}'")
+                else:
+                    put_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/security-policies/{new_pol_id}/rate-policies/{new_rate_id}"
+                    payload = {}
+                    if ipv4_action:
+                        payload["ipv4Action"] = ipv4_action
+                    if ipv6_action:
+                        payload["ipv6Action"] = ipv6_action
+                    if not payload:
+                        continue
+                    pr = session.put(put_url, json=payload)
+                    if pr.status_code not in (200, 204):
+                        print(f"Warning: Failed to set rate policy {new_rate_id} actions on policy {new_pol_id}: "
+                              f"{pr.status_code} - {pr.text}")
+    except Exception as e:
+        print(f"[ERROR] Failed to apply custom rate limits: {e}")
+
+def clone_match_targets(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, dry_run, summary):
+    """Clone match targets from source config to new config, skipping duplicates."""
+    try:
+        existing_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/match-targets"
+        existing_resp = session.get(existing_url)
+        existing_mt_payloads = existing_resp.json().get("matchTargets", []) if existing_resp.status_code == 200 else []
+        existing_fingerprints = [json.dumps(mt, sort_keys=True) for mt in existing_mt_payloads]
+
+        src_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions/{src_version}/match-targets"
+        resp = session.get(src_url)
+        resp.raise_for_status()
+        match_targets = resp.json().get("matchTargets", [])
+
+        for mt in match_targets:
+            new_mt = mt.copy()
+            for field in ["matchTargetId", "configId", "configurationId", "version"]:
+                new_mt.pop(field, None)
+
+            orig_pol_id = mt.get("securityPolicyId")
+            if orig_pol_id not in policy_map:
+                print(f"Warning: Original policy {orig_pol_id} not found in policy map. Skipping match target.")
+                continue
+
+            new_mt["securityPolicyId"] = policy_map[orig_pol_id]
+
+            fingerprint = json.dumps(new_mt, sort_keys=True)
+            if fingerprint in existing_fingerprints:
+                print(f"Info: Match target for policy {new_mt['securityPolicyId']} already exists. Skipping duplicate.")
+                continue
+
+            if dry_run:
+                print(f"Dry-run: Would create match target for policy {new_mt['securityPolicyId']} with:")
+                print(json.dumps(new_mt, indent=2))
+            else:
+                tgt_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}/match-targets"
+                r = session.post(tgt_url, json=new_mt)
+                if r.status_code not in (200, 201):
+                    print(f"Error cloning match target: {r.status_code} - {r.text}")
+                else:
+                    summary["match_targets"] += 1
+                    print(f"Cloned match target for policy {new_mt['securityPolicyId']} into config {dest_config_id}")
+    except Exception as e:
+        print(f"[ERROR] Failed to clone match targets: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Clone an Akamai AppSec security configuration to a new configuration.")
@@ -588,81 +554,174 @@ def main():
     parser.add_argument('--section', required=True, help='Section in the .edgerc file to use')
     parser.add_argument('--new_config_name', required=True, help='Name for the new security configuration')
     parser.add_argument('--sc_file', required=True, help='Path to Terraform file for source Security Configuration (SC-*.tf)')
-    parser.add_argument('--pl_file', required=True, help='Path to Terraform file for source Security Policies (PL-*.tf)')
+    parser.add_argument('--pl_file', required=False, help='Path to Terraform file for source Security Policies (PL-*.tf)')
     parser.add_argument('--rate_limits_file', required=False, help='Path to JSON file for source Rate Policy definitions (if available)')
     parser.add_argument('--dry_run', action='store_true', help='Do not make any changes; only print intended actions')
     args = parser.parse_args()
-    # Load credentials
-    host, client_token, client_secret, access_token = load_edgerc(args.edgerc, args.section)
-    # Setup requests session with EdgeGridAuth
+
+    summary = {
+        "security_policies": 0,
+        "client_lists": 0,
+        "custom_rules": 0,
+        "reputation_profiles": 0,
+        "bot_categories": 0,
+        "waf_rule_overrides": 0,
+        "slow_post_protection": 0,
+        "rate_policies": 0,
+        "match_targets": 0,
+        "waf_group_actions": 0
+    }
+
+    try:
+        if not os.path.isfile(args.sc_file):
+            raise FileNotFoundError(f"SC file not found or unreadable: {args.sc_file}")
+        if args.pl_file and not os.path.isfile(args.pl_file):
+            raise FileNotFoundError(f"PL file specified but not found or unreadable: {args.pl_file}")
+        if args.rate_limits_file and not os.path.isfile(args.rate_limits_file):
+            raise FileNotFoundError(f"Rate limits file specified but not found or unreadable: {args.rate_limits_file}")
+    except Exception as e:
+        print(f"[ERROR] File validation failed: {e}")
+        return
+
+    try:
+        host, client_token, client_secret, access_token = load_edgerc(args.edgerc, args.section)
+    except Exception as e:
+        print(f"[ERROR] Failed to load credentials: {e}")
+        return
+
     session = requests.Session()
-    session.auth = EdgeGridAuth(client_token=client_token,
-                                client_secret=client_secret,
-                                access_token=access_token)
+    session.auth = EdgeGridAuth(client_token=client_token, client_secret=client_secret, access_token=access_token)
     session.headers.update({'Accept': 'application/json', 'Content-Type': 'application/json'})
-    # Parse the Terraform files for source data
-    contract_id, group_id, src_config_id, src_version, policies = parse_tf_files(args.sc_file, args.pl_file)
+
+    try:
+        contract_id, group_id, src_config_id, src_version, policies = parse_tf_files(args.sc_file, args.pl_file)
+    except Exception as e:
+        print(f"[ERROR] Failed to parse Terraform files: {e}")
+        return
+
     if src_version is None:
-        # Fetch latest version via API if not in file
-        ver_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions"
-        ver_resp = session.get(ver_url)
-        if ver_resp.status_code == 200:
-            versions = ver_resp.json().get("versions", [])
-            src_version = max(v.get("version", 0) for v in versions) if versions else 1
+        try:
+            ver_url = f"https://{host}/appsec/v1/configs/{src_config_id}/versions"
+            ver_resp = session.get(ver_url)
+            if ver_resp.status_code == 200:
+                versions = ver_resp.json().get("versions", [])
+                src_version = max(v.get("version", 0) for v in versions) if versions else 1
+            else:
+                src_version = 1
+        except Exception as e:
+            print(f"[ERROR] Failed to resolve source version: {e}")
+            return
+
+    try:
+        if args.dry_run:
+            print(f"Dry-run: Would create new security configuration '{args.new_config_name}' in contract {contract_id}, group {group_id}")
+            dest_config_id = "NEW_CONFIG_ID"
         else:
-            src_version = 1
-    # Create new configuration
-    dest_config_id = None
+            create_url = f"https://{host}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
+            payload = {"configName": args.new_config_name}
+            resp = session.post(create_url, json=payload)
+            if resp.status_code not in (200, 201):
+                raise RuntimeError(f"Failed to create new configuration: {resp.status_code} - {resp.text}")
+            resp_json = resp.json()
+            dest_config_id = resp_json.get("configId")
+            if not dest_config_id:
+                raise RuntimeError("Configuration creation succeeded but no configId returned.")
+            print(f"Created new configuration '{args.new_config_name}' with ID: {dest_config_id}")
+    except Exception as e:
+        print(f"[ERROR] Failed to create new configuration: {e}")
+        return
+
     dest_version = 1
-    if args.dry_run:
-        print(f"Dry-run: Would create new security configuration '{args.new_config_name}' in contract {contract_id}, group {group_id}")
-        dest_config_id = "NEW_CONFIG_ID"
-    else:
-        create_config_url = f"https://{host}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
-        config_payload = {"configName": args.new_config_name}
-        resp = session.post(create_config_url, json=config_payload)
-        if resp.status_code not in (200, 201):
-            raise RuntimeError(f"Failed to create new configuration: {resp.status_code} - {resp.text}")
-        new_config = resp.json()
-        dest_config_id = new_config.get("configId") or new_config.get("id")
-        dest_version = 1
-        print(f"Created new security configuration '{args.new_config_name}' (ID: {dest_config_id})")
-    # Clone components
-    # 1. Security policies
-    policy_map = clone_security_policies(session, host, src_config_id, src_version, dest_config_id, dest_version, policies, args.dry_run)
-    # 2. Client lists (network lists)
-    client_list_map = clone_client_lists(session, host, src_config_id, src_version, contract_id, group_id, args.dry_run)
-    # 3. Custom rules
-    rule_map = clone_custom_rules(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, client_list_map, args.dry_run)
-    # 4. Reputation profiles
-    clone_reputation_profiles(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run)
-    # 5. Bot categories (Bot Manager)
-    clone_bot_categories(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run)
-    # 6. WAF group actions
-    clone_waf_group_actions(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run)
-    # 7. WAF rule overrides
-    clone_waf_rule_overrides(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run)
-    # 8. Slow POST protection
-    clone_slow_post_protection(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run)
-    # 9. Rate policies
+
+    try:
+        ver_status_url = f"https://{host}/appsec/v1/configs/{dest_config_id}/versions/{dest_version}"
+        ver_resp = session.get(ver_status_url)
+        if ver_resp.status_code != 200:
+            raise RuntimeError(f"Failed to fetch destination version status: {ver_resp.status_code} - {ver_resp.text}")
+        version_data = ver_resp.json()
+        if version_data.get("status") != "editable":
+            raise RuntimeError(f"Destination config version {dest_version} is not editable. Aborting.")
+    except Exception as e:
+        print(f"[ERROR] Destination version check failed: {e}")
+        return
+
+    # Cloning components with exception handling
+    try:
+        policy_map = clone_security_policies(session, host, src_config_id, src_version, dest_config_id, dest_version, policies, args.dry_run, summary)
+    except Exception as e:
+        print(f"[ERROR] Failed to clone security policies: {e}")
+        policy_map = {}
+
+    try:
+        client_list_map = clone_client_lists(session, host, src_config_id, src_version, contract_id, group_id, args.dry_run, summary)
+    except Exception as e:
+        print(f"[ERROR] Failed to clone client lists: {e}")
+        client_list_map = {}
+
+    try:
+        rule_map = clone_custom_rules(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, client_list_map, args.dry_run, summary)
+    except Exception as e:
+        print(f"[ERROR] Failed to clone custom rules: {e}")
+        rule_map = {}
+
+    try:
+        clone_reputation_profiles(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run, summary)
+    except Exception as e:
+        print(f"[ERROR] Failed to clone reputation profiles: {e}")
+
+    try:
+        clone_bot_categories(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run, summary)
+    except Exception as e:
+        print(f"[ERROR] Failed to clone bot categories: {e}")
+
+    try:
+        clone_waf_group_actions(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run, summary)
+    except Exception as e:
+        print(f"[ERROR] Failed to clone WAF group actions: {e}")
+
+    try:
+        clone_waf_rule_overrides(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run, summary)
+    except Exception as e:
+        print(f"[ERROR] Failed to clone WAF rule overrides: {e}")
+
+    try:
+        clone_slow_post_protection(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run, summary)
+    except Exception as e:
+        print(f"[ERROR] Failed to clone slow POST protection: {e}")
+
     rate_file_data = None
     if args.rate_limits_file:
         try:
             with open(args.rate_limits_file, 'r') as rf:
-                rate_file_content = rf.read()
-                rate_file_data = json.loads(rate_file_content)
+                rate_file_data = json.load(rf)
         except Exception as e:
             print(f"Warning: Could not parse rate limits file: {e}")
-            rate_file_data = None
-    rate_policy_map = clone_rate_policies(session, host, src_config_id, src_version, dest_config_id, dest_version, rate_file_data, args.dry_run)
-    # 10. Rate policy actions
-    apply_custom_rate_limits(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, rate_policy_map, args.dry_run)
-    # 11. Match targets
-    clone_match_targets(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run)
-    if args.dry_run:
-        print("Dry-run complete. No changes were made.")
-    else:
-        print("Cloning complete. Review the new configuration and activate as needed.")
 
-if __name__ == '__main__':
+    try:
+        rate_policy_map = clone_rate_policies(session, host, src_config_id, src_version, dest_config_id, dest_version, rate_file_data, args.dry_run, summary)
+    except Exception as e:
+        print(f"[ERROR] Failed to clone rate policies: {e}")
+        rate_policy_map = {}
+
+    try:
+        apply_custom_rate_limits(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, rate_policy_map, args.dry_run)
+    except Exception as e:
+        print(f"[ERROR] Failed to apply custom rate limits: {e}")
+
+    try:
+        clone_match_targets(session, host, src_config_id, src_version, dest_config_id, dest_version, policy_map, args.dry_run, summary)
+    except Exception as e:
+        print(f"[ERROR] Failed to clone match targets: {e}")
+
+    print("\n======================= CLONE SUMMARY =======================")
+    for k, v in summary.items():
+        print(f"{k.replace('_', ' ').capitalize():<30}: {v}")
+    print("=============================================================")
+
+    if args.dry_run:
+        print("\nDry-run complete. No changes were made.")
+    else:
+        print("\nCloning complete. Please review and activate the new configuration if appropriate.")
+
+if __name__ == "__main__":
     main()
