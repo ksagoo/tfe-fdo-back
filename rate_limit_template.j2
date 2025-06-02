@@ -1,0 +1,55 @@
+[
+{% for rl in rate_limits %}
+  {
+    "name": "{{ rl.name }}",
+    "description": "{{ rl.description }}",
+    "threshold": {{ rl.threshold }},
+    "burstWindow": {{ rl.burstWindow }},
+    "clientIdentifier": "{{ rl.clientIdentifier }}",
+    "matchType": "{{ rl.matchType }}",
+    "pathMatchType": "{{ rl.pathMatchType }}",
+    "requestType": "{{ rl.requestType }}",
+    "type": "{{ rl.type }}",
+    "sameActionOnIPv6": {{ rl.sameActionOnIPv6 | lower }},
+    "useXForwardForHeaders": {{ rl.useXForwardForHeaders | lower }},
+    "action": "{{ rl.action }}"{% if rl.get("pathUriPositiveMatch") is not none %},
+    "pathUriPositiveMatch": {{ rl.pathUriPositiveMatch | lower }}{% endif %},
+    "criteria": [
+{% for crit in rl.criteria %}
+      {
+        "type": "{{ crit.type }}"{% if crit.get("value") %},
+        "value": "{{ crit.value }}"{% endif %}{% if crit.get("values") %},
+        "values": [
+{% for val in crit.get("values") %}
+          "{{ val }}"{{ "," if not loop.last }}
+{% endfor %}
+        ]{% endif %}
+      }{{ "," if not loop.last }}
+{% endfor %}
+    ]{% if rl.get("additionalMatchOptions") %},
+    "additionalMatchOptions": [
+{% for add in rl.additionalMatchOptions %}
+      {
+        "type": "{{ add.type }}",
+        "positiveMatch": {{ add.positiveMatch | lower }}{% if add.get("value") %},
+        "value": [
+{% for val in add.get("value") %}
+          "{{ val }}"{{ "," if not loop.last }}
+{% endfor %}
+        ]{% endif %}{% if add.get("values") %},
+        "values": [
+{% for val in add.get("values") %}
+          "{{ val }}"{{ "," if not loop.last }}
+{% endfor %}
+        ]{% endif %}
+      }{{ "," if not loop.last }}
+{% endfor %}
+    ]{% endif %},
+    "apply_to": [
+{% for pol in rl.apply_to %}
+      "{{ pol }}"{{ "," if not loop.last }}
+{% endfor %}
+    ]
+  }{{ "," if not loop.last }}
+{% endfor %}
+]
