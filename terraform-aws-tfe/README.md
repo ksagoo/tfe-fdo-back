@@ -135,7 +135,3 @@ python akamai_appsec_pipeline.py \
 ```
 
 This generates all templates and simulates import without pushing to Akamai.
-
-## License
-
-Internal use only. Contact Kuldeep Sagoo for more information.
