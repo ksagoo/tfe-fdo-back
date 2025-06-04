@@ -123,6 +123,28 @@ def post_config_items(session, base_url, config_id, version, file_path, endpoint
             print(f"✗ Failed to create {label}: {item.get('name', item.get('id', 'unnamed'))}")
             print(r.status_code, r.text)
 
+def create_default_security_policies(session, base_url, config_id, version, access_group):
+    policy_names = [
+        f"PL-{access_group}-Prod",
+        f"PL-{access_group}-NonProd"
+    ]
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+
+    for name in policy_names:
+        payload = {
+            "name": name,
+            "policyPrefix": name.lower().replace("pl-", "defpol-").replace("_", "-")[:20],  # Ensures < 20 chars
+            "policyDescription": f"Default policy created for {name}"
+        }
+        try:
+            resp = session.post(url, json=payload)
+            if resp.status_code in [200, 201]:
+                print(f"[✓] Created default policy: {name}")
+            else:
+                print(f"[✗] Failed to create policy '{name}': {resp.status_code} {resp.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception while creating policy '{name}': {e}")
+
 def create_appsec_config(session, base_url, config_name, contract_id, group_id, hostnames, description):
     url = f"{base_url}/appsec/v1/configs"
     payload = {
@@ -156,36 +178,6 @@ def main():
     region = REGION_SETTINGS[account]
     contract_id = region["contract_id"]
     group_id = region["group_id"]
-
-    meta_path = os.path.join(args.output_dir, "config_metadata.json")
-    if not os.path.exists(meta_path):
-        print(f"[FATAL] config_metadata.json not found at {meta_path}")
-        sys.exit(1)
-
-    with open(meta_path, "r") as f:
-        metadata = json.load(f)
-
-    config_name = metadata["configuration_name"]
-    hostnames = metadata.get("hostnames", [])
-    description = metadata.get("description", "Created by onboarding automation.")
-
-    if not hostnames:
-        raise ValueError("Hostnames list in config_matadata.json cannot be emopty.")
-    
-    try:
-        config_id, version = get_config_id(session, base_url, config_name)
-    except ValueError:
-        print(f"[INFO] Configuration '{config_name}' not found. Attempting to create it...")
-        try:
-            config_id, version = create_appsec_config(
-                session, base_url, config_name,
-                contract_id, group_id, hostnames, description
-            )
-        except Exception as e:
-            print(f"[FATAL] Could not create configuration: {e}")
-            sys.exit(1)
-
-    print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
 
     config = load_yaml_config(args.config)
     env = Environment(loader=FileSystemLoader(args.template_dir), trim_blocks=True, lstrip_blocks=True)
@@ -222,6 +214,38 @@ def main():
         save_rendered_output(args.output_dir, 'akamai_bot_category_actions.json', output)
 
     print("\n All templates rendered.")
+    
+    meta_path = os.path.join(args.output_dir, "config_metadata.json")
+    if not os.path.exists(meta_path):
+        print(f"[FATAL] config_metadata.json not found at {meta_path}")
+        sys.exit(1)
+
+    with open(meta_path, "r") as f:
+        metadata = json.load(f)
+
+    config_name = metadata["configuration_name"]
+    hostnames = metadata.get("hostnames", [])
+    description = metadata.get("description", "Created by onboarding automation.")
+
+    if not hostnames:
+        raise ValueError("Hostnames list in config_matadata.json cannot be empty.")
+    
+    try:
+        config_id, version = get_config_id(session, base_url, config_name)
+    except ValueError:
+        print(f"[INFO] Configuration '{config_name}' not found. Attempting to create it...")
+        try:    
+            config_id, version = create_appsec_config(
+                session, base_url, config_name,
+                contract_id, group_id, hostnames, description
+            )
+            create_default_security_policies(session, base_url, config_id, version, args.access_group)
+        
+        except Exception as e:
+            print(f"[FATAL] Could not create configuration: {e}")
+            sys.exit(1)
+
+    print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
 
     if not args.dry_run:
         print("\n Importing configs to Akamai AppSec...")
