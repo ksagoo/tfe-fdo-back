@@ -1,35 +1,66 @@
-✅ UPDATE THIS FUNCTION: find_policy_id_by_prefix()
+✅ akamai_appsec_importer.py – FINAL VERSION WITH DEFAULT POLICY CREATION
 
-Replace the last lines in the function with:
+# Additional helper for creating default policies
+def ensure_default_policies(session, base_url, config_id, version, access_group, dry_run=False):
+    policy_names = [
+        f"PL-{access_group}-Prod",
+        f"PL-{access_group}-NonProd"
+    ]
+    created_policies = []
 
-        print(f"[WARN] No policy name starting with '{prefix}' found.")
-        if prefix == "defpol":
-            print("[INFO] Creating default security policy...")
-            return create_default_security_policy(session, base_url, config_id, version)
-        return None
-
-INSERT THIS FUNCTION near the other helpers:
-
-def create_default_security_policy(session, base_url, config_id, version):
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
-    payload = {
-        "policyName": "Default-Policy",
-        "policyPrefix": "defpol",
-        "securityControls": {
-            "applyApiConstraints": False,
-            "applyApplicationLayerControls": True,
-            "applyBotmanControls": True,
-            "applyReputationControls": True
-        }
-    }
     try:
-        response = session.post(url, json=payload)
-        if response.status_code in [200, 201]:
-            created = response.json()
-            print(f"[INFO] Created default security policy: {created['policyName']} (ID: {created['policyId']})")
-            return created["policyId"]
-        else:
-            print(f"[ERROR] Failed to create default policy: {response.status_code} {response.text}")
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+        response = session.get(url)
+        response.raise_for_status()
+        existing = {p["policyName"] for p in response.json().get("securityPolicies", [])}
+
+        for name in policy_names:
+            if name in existing:
+                print(f"[OK] Security policy already exists: {name}")
+                continue
+
+            if dry_run:
+                print(f"[DRY-RUN] Would create default policy: {name}")
+                continue
+
+            payload = {
+                "policyName": name,
+                "policyPrefix": name.replace("PL-", "").replace("-", "").lower()[:10],
+                "securityControls": {
+                    "applyApiConstraints": False,
+                    "applyApplicationLayerControls": True,
+                    "applyBotmanControls": True,
+                    "applyReputationControls": True
+                }
+            }
+
+            post_resp = session.post(url, json=payload)
+            if post_resp.status_code in [200, 201]:
+                policy_id = post_resp.json()["policyId"]
+                print(f"[OK] Created default policy: {name} (ID: {policy_id})")
+                created_policies.append(name)
+            else:
+                print(f"[ERROR] Failed to create policy '{name}': {post_resp.status_code} {post_resp.text}")
+
     except Exception as e:
-        print(f"[ERROR] Exception creating default security policy: {e}")
-    return None
+        print(f"[ERROR] Failed to ensure default policies: {e}")
+
+    return created_policies
+
+
+Now update your main() block (bottom of the script) like this:
+
+    # Read metadata and get config name
+    with open(config_meta_path, 'r') as f:
+        config_name = json.load(f).get("configuration_name")
+
+    config_id, version = get_or_create_config(session, base_url, config_name, args.dry_run)
+
+    if not config_id or not version:
+        print("[FATAL] Could not resolve config ID/version. Exiting.")
+        sys.exit(1)
+
+    access_group = config_name.replace("SC-", "")
+    ensure_default_policies(session, base_url, config_id, version, access_group, args.dry_run)
+
+
