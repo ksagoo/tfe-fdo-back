@@ -1,3 +1,26 @@
+def find_policy_id_by_prefix(session, base_url, config_id, version, prefix):
+    try:
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+        response = session.get(url)
+        response.raise_for_status()
+        policies = response.json().get("securityPolicies", [])
+
+        matched = None
+        print(f"[DEBUG] Available security policies for version {version}:")
+        for policy in policies:
+            print(f" - {policy.get('policyName')} (ID: {policy.get('policyId')})")
+            if policy.get("policyName", "").startswith(prefix):
+                matched = policy.get("policyId")
+
+        if not matched:
+            print(f"[WARN] No policy found with prefix '{prefix}'")
+        return matched
+
+    except Exception as e:
+        print(f"[ERROR] Failed to lookup policy ID for prefix '{prefix}': {e}")
+        return None
+
+
 def get_config_id(session, base_url, config_name):
     url = f"{base_url}/appsec/v1/configs"
     response = session.get(url)
