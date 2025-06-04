@@ -1,24 +1,33 @@
-def get_or_create_config(session, base_url, config_name, dry_run=False):
+def create_appsec_config(session, base_url, config_name, contract_id, group_id, hostnames, description):
+    url = f"{base_url}/appsec/v1/configs"
+    payload = {
+        "name": config_name,
+        "contractId": contract_id,
+        "groupId": int(group_id),
+        "hostnames": hostnames,
+        "description": description
+    }
+
+    print(f"[INFO] Creating AppSec config '{config_name}'")
+    print("[DEBUG] Payload:")
+    print(json.dumps(payload, indent=2))
+
     try:
-        url = f"{base_url}/appsec/v1/configs"
-        resp = session.get(url)
-        resp.raise_for_status()
-        configs = resp.json().get("configurations", [])
+        resp = session.post(url, json=payload)
+        print(f"[DEBUG] Response status code: {resp.status_code}")
+        print(f"[DEBUG] Response body: {resp.text}")
+
+        if resp.status_code not in [200, 201]:
+            raise RuntimeError(f"[ERROR] Failed to create config: {resp.status_code} {resp.text}")
+
+        cfg = resp.json()
+
+        # Defensive check to ensure "id" exists in response
+        if "id" not in cfg:
+            raise RuntimeError(f"[ERROR] Config creation response missing 'id': {json.dumps(cfg, indent=2)}")
+
+        print(f"[OK] Created configuration ID {cfg['id']}")
+        return cfg["id"], 1  # version always starts at 1
+
     except Exception as e:
-        print(f"[ERROR] Failed to retrieve configurations: {e}")
-        return None, None
-
-    for config in configs:
-        if config["name"] == config_name:
-            print(f"[INFO] Found existing configuration: {config['name']} (ID: {config['id']})")
-            return config["id"], config["latestVersion"]
-
-    print(f"[ERROR] Configuration '{config_name}' not found. Importer cannot proceed.")
-    return None, None
-    
-
-onfig_id, version = get_or_create_config(session, base_url, config_name)
-
-if not config_id:
-    print("[FATAL] Cannot continue without a valid configuration ID.")
-    sys.exit(1)
+        raise RuntimeError(f"[FATAL] Could not create configuration: {e}")
