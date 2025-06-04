@@ -1,3 +1,30 @@
+grep '^\[' ~/.edgerc
+
+def setup_session(edgerc_file, section_name):
+    try:
+        print(f"[DEBUG] Reading .edgerc from: {os.path.expanduser(edgerc_file)}")
+        print(f"[DEBUG] Requested section: {section_name}")
+        
+        edgerc = EdgeRc(os.path.expanduser(edgerc_file))
+        if not edgerc.has_section(section_name):
+            raise ValueError(f"[ERROR] Section '{section_name}' not found in .edgerc. Available sections: {[s for s in edgerc.sections()]}")
+        
+        base_url = "https://" + edgerc.get(section_name, 'host')
+        client_token = edgerc.get(section_name, 'client_token')
+        client_secret = edgerc.get(section_name, 'client_secret')
+        access_token = edgerc.get(section_name, 'access_token')
+
+        session = requests.Session()
+        session.auth = EdgeGridAuth(
+            client_token=client_token,
+            client_secret=client_secret,
+            access_token=access_token
+        )
+        session.headers.update({"Content-Type": "application/json"})
+        return session, base_url
+    except Exception as e:
+        raise RuntimeError(f"Error loading .edgerc section '{section_name}': {e}")
+
 Storing Terraform state in GitHub (or any Git-based version control system) is not recommended for several important reasons:
 
 1. Sensitive Data Exposure
