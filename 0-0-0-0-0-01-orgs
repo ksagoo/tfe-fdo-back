@@ -1,125 +1,29 @@
 def find_policy_id_by_prefix(session, base_url, config_id, version, prefix):
     try:
         url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+        print(f"[DEBUG] Fetching policies from URL: {url}")
         response = session.get(url)
         response.raise_for_status()
+
         policies = response.json().get("securityPolicies", [])
+        if not policies:
+            print(f"[DEBUG] No security policies returned.")
+            return None
 
         print(f"[DEBUG] Looking for policy prefix: '{prefix}'")
         print(f"[DEBUG] Available security policies in config ID {config_id}, version {version}:")
 
-        found_policy_id = None
         for policy in policies:
-            name = policy.get("policyName", "")
-            pid = policy.get("policyId", "")
+            name = policy.get("policyName", "<unnamed>")
+            pid = policy.get("policyId", "<no-id>")
             print(f" - {name} (ID: {pid})")
             if name.startswith(prefix):
-                found_policy_id = pid
+                print(f"[DEBUG] Match found: {name} (ID: {pid})")
+                return pid
 
-        if found_policy_id:
-            return found_policy_id
-        else:
-            print(f"[WARN] No policy name starting with '{prefix}' found.")
-            return None
+        print(f"[WARN] No policy name starting with '{prefix}' found.")
+        return None
 
     except Exception as e:
         print(f"[ERROR] Failed to lookup policy ID for prefix '{prefix}': {e}")
         return None
-
-
-def get_config_id(session, base_url, config_name):
-    url = f"{base_url}/appsec/v1/configs"
-    response = session.get(url)
-    response.raise_for_status()
-
-    configs = response.json().get("configurations", [])
-    for config in configs:
-        if config["name"] == config_name:
-            return config["id"], config["latestVersion"]
-
-    # DEBUG output if not found
-    print(f"[ERROR] AppSec config '{config_name}' not found.")
-    print("[DEBUG] Available configuration names:")
-    for config in configs:
-        print(f"  - {config['name']}")
-    
-    raise ValueError(f"[ERROR] AppSec config '{config_name}' not found.")
-
-[
-{% for exception in waf_rule_exceptions %}
-  {
-    "id": {{ exception.id }},
-    "action": "{{ exception.action }}"{% if exception.advancedExceptions %},
-    "advancedExceptions": {
-      "conditionOperator": "{{ exception.advancedExceptions.conditionOperator }}",
-      "conditions": [
-        {% for cond in exception.advancedExceptions.conditions %}
-        {
-          "type": "{{ cond.type }}",
-          "paths": {{ cond.paths | tojson }},
-          "positiveMatch": {{ cond.positiveMatch | lower }}
-        }{% if not loop.last %},{% endif %}
-        {% endfor %}
-      ]
-    }
-    {% endif %}
-  }{% if not loop.last %},{% endif %}
-{% endfor %}
-]
-
-
-grep '^\[' ~/.edgerc
-
-def setup_session(edgerc_file, section_name):
-    try:
-        print(f"[DEBUG] Reading .edgerc from: {os.path.expanduser(edgerc_file)}")
-        print(f"[DEBUG] Requested section: {section_name}")
-        
-        edgerc = EdgeRc(os.path.expanduser(edgerc_file))
-        if not edgerc.has_section(section_name):
-            raise ValueError(f"[ERROR] Section '{section_name}' not found in .edgerc. Available sections: {[s for s in edgerc.sections()]}")
-        
-        base_url = "https://" + edgerc.get(section_name, 'host')
-        client_token = edgerc.get(section_name, 'client_token')
-        client_secret = edgerc.get(section_name, 'client_secret')
-        access_token = edgerc.get(section_name, 'access_token')
-
-        session = requests.Session()
-        session.auth = EdgeGridAuth(
-            client_token=client_token,
-            client_secret=client_secret,
-            access_token=access_token
-        )
-        session.headers.update({"Content-Type": "application/json"})
-        return session, base_url
-    except Exception as e:
-        raise RuntimeError(f"Error loading .edgerc section '{section_name}': {e}")
-
-Storing Terraform state in GitHub (or any Git-based version control system) is not recommended for several important reasons:
-
-1. Sensitive Data Exposure
-Terraform state files (terraform.tfstate) often contain sensitive data:
-
-Cloud credentials
-Passwords
-Secrets
-Resource metadata (e.g., IPs, tokens)
-
-GitHub  can expose these values, violating security best practices and possibly compliance regulations (like GDPR or PCI-DSS).
-
-2. No Concurrency Control
-Git doesn’t handle simultaneous updates to state files well:
-
-If multiple users or CI pipelines apply changes at the same time, it can corrupt the state file.
-
-There’s no locking mechanism in Git to prevent race conditions.
-
-3. Inefficient State Management
-State files are frequently updated:
-
-Every Terraform plan/apply modifies the file.
-
-This leads to constant Git commits, bloating the history and making Git logs noisy.
-
-Merging state file changes is error-prone and typically not possible.
-
