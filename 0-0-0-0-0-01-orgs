@@ -1,3 +1,26 @@
+[
+{% for exception in waf_rule_exceptions %}
+  {
+    "id": {{ exception.id }},
+    "action": "{{ exception.action }}"{% if exception.advancedExceptions %},
+    "advancedExceptions": {
+      "conditionOperator": "{{ exception.advancedExceptions.conditionOperator }}",
+      "conditions": [
+        {% for cond in exception.advancedExceptions.conditions %}
+        {
+          "type": "{{ cond.type }}",
+          "paths": {{ cond.paths | tojson }},
+          "positiveMatch": {{ cond.positiveMatch | lower }}
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    }
+    {% endif %}
+  }{% if not loop.last %},{% endif %}
+{% endfor %}
+]
+
+
 grep '^\[' ~/.edgerc
 
 def setup_session(edgerc_file, section_name):
