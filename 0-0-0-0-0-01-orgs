@@ -1,28 +1,53 @@
-def get_config_id(session, base_url, config_name, dry_run=False):
+def get_or_create_config(session, base_url, config_name, dry_run=False):
     url = f"{base_url}/appsec/v1/configs"
     try:
         response = session.get(url)
         response.raise_for_status()
         configs = response.json().get("configurations", [])
     except Exception as e:
-        raise RuntimeError(f"[ERROR] Failed to retrieve configurations: {e}")
+        print(f"[ERROR] Failed to retrieve configurations: {e}")
+        return None, None
 
     for config in configs:
         if config["name"] == config_name:
-            print(f"[INFO] Found config '{config_name}' with ID {config['id']}, version {config['latestVersion']}")
+            print(f"[INFO] Found existing configuration: {config['name']} (ID: {config['id']})")
             return config["id"], config["latestVersion"]
 
-    print(f"[ERROR] AppSec config '{config_name}' not found.")
-    print("[DEBUG] Available configuration names:")
-    for config in configs:
-        print(f" - {config['name']}")
+    if dry_run:
+        print(f"[DRY-RUN] Configuration '{config_name}' not found. Would create here.")
+        return "dryrun-config-id", "dryrun-version-id"
 
-    if dry_run and configs:
-        fallback_id = configs[0]["id"]
-        fallback_version = configs[0]["latestVersion"]
-        print(f"[DEBUG] [DRY-RUN] Using fallback config ID: {fallback_id}, version: {fallback_version}")
-        return fallback_id, fallback_version
+    # CREATE BLOCK
+    print(f"[INFO] Configuration '{config_name}' not found. Creating new configuration...")
 
-    raise ValueError(f"[ERROR] AppSec config '{config_name}' not found.")
+    create_payload = {
+        "name": config_name,
+        "description": f"AppSec Configuration for {config_name}",
+        "hostnames": [],
+        "securityPolicyPrefix": "defpol"
+    }
 
-config_id, version = get_config_id(session, base_url, config_name, args.dry_run)
+    try:
+        create_resp = session.post(url, json=create_payload)
+        create_resp.raise_for_status()
+        created = create_resp.json()
+        new_config_id = created.get("id")
+
+        print(f"[INFO] Created configuration '{config_name}' (ID: {new_config_id})")
+
+        # Create first version
+        version_url = f"{url}/{new_config_id}/versions"
+        version_payload = {
+            "createFromVersion": 1  # Use version 1 if none exists
+        }
+
+        version_resp = session.post(version_url, json=version_payload)
+        version_resp.raise_for_status()
+        new_version = version_resp.json().get("version")
+
+        print(f"[INFO] Created initial version {new_version} for config ID {new_config_id}")
+        return new_config_id, new_version
+
+    except Exception as e:
+        print(f"[ERROR] Failed to create configuration: {e}")
+        return None, None
