@@ -1,3 +1,5 @@
+config['config']['hostnames'] = params['hostnames'] if isinstance(params['hostnames'], list) else params['hostnames'].split(",")
+
 config['config']['hostnames'] = params['hostnames'].split(",")
 
 """
