@@ -1,65 +1,29 @@
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Import Akamai AppSec JSON configs via API")
-    parser.add_argument('--input_dir', default='generated', required=True, help='Directory containing JSON files')
-    parser.add_argument('--account',  default='DEV', help='Akamai region/account (Global, APAC, etc.)')
-    parser.add_argument('--edgerc_file', default='~/.edgerc', help='Path to .edgerc (default: ~/.edgerc)')
-    parser.add_argument('--dry_run', action='store_true', help='Dry run mode (no API calls)')
-    args = parser.parse_args()
+def get_or_create_config(session, base_url, config_name, dry_run=False):
+    url = f"{base_url}/appsec/v1/configs"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        configs = response.json().get("configurations", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to retrieve configurations: {e}")
+        return None, None
 
-    session, base_url = setup_session(args.edgerc_file, args.account)
-    contract_id = REGION_SETTINGS[args.account]["contract_id"]
+    for config in configs:
+        if config["name"] == config_name:
+            print(f"[INFO] Found existing configuration: {config['name']} (ID: {config['id']})")
+            return config["id"], config["latestVersion"]
 
-    # Load config metadata JSON to fetch config name
-    config_meta_path = os.path.join(args.input_dir, 'config_metadata.json')
-    if not os.path.exists(config_meta_path):
-        print(f"[ERROR] config_metadata.json not found in {args.input_dir}")
-        exit(1)
+    if dry_run:
+        print(f"[DRY-RUN] Configuration '{config_name}' not found. Would create here.")
+        # Fallback to first config just for lookups
+        if configs:
+            fallback_id = configs[0]["id"]
+            fallback_version = configs[0]["latestVersion"]
+            print(f"[DEBUG] Using fallback config ID {fallback_id}, version {fallback_version} for lookups.")
+            return fallback_id, fallback_version
+        else:
+            print("[DEBUG] No configs to fallback to.")
+            return "dryrun-config-id", "dryrun-version-id"
 
-    with open(config_meta_path, 'r') as f:
-        config_name = json.load(f).get("configuration_name")
-
-    config_id, version = get_or_create_config(session, base_url, config_name, args.dry_run)
-
-    # DEBUG: List Available Policies in Dry-Run Mode 
-    if args.dry_run:
-        print("\n[DEBUG] Listing available policy names from first valid config...\n")
-        try:
-            configs_url = f"{base_url}/appsec/v1/configs"
-            response = session.get(configs_url)
-            response.raise_for_status()
-            configs = response.json().get("configurations", [])
-
-            if not configs:
-                print("[DEBUG] No AppSec configurations found.")
-            else:
-                first_config = configs[0]
-                real_config_id = first_config["id"]
-                real_version = first_config["latestVersion"]
-                print(f"[DEBUG] Using config '{first_config['name']}' (ID: {real_config_id}, version: {real_version})")
-
-                policies_url = f"{base_url}/appsec/v1/configs/{real_config_id}/versions/{real_version}/security-policies"
-                print(f"[DEBUG] Fetching policies from: {policies_url}")
-                pol_response = session.get(policies_url)
-                pol_response.raise_for_status()
-                policies = pol_response.json().get("securityPolicies", [])
-
-                if not policies:
-                    print("[DEBUG] No policies found.")
-                else:
-                    print(f"[DEBUG] Found {len(policies)} policy(ies):")
-                    for p in policies:
-                        print(f"    - Name: {p.get('policyName')} | ID: {p.get('policyId')}")
-
-        except Exception as e:
-            print(f"[DEBUG] Could not fetch or display available policies: {e}")
-
-    # Call import functions
-    import_client_lists(session, base_url, config_id, version, args.input_dir, args.dry_run)
-    import_custom_rules(session, base_url, config_id, version, args.input_dir, args.dry_run)
-    import_custom_bots(session, base_url, config_id, version, args.input_dir, args.dry_run)
-    import_rate_limits(session, base_url, config_id, version, args.input_dir, args.dry_run)
-    import_waf_rule_exceptions(session, base_url, config_id, version, args.input_dir, args.dry_run)
-    import_waf_group_actions(session, base_url, config_id, version, args.input_dir, args.dry_run)
-    import_bot_category_actions(session, base_url, config_id, version, args.input_dir, args.dry_run)
-
-    print("\n[COMPLETE] Akamai AppSec import finished.")
+    print(f"[ERROR] Configuration '{config_name}' not found and create logic not implemented.")
+    return None, None
