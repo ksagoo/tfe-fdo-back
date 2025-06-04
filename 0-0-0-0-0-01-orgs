@@ -1,6 +1,93 @@
-✅ akamai_appsec_importer.py – FINAL VERSION WITH DEFAULT POLICY CREATION
+#!/usr/bin/env python3
+"""
+========================================================================================
+                Akamai Application Security Configuration Importer via API
+========================================================================================
+Script Name:
+    akamai_appsec_importer.py
 
-# Additional helper for creating default policies
+Description:
+    Imports rendered Akamai AppSec configuration JSONs into the Akamai environment
+    using the AppSec APIs. Works alongside the config generator (Jinja + YAML) and
+    supports dry-run mode.
+
+Modules Imported (in order):
+    • Config Metadata (setup only, no POST)
+    • Client Lists
+    • Custom Bots
+    • Custom Rules
+    • Rate Limits
+    • WAF Rule Exceptions
+    • WAF Group Actions
+    • Akamai Bot Category Actions
+
+Parameters:
+    --input_dir (required)    : Path to directory containing rendered JSON files
+    --edgerc_file (optional)  : Path to .edgerc file (default: ~/.edgerc)
+    --account (required)      : Akamai environment/region (Global, APAC, EMEA, LATAM, AMER, DEV)
+    --dry_run (optional)      : Skip actual API calls
+
+Usage:
+    python akamai_appsec_importer.py \
+        --input_dir output \
+        --account EMEA \
+        --dry_run
+
+========================================================================================
+"""
+
+import os
+import sys
+import json
+import argparse
+import requests
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+
+# ----- REGION SETTINGS -----
+REGION_SETTINGS = {
+    "Global":  {"parent_group_name": "HSBC-DDos-KSD-D-2YN4YRH", "contract_id": "P-2YN4YRH", "group_id": "154041"},
+    "APAC":    {"parent_group_name": "HSBC - APAC-V-5A82LRN",   "contract_id": "V-5A82LRN", "group_id": "272084"},
+    "EMEA":    {"parent_group_name": "HSBC - EMEA-V-5A82MHB",   "contract_id": "V-5A82MHB", "group_id": "272093"},
+    "LATAM":   {"parent_group_name": "HSBC-AMER -LATAM(V-5A854K9)",  "contract_id": "V-5A854K9", "group_id": "272094"},
+    "AMER":    {"parent_group_name": "HSBC-AMER -LATAM(V-5A854K9)",  "contract_id": "V-5A854K9", "group_id": "272094"},
+    "DEV":     {"parent_group_name": "HSBC - DEV (V-5A82MTA)",    "contract_id": "V-5A82MTA", "group_id": "272095"}
+}
+
+# ----- EdgeGrid Setup -----
+def setup_session(edgerc_file, section_name):
+    try:
+        print(f"[DEBUG] Reading .edgerc from: {os.path.expanduser(edgerc_file)}")
+        print(f"[DEBUG] Requested section: {section_name}")
+
+        edgerc = EdgeRc(os.path.expanduser(edgerc_file))
+        if not edgerc.has_section(section_name):
+            raise ValueError(f"[ERROR] Section '{section_name}' not found in .edgerc. Available sections: {[s for s in edgerc.sections()]}")
+
+        base_url = "https://" + edgerc.get(section_name, 'host')
+        client_token = edgerc.get(section_name, 'client_token')
+        client_secret = edgerc.get(section_name, 'client_secret')
+        access_token = edgerc.get(section_name, 'access_token')
+
+        session = requests.Session()
+        session.auth = EdgeGridAuth(
+            client_token=client_token,
+            client_secret=client_secret,
+            access_token=access_token
+        )
+
+        session.headers.update({"Content-Type": "application/json"})
+        return session, base_url
+    except Exception as e:
+        raise RuntimeError(f"Error loading .edgerc section '{section_name}': {e}")
+    
+def load_json_from_file(path):
+    try:
+        with open(path, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[ERROR] Could not read JSON file: {path} — {e}")
+        return None
+
 def ensure_default_policies(session, base_url, config_id, version, access_group, dry_run=False):
     policy_names = [
         f"PL-{access_group}-Prod",
@@ -47,10 +134,365 @@ def ensure_default_policies(session, base_url, config_id, version, access_group,
 
     return created_policies
 
+def create_appsec_configuration(session, base_url, config_name, contract_id, group_id):
+    url = f"{base_url}/appsec/v1/configs"
+    payload = {
+        "name": config_name,
+        "contractId": contract_id,
+        "groupId": group_id
+    }
+    print(f"[INFO] Creating new configuration with payload:\n{json.dumps(payload, indent=2)}")
 
-Now update your main() block (bottom of the script) like this:
+    try:
+        response = session.post(url, json=payload)
+        response.raise_for_status()
+        result = response.json()
+        print(f"[OK] Created configuration '{result['name']}' with ID {result['id']}")
+        return result["id"]
+    except Exception as e:
+        print(f"[ERROR] Failed to create configuration: {e}")
+        raise
+    
+def import_config_metadata(input_dir):
+    path = os.path.join(input_dir, "config_metadata.json")
+    config_meta = load_json_from_file(path)
+    if not config_meta:
+        print("[WARN] Skipping config_metadata.json (not found or unreadable)")
+        return None
+    print(f"[INFO] Loaded configuration: {config_meta['configuration_name']}")
+    return config_meta
 
-    # Read metadata and get config name
+def find_policy_id_by_prefix(session, base_url, config_id, version, prefix):
+    try:
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+        print(f"[DEBUG] Fetching policies from URL: {url}")
+        response = session.get(url)
+        response.raise_for_status()
+
+        policies = response.json().get("securityPolicies", [])
+        if not policies:
+            print(f"[DEBUG] No security policies returned.")
+            return None
+
+        print(f"[DEBUG] Looking for policy prefix: '{prefix}'")
+        print(f"[DEBUG] Available security policies in config ID {config_id}, version {version}:")
+
+        for policy in policies:
+            name = policy.get("policyName", "<unnamed>")
+            pid = policy.get("policyId", "<no-id>")
+            print(f" - {name} (ID: {pid})")
+            if name.startswith(prefix):
+                print(f"[DEBUG] Match found: {name} (ID: {pid})")
+                return pid
+            
+        print(f"[WARN] No policy name starting with '{prefix}' found.")
+        if prefix == "defpol":
+            print("[INFO] Creating default security policy...")
+            return create_default_security_policy(session, base_url, config_id, version)
+        return None
+
+    except Exception as e:
+        print(f"[ERROR] Failed to lookup policy ID for prefix '{prefix}': {e}")
+        return None
+
+def get_or_create_config(session, base_url, config_name, dry_run=False):
+    url = f"{base_url}/appsec/v1/configs"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        configs = response.json().get("configurations", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to retrieve configurations: {e}")
+        return None, None
+
+    for config in configs:
+        if config["name"] == config_name:
+            print(f"[INFO] Found existing configuration: {config['name']} (ID: {config['id']})")
+            return config["id"], config["latestVersion"]
+
+    if dry_run:
+        print(f"[DRY-RUN] Configuration '{config_name}' not found. Would create here.")
+        if configs:
+            fallback_id = configs[0]["id"]
+            fallback_version = configs[0]["latestVersion"]
+            print(f"[DEBUG] Using fallback config ID {fallback_id}, version {fallback_version} for lookups.")
+            return fallback_id, fallback_version
+        else:
+            print("[DEBUG] No configs to fallback to.")
+            return "dryrun-config-id", "dryrun-version-id"
+
+    print(f"[INFO] Configuration '{config_name}' not found. Creating new configuration...")
+    try:
+        contract_id = REGION_SETTINGS[args.account]["contract_id"]
+        group_id = REGION_SETTINGS[args.account]["group_id"]
+        new_config_id = create_appsec_configuration(session, base_url, config_name, contract_id, group_id)
+        return new_config_id, 1  # New configs always start with version 1
+    except Exception as e:
+        print(f"[ERROR] Could not create configuration: {e}")
+        return None, None
+
+def import_client_lists(session, base_url, config_id, version, input_dir, dry_run=False):
+    path = os.path.join(input_dir, "client_lists.json")
+    if not os.path.exists(path):
+        print("[INFO] No client_lists.json found, skipping.")
+        return
+
+    try:
+        with open(path, "r") as f:
+            client_lists = json.load(f)
+    except Exception as e:
+        print(f"[ERROR] Failed to load client_lists.json: {e}")
+        return
+
+    for clist in client_lists:
+        name = clist.get("name", "<unnamed>")
+        if dry_run:
+            print(f"[DRY-RUN] Would import client list: {name}")
+            continue
+
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/advanced-settings/client-list"
+        try:
+            response = session.post(url, json=clist)
+            if response.status_code == 201:
+                print(f"[OK] Created client list: {name}")
+            elif response.status_code == 409:
+                print(f"[SKIP] Client list already exists: {name}")
+            else:
+                print(f"[WARN] Failed to import {name}: {response.status_code} {response.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception while importing {name}: {e}")
+
+def import_custom_bots(session, base_url, config_id, version, input_dir, dry_run=False):
+    path = os.path.join(input_dir, "custom_bots.json")
+    if not os.path.exists(path):
+        print("[INFO] No custom_bots.json found, skipping.")
+        return
+
+    try:
+        with open(path, "r") as f:
+            custom_bots = json.load(f)
+    except Exception as e:
+        print(f"[ERROR] Failed to load custom_bots.json: {e}")
+        return
+
+    for bot in custom_bots:
+        bot_name = bot.get("botName", "<unnamed>")
+        if dry_run:
+            print(f"[DRY-RUN] Would import custom bot: {bot_name}")
+            continue
+
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/advanced-settings/custom-bots"
+        try:
+            response = session.post(url, json=bot)
+            if response.status_code == 201:
+                print(f"[OK] Created custom bot: {bot_name}")
+            elif response.status_code == 409:
+                print(f"[SKIP] Custom bot already exists: {bot_name}")
+            else:
+                print(f"[WARN] Failed to import {bot_name}: {response.status_code} {response.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception while importing {bot_name}: {e}")
+
+def import_custom_rules(session, base_url, config_id, version, input_dir, dry_run=False):
+    path = os.path.join(input_dir, "custom_rules.json")
+    if not os.path.exists(path):
+        print("[INFO] No custom_rules.json found, skipping.")
+        return
+
+    try:
+        with open(path, "r") as f:
+            custom_rules = json.load(f)
+    except Exception as e:
+        print(f"[ERROR] Failed to load custom_rules.json: {e}")
+        return
+
+    for rule in custom_rules:
+        rule_name = rule.get("name", "<unnamed>")
+        if dry_run:
+            print(f"[DRY-RUN] Would import custom rule: {rule_name}")
+            continue
+
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules"
+        try:
+            response = session.post(url, json=rule)
+            if response.status_code == 201:
+                print(f"[OK] Created custom rule: {rule_name}")
+            elif response.status_code == 409:
+                print(f"[SKIP] Custom rule already exists: {rule_name}")
+            else:
+                print(f"[WARN] Failed to import {rule_name}: {response.status_code} {response.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception while importing {rule_name}: {e}")
+
+
+def import_waf_rule_exceptions(session, base_url, config_id, version, input_dir, dry_run=False):
+    path = os.path.join(input_dir, "waf_rule_exceptions.json")
+    if not os.path.exists(path):
+        print("[INFO] No waf_rule_exceptions.json found, skipping.")
+        return
+
+    try:
+        with open(path, "r") as f:
+            exceptions = json.load(f)
+    except Exception as e:
+        print(f"[ERROR] Failed to load waf_rule_exceptions.json: {e}")
+        return
+
+    for exception in exceptions:
+        rule_id = exception.get("id", "<missing-id>")
+        if dry_run:
+            print(f"[DRY-RUN] Would import WAF rule exception for rule ID: {rule_id}")
+            continue
+
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/waf-rules/{rule_id}/exception"
+        try:
+            response = session.put(url, json=exception)
+            if response.status_code == 200:
+                print(f"[OK] WAF rule exception applied for rule ID: {rule_id}")
+            else:
+                print(f"[WARN] Failed to apply exception for rule {rule_id}: {response.status_code} {response.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception while applying WAF rule exception for {rule_id}: {e}")
+
+def import_waf_group_actions(session, base_url, config_id, version, input_dir, dry_run=False):
+    path = os.path.join(input_dir, "waf_group_actions.json")
+    if not os.path.exists(path):
+        print("[INFO] No waf_group_actions.json found, skipping.")
+        return
+
+    try:
+        with open(path, "r") as f:
+            group_actions = json.load(f)
+    except Exception as e:
+        print(f"[ERROR] Failed to load waf_group_actions.json: {e}")
+        return
+
+    for entry in group_actions:
+        policy_prefix = entry.get("policy_prefix")
+        groups = entry.get("groups", [])
+
+        policy_id = find_policy_id_by_prefix(session, base_url, config_id, version, policy_prefix)
+        if not policy_id:
+            print(f"[WARN] No policy found for prefix '{policy_prefix}', skipping.")
+            continue
+
+        if dry_run:
+            print(f"[DRY-RUN] Would apply WAF group actions to policy {policy_prefix} ({policy_id})")
+            continue
+
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/waf/group-actions"
+        try:
+            response = session.put(url, json={"groupActions": groups})
+            if response.status_code == 200:
+                print(f"[OK] WAF group actions set for policy {policy_prefix}")
+            else:
+                print(f"[WARN] Failed to apply group actions for {policy_prefix}: {response.status_code} {response.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception while applying group actions for {policy_prefix}: {e}")
+
+def import_rate_limits(session, base_url, config_id, version, output_dir, dry_run):
+    filename = os.path.join(output_dir, "rate_limits.json")
+    if not os.path.exists(filename):
+        print("rate_limits.json not found, skipping rate limits import.")
+        return
+
+    with open(filename, "r") as f:
+        rate_limits = json.load(f)
+
+    print(f"Importing {len(rate_limits)} rate limit policies...")
+
+    count = 0
+    for rl in rate_limits:
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
+        payload = json.dumps(rl)
+        if dry_run:
+            print(f"[DRY-RUN] Would import rate limit: {rl.get('name')}")
+        else:
+            response = session.post(url, data=payload, headers={"Content-Type": "application/json"})
+            if response.status_code in [200, 201]:
+                print(f"Imported: {rl.get('name')}")
+                count += 1
+            else:
+                print(f"Failed: {rl.get('name')} ({response.status_code})")
+                print(response.text)
+    print(f"Rate Limits processed: {count}")
+
+def create_default_security_policy(session, base_url, config_id, version):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+    payload = {
+        "policyName": "Default-Policy",
+        "policyPrefix": "defpol",
+        "securityControls": {
+            "applyApiConstraints": False,
+            "applyApplicationLayerControls": True,
+            "applyBotmanControls": True,
+            "applyReputationControls": True
+        }
+    }
+    try:
+        response = session.post(url, json=payload)
+        if response.status_code in [200, 201]:
+            created = response.json()
+            print(f"[INFO] Created default security policy: {created['policyName']} (ID: {created['policyId']})")
+            return created["policyId"]
+        else:
+            print(f"[ERROR] Failed to create default policy: {response.status_code} {response.text}")
+    except Exception as e:
+        print(f"[ERROR] Exception creating default security policy: {e}")
+    return None
+
+def import_bot_category_actions(session, base_url, config_id, version, input_dir, dry_run=False):
+    path = os.path.join(input_dir, "akamai_bot_category_actions.json")
+    if not os.path.exists(path):
+        print("[INFO] No akamai_bot_category_actions.json found, skipping.")
+        return
+
+    try:
+        with open(path, "r") as f:
+            entries = json.load(f)
+    except Exception as e:
+        print(f"[ERROR] Failed to load akamai_bot_category_actions.json: {e}")
+        return
+
+    for entry in entries:
+        policy_prefix = entry.get("policy_prefix")
+        categories = entry.get("categories", [])
+
+        policy_id = find_policy_id_by_prefix(session, base_url, config_id, version, policy_prefix)
+        if not policy_id:
+            print(f"[WARN] No policy found for prefix '{policy_prefix}', skipping.")
+            continue
+
+        if dry_run:
+            print(f"[DRY-RUN] Would apply Akamai Bot Category Actions to policy {policy_prefix} ({policy_id})")
+            continue
+
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/bot-manager/category-actions"
+        try:
+            response = session.put(url, json={"categoryActions": categories})
+            if response.status_code == 200:
+                print(f"[OK] Bot category actions applied for policy {policy_prefix}")
+            else:
+                print(f"[WARN] Failed to apply bot category actions for {policy_prefix}: {response.status_code} {response.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception while applying bot category actions for {policy_prefix}: {e}")
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Import Akamai AppSec JSON configs via API")
+    parser.add_argument('--input_dir', default='generated', required=True, help='Directory containing JSON files')
+    parser.add_argument('--account',  default='DEV', help='Akamai region/account (Global, APAC, etc.)')
+    parser.add_argument('--edgerc_file', default='~/.edgerc', help='Path to .edgerc (default: ~/.edgerc)')
+    parser.add_argument('--dry_run', action='store_true', help='Dry run mode (no API calls)')
+    args = parser.parse_args()
+
+    session, base_url = setup_session(args.edgerc_file, args.account)
+    contract_id = REGION_SETTINGS[args.account]["contract_id"]
+
+    config_meta_path = os.path.join(args.input_dir, 'config_metadata.json')
+    if not os.path.exists(config_meta_path):
+        print(f"[ERROR] config_metadata.json not found in {args.input_dir}")
+        exit(1)
+
     with open(config_meta_path, 'r') as f:
         config_name = json.load(f).get("configuration_name")
 
@@ -63,4 +505,44 @@ Now update your main() block (bottom of the script) like this:
     access_group = config_name.replace("SC-", "")
     ensure_default_policies(session, base_url, config_id, version, access_group, args.dry_run)
 
+    if args.dry_run:
+        print("\n[DEBUG] Listing available policy names from first valid config...\n")
+        try:
+            configs_url = f"{base_url}/appsec/v1/configs"
+            response = session.get(configs_url)
+            response.raise_for_status()
+            configs = response.json().get("configurations", [])
 
+            if not configs:
+                print("[DEBUG] No AppSec configurations found.")
+            else:
+                first_config = configs[0]
+                real_config_id = first_config["id"]
+                real_version = first_config["latestVersion"]
+                print(f"[DEBUG] Using config '{first_config['name']}' (ID: {real_config_id}, version: {real_version})")
+
+                policies_url = f"{base_url}/appsec/v1/configs/{real_config_id}/versions/{real_version}/security-policies"
+                print(f"[DEBUG] Fetching policies from: {policies_url}")
+                pol_response = session.get(policies_url)
+                pol_response.raise_for_status()
+                policies = pol_response.json().get("securityPolicies", [])
+
+                if not policies:
+                    print("[DEBUG] No policies found.")
+                else:
+                    print(f"[DEBUG] Found {len(policies)} policy(ies):")
+                    for p in policies:
+                        print(f"    - Name: {p.get('policyName')} | ID: {p.get('policyId')}")
+
+        except Exception as e:
+            print(f"[DEBUG] Could not fetch or display available policies: {e}")
+
+    import_client_lists(session, base_url, config_id, version, args.input_dir, args.dry_run)
+    import_custom_rules(session, base_url, config_id, version, args.input_dir, args.dry_run)
+    import_custom_bots(session, base_url, config_id, version, args.input_dir, args.dry_run)
+    import_rate_limits(session, base_url, config_id, version, args.input_dir, args.dry_run)
+    import_waf_rule_exceptions(session, base_url, config_id, version, args.input_dir, args.dry_run)
+    import_waf_group_actions(session, base_url, config_id, version, args.input_dir, args.dry_run)
+    import_bot_category_actions(session, base_url, config_id, version, args.input_dir, args.dry_run)
+
+    print("\n[COMPLETE] Akamai AppSec import finished.")
