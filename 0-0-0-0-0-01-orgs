@@ -1,3 +1,5 @@
+config['config']['hostnames'] = params['hostnames'].split(",")
+
 """
 ===================================================================================
                     Akamai Application Security Config Generator (via Jinja + YAML)
