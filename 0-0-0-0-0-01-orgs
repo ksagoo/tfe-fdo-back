@@ -5,16 +5,22 @@ def find_policy_id_by_prefix(session, base_url, config_id, version, prefix):
         response.raise_for_status()
         policies = response.json().get("securityPolicies", [])
 
-        matched = None
-        print(f"[DEBUG] Available security policies for version {version}:")
-        for policy in policies:
-            print(f" - {policy.get('policyName')} (ID: {policy.get('policyId')})")
-            if policy.get("policyName", "").startswith(prefix):
-                matched = policy.get("policyId")
+        print(f"[DEBUG] Looking for policy prefix: '{prefix}'")
+        print(f"[DEBUG] Available security policies in config ID {config_id}, version {version}:")
 
-        if not matched:
-            print(f"[WARN] No policy found with prefix '{prefix}'")
-        return matched
+        found_policy_id = None
+        for policy in policies:
+            name = policy.get("policyName", "")
+            pid = policy.get("policyId", "")
+            print(f" - {name} (ID: {pid})")
+            if name.startswith(prefix):
+                found_policy_id = pid
+
+        if found_policy_id:
+            return found_policy_id
+        else:
+            print(f"[WARN] No policy name starting with '{prefix}' found.")
+            return None
 
     except Exception as e:
         print(f"[ERROR] Failed to lookup policy ID for prefix '{prefix}': {e}")
