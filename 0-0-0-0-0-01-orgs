@@ -9,3 +9,10 @@ def get_policy_id_from_metadata(policy_prefix, security_policies_json, metadata)
                 if policy.get("policyName") == expected_name:
                     return policy.get("policyId")
     return None
+
+
+with open("config_metadata.json") as f:
+    metadata = json.load(f)
+
+# policies_response = session.get(...)  # Already done elsewhere
+policy_id = get_policy_id_from_metadata(policy_prefix, policies_response.json().get("securityPolicies", []), metadata)
