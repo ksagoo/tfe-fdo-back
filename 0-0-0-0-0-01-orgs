@@ -1,30 +1,81 @@
+✅ Step 1: Update appsec_config.yaml
+
+Here’s how to add the default_policies and optional default_policy_hostnames fields:
+
+configuration_name: SC-MSS-AMER-HSS
+access_group: MSS-AMER-HSS
+contract_id: V-5A82MTA
+group_id: 272095
+description: HSS Digital API Gateway HK - Onboarded via automation
+version_notes: PRM10478-832 - Rapid Onboarding
+
+hostnames:
+  - api-sandbox.securities-services.gbm.hsbc.com
+
+default_policies:
+  prod: "PL-MSS-AMER-HSS-Prod"
+  nonprod: "PL-MSS-AMER-HSS-NonProd"
+
+default_policy_hostnames:
+  prod:
+    - api-sandbox.securities-services.gbm.hsbc.com
+  nonprod:
+    - api-dev.securities-services.gbm.hsbc.com
+    - api-sit.securities-services.gbm.hsbc.com
+    - file-api-dev.securities-services.gbm.hsbc.com
+
+✅ Step 2: Update config_metadata.j2
+
+Update your template to include the default policy names:
+
+{
+  "configuration_name": "{{ configuration_name }}",
+  "contract_id": "{{ contract_id }}",
+  "group_id": "{{ group_id }}",
+  "description": "{{ description }}",
+  "access_group": "{{ access_group }}",
+  "version_notes": "{{ version_notes }}",
+  "hostnames": {{ hostnames | tojson }},
+  "default_policy_prod": "{{ default_policies.prod }}",
+  "default_policy_nonprod": "{{ default_policies.nonprod }}"
+}
+
+Make sure your render_template() call uses the full config dict.
+✅ Step 3: Auto-create policies in akamai_config_generator.py
+
+Insert after config creation:
+
 def create_default_security_policies(session, base_url, config_id, version, access_group):
-    policy_names = [
-        f"PL-{access_group}-Prod",
-        f"PL-{access_group}-NonProd"
-    ]
-    
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
-    
-    suffixes = ['p', 'n']  # Prod, NonProd
-
-    for name, suffix in zip(policy_names, suffixes):
-        # Sanitize and shorten the base
-        base = re.sub(r'[^a-zA-Z0-9]', '', access_group).lower()
-        base = (base + 'xxxx')[:3]  # 3 safe alphanum chars
-        prefix = f"{base}{suffix}"  # 4-character unique ID
-
+    for env in ["Prod", "NonProd"]:
+        policy_name = f"PL-{access_group}-{env}"
         payload = {
-            "policyName": name,
-            "policyPrefix": prefix,
-            "policyDescription": f"Default policy created for {name}"
+            "policyName": policy_name,
+            "defaultSettings": True
         }
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+        print(f"[INFO] Creating default policy: {policy_name}")
+        response = session.post(url, json=payload)
+        if response.status_code in [200, 201]:
+            print(f"[OK] Policy '{policy_name}' created.")
+        elif response.status_code == 409:
+            print(f"[WARN] Policy '{policy_name}' already exists.")
+        else:
+            print(f"[ERROR] Failed to create policy '{policy_name}': {response.status_code} - {response.text}")
 
-        try:
-            resp = session.post(url, json=payload)
-            if resp.status_code in [200, 201]:
-                print(f"Created default policy: {name}")
-            else:
-                print(f"Failed to create policy '{name}': {resp.status_code} {resp.text}")
-        except Exception as e:
-            print(f"[ERROR] Exception while creating policy '{name}': {e}")
+Then invoke it:
+
+# After config is created
+create_default_security_policies(session, base_url, config_id, version, config["access_group"])
+
+✅ Step 4: Use policy names from metadata in importer
+
+In akamai_appsec_importer.py, load and use:
+
+policy_prod = metadata.get("default_policy_prod")
+policy_nonprod = metadata.get("default_policy_nonprod")
+
+Use these when posting rules, exceptions, etc., e.g.,
+
+url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_nonprod}/rules/exceptions"
+
+Would you like the updated config_metadata.j2, sample appsec_config.yaml, and policy creation function added to your generator script as a complete block?
