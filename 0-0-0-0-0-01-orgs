@@ -1,3 +1,5 @@
+mport re
+
 def create_default_security_policies(session, base_url, config_id, version, access_group):
     policy_names = [
         f"PL-{access_group}-Prod",
@@ -6,12 +8,17 @@ def create_default_security_policies(session, base_url, config_id, version, acce
     url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
 
     for name in policy_names:
+        # Generate a 4-character alphanumeric prefix
+        prefix = re.sub(r'[^a-zA-Z0-9]', '', access_group)[:4]
+        if len(prefix) < 4:
+            prefix = (prefix + 'xxxx')[:4]  # Pad with 'x' if less than 4 characters
+
         payload = {
-            "name": name,  # required
-            "policyName": name,  # required
+            "policyName": name,
+            "policyPrefix": prefix,
             "policyDescription": f"Default policy created for {name}"
-            # No 'policyPrefix' — let Akamai assign one
         }
+
         try:
             resp = session.post(url, json=payload)
             if resp.status_code in [200, 201]:
