@@ -1,16 +1,5 @@
-[16:55, 05/06/2025] Kuldeep: # Load metadata
-metadata_path = os.path.join(input_dir, "config_metadata.json")
-with open(metadata_path, "r") as f:
-    metadata = json.load(f)
-
-# Extract policy IDs
-default_policies = metadata.get("default_policies", {})
-prod_policy_id = default_policies.get("prod", {}).get("policyId")
-nonprod_policy_id = default_policies.get("nonprod", {}).get("policyId")
-
-# Create a prefix-to-ID map for use in imports
+access_group = metadata.get("access_group", "UNKNOWN")
 prefix_to_policy_id = {
-    "Prod": prod_policy_id,
-    "NonP": nonprod_policy_id,
+    default_policies.get("prod", {}).get("prefix"): prod_policy_id,
+    default_policies.get("nonprod", {}).get("prefix"): nonprod_policy_id,
 }
-[16:56, 05/06/2025] Kuldeep: policy_id = prefix_to_policy_id.get(policy_prefix)
