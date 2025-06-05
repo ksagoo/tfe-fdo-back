@@ -1,20 +1,22 @@
-try:
-        config_id, version = get_config_id(session, base_url, config_name)
-    except ValueError:
-        print(f"[INFO] Configuration '{config_name}' not found. Attempting to create it...")
+def create_default_security_policies(session, base_url, config_id, version, access_group):
+    policy_names = [
+        f"PL-{access_group}-Prod",
+        f"PL-{access_group}-NonProd"
+    ]
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+
+    for name in policy_names:
+        payload = {
+            "name": name,  # required
+            "policyName": name,  # required
+            "policyDescription": f"Default policy created for {name}"
+            # No 'policyPrefix' — let Akamai assign one
+        }
         try:
-            config_id, version = create_appsec_config(
-                session, base_url, config_name,
-                contract_id, group_id, hostnames, description
-            )
-
-            if config_id is not None:
-                # fallback to metadata if args.access_group not present
-                access_group = metadata.get("access_group", "UNKNOWN")
-                create_default_security_policies(session, base_url, config_id, version, access_group)
+            resp = session.post(url, json=payload)
+            if resp.status_code in [200, 201]:
+                print(f"[✓] Created default policy: {name}")
             else:
-                print("[WARNING] Config creation returned no ID. Skipping policy creation.")
-
+                print(f"[✗] Failed to create policy '{name}': {resp.status_code} {resp.text}")
         except Exception as e:
-            print(f"[ERROR] Could not create configuration: {e}")
-            sys.exit(1)
+            print(f"[ERROR] Exception while creating policy '{name}': {e}")
