@@ -22,6 +22,29 @@ def create_default_security_policies(session, base_url, config_id, version, acce
         try:
             resp = session.post(url, json=payload)
             if resp.status_code in [200, 201]:
+                print(f"Created default policy: {name}")
+            else:
+                print(f"Failed to create policy '{name}': {resp.status_code} {resp.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception while creating policy '{name}': {e}")
+
+
+def create_default_security_policies(session, base_url, config_id, version, access_group):
+    policy_names = [
+        f"PL-{access_group}-Prod",
+        f"PL-{access_group}-NonProd"
+    ]
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+
+    for name in policy_names:
+        payload = {
+            "policyName": name,
+            "defaultSettings": "true"
+        }
+
+        try:
+            resp = session.post(url, json=payload)
+            if resp.status_code in [200, 201]:
                 print(f"[✓] Created default policy: {name}")
             else:
                 print(f"[✗] Failed to create policy '{name}': {resp.status_code} {resp.text}")
