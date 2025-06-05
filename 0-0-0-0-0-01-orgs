@@ -1,26 +1,13 @@
-def create_appsec_config(session, base_url, config_name, contract_id, group_id, hostnames, description):
-    url = f"{base_url}/appsec/v1/configs"
-    payload = {
-        "name": config_name,
-        "contractId": contract_id,
-        "groupId": int(group_id),
-        "hostnames": hostnames,
-        "description": description
-    }
-
-    print(f"[INFO] Creating AppSec config '{config_name}'")
-    print("[DEBUG] Payload:")
-    print(json.dumps(payload, indent=2))
-
-    resp = session.post(url, json=payload)
-    print(f"[DEBUG] Response status code: {resp.status_code}")
-    print(f"[DEBUG] Response body: {resp.text}")
-
-    if resp.status_code in [200, 201]:
-        cfg = resp.json()
-        config_id = cfg.get("id") or cfg.get("configId")  # Support either key
-        if not config_id:
-            raise RuntimeError(f"[ERROR] Config creation response missing ID: {json.dumps(cfg, indent=2)}")
-        return config_id, 1
+try:
+    config_id, version = create_appsec_config(
+        session, base_url, config_name,
+        contract_id, group_id, hostnames, description
+    )
+    if config_id:
+        print(f"[SUCCESS] Created configuration ID: {config_id}")
     else:
-        raise RuntimeError(f"[ERROR] Failed to create config: {resp.status_code} {resp.text}")
+        print("[WARNING] Configuration created but config_id not returned in response.")
+
+except Exception as e:
+    print(f"[ERROR] Could not create configuration: {e}")
+    sys.exit(1)
