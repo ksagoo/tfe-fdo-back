@@ -1,14 +1,10 @@
-[14:36, 05/06/2025] Kuldeep: 
-}
-[14:57, 05/06/2025] Kuldeep: # Set default policies using standard naming
-access_group = params['access_group']
 config['config']['default_policies'] = {
     "prod": {
-        "name": f"PL-{access_group}-Prod",
+        "name": f"PL-{params['access_group']}-Prod",
         "prefix": "Prod"
     },
     "nonprod": {
-        "name": f"PL-{access_group}-NonProd",
+        "name": f"PL-{params['access_group']}-NonProd",
         "prefix": "NonP"
     }
 }
