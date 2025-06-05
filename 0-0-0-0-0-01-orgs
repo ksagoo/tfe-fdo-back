@@ -1,32 +1,11 @@
-def find_policy_id_by_prefix(session, base_url, config_id, version, prefix, metadata):
+def get_policy_id_from_metadata(policy_prefix, security_policies_json, metadata):
     """
-    Looks up the policy ID using the prefix defined in config_metadata.json under 'default_policies'.
+    Looks up a policy ID by prefix using expected names from config_metadata.json.
     """
-    default_policies = metadata.get("default_policies", {})
-    matching_policy = None
-
-    # Attempt to match based on stored prefix in metadata
-    for policy_key, policy_data in default_policies.items():
-        if policy_data.get("prefix") == prefix:
-            matching_policy = policy_data.get("name")
-            break
-
-    if not matching_policy:
-        raise ValueError(f"No matching policy found in metadata with prefix '{prefix}'")
-
-    # Get current list of policies to find the ID
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
-    response = session.get(url)
-    response.raise_for_status()
-    policies = response.json().get("securityPolicies", [])
-
-    for policy in policies:
-        if policy.get("policyName") == matching_policy:
-            return policy["policyId"]
-
-    # Debug output to help identify issue
-    print(f"[ERROR] Policy name '{matching_policy}' not found among current policies:")
-    for policy in policies:
-        print(f" - {policy.get('policyName')}")
-    
-    raise ValueError(f"Policy '{matching_policy}' not found for prefix '{prefix}'")
+    for key in ['prod', 'nonprod']:
+        if metadata.get("default_policies", {}).get(key, {}).get("prefix") == policy_prefix:
+            expected_name = metadata["default_policies"][key]["name"]
+            for policy in security_policies_json:
+                if policy.get("policyName") == expected_name:
+                    return policy.get("policyId")
+    return None
