@@ -1,17 +1,18 @@
-mport re
-
 def create_default_security_policies(session, base_url, config_id, version, access_group):
     policy_names = [
         f"PL-{access_group}-Prod",
         f"PL-{access_group}-NonProd"
     ]
+    
     url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+    
+    suffixes = ['p', 'n']  # Prod, NonProd
 
-    for name in policy_names:
-        # Generate a 4-character alphanumeric prefix
-        prefix = re.sub(r'[^a-zA-Z0-9]', '', access_group)[:4]
-        if len(prefix) < 4:
-            prefix = (prefix + 'xxxx')[:4]  # Pad with 'x' if less than 4 characters
+    for name, suffix in zip(policy_names, suffixes):
+        # Sanitize and shorten the base
+        base = re.sub(r'[^a-zA-Z0-9]', '', access_group).lower()
+        base = (base + 'xxxx')[:3]  # 3 safe alphanum chars
+        prefix = f"{base}{suffix}"  # 4-character unique ID
 
         payload = {
             "policyName": name,
@@ -25,28 +26,5 @@ def create_default_security_policies(session, base_url, config_id, version, acce
                 print(f"Created default policy: {name}")
             else:
                 print(f"Failed to create policy '{name}': {resp.status_code} {resp.text}")
-        except Exception as e:
-            print(f"[ERROR] Exception while creating policy '{name}': {e}")
-
-
-def create_default_security_policies(session, base_url, config_id, version, access_group):
-    policy_names = [
-        f"PL-{access_group}-Prod",
-        f"PL-{access_group}-NonProd"
-    ]
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
-
-    for name in policy_names:
-        payload = {
-            "policyName": name,
-            "defaultSettings": "true"
-        }
-
-        try:
-            resp = session.post(url, json=payload)
-            if resp.status_code in [200, 201]:
-                print(f"[✓] Created default policy: {name}")
-            else:
-                print(f"[✗] Failed to create policy '{name}': {resp.status_code} {resp.text}")
         except Exception as e:
             print(f"[ERROR] Exception while creating policy '{name}': {e}")
