@@ -1,20 +1,14 @@
-{
-  "configuration_name": "{{ config.name }}",
-  "contract_id": "{{ config.contract_id }}",
-  "group_id": "{{ config.group_id }}",
-  "description": "{{ config.description }}",
-  "access_group": "{{ config.access_group }}",
-  "version_notes": "{{ config.version_notes }}",
-  "dry_run": {{ config.dry_run | lower }},
-  "hostnames": {{ config.hostnames | tojson }},
-  "default_policies": {
+[14:36, 05/06/2025] Kuldeep: 
+}
+[14:57, 05/06/2025] Kuldeep: # Set default policies using standard naming
+access_group = params['access_group']
+config['config']['default_policies'] = {
     "prod": {
-      "name": "{{ config.default_policies.prod.name }}",
-      "prefix": "{{ config.default_policies.prod.prefix }}"
+        "name": f"PL-{access_group}-Prod",
+        "prefix": "Prod"
     },
     "nonprod": {
-      "name": "{{ config.default_policies.nonprod.name }}",
-      "prefix": "{{ config.default_policies.nonprod.prefix }}"
+        "name": f"PL-{access_group}-NonProd",
+        "prefix": "NonP"
     }
-  }
 }
