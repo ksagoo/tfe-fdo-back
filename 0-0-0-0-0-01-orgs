@@ -1,5 +1,13 @@
+with open(config_meta_path, "r") as f:
+    metadata = json.load(f)
+
+config_name = metadata.get("configuration_name")
+default_policies = metadata.get("default_policies", {})
+prod_policy_id = default_policies.get("prod", {}).get("policyId")
+nonprod_policy_id = default_policies.get("nonprod", {}).get("policyId")
 access_group = metadata.get("access_group", "UNKNOWN")
+
 prefix_to_policy_id = {
     default_policies.get("prod", {}).get("prefix"): prod_policy_id,
-    default_policies.get("nonprod", {}).get("prefix"): nonprod_policy_id,
+    default_policies.get("nonprod", {}).get("prefix"): nonprod_policy_id
 }
