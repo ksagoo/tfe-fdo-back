@@ -1,38 +1,16 @@
-def update_config_metadata(output_path, config_name, contract_id, group_id, access_group, hostnames, description, default_policies):
-    metadata = {
-        "configuration_name": config_name,
-        "contract_id": contract_id,
-        "group_id": group_id,
-        "access_group": access_group,
-        "hostnames": hostnames,
-        "description": description,
-        "default_policies": default_policies
-    }
+[16:55, 05/06/2025] Kuldeep: # Load metadata
+metadata_path = os.path.join(input_dir, "config_metadata.json")
+with open(metadata_path, "r") as f:
+    metadata = json.load(f)
 
-    output_file = os.path.join(output_path, "config_metadata.json")
-    with open(output_file, "w") as f:
-        json.dump(metadata, f, indent=2)
-    print(f"[INFO] Updated metadata written to: {output_file}")
+# Extract policy IDs
+default_policies = metadata.get("default_policies", {})
+prod_policy_id = default_policies.get("prod", {}).get("policyId")
+nonprod_policy_id = default_policies.get("nonprod", {}).get("policyId")
 
-
-update_config_metadata(
-    output_path=args.output_dir,
-    config_name=config_name,
-    contract_id=contract_id,
-    group_id=group_id,
-    access_group=args.access_group,
-    hostnames=hostnames,
-    description=description,
-    default_policies={
-        "prod": {
-            "name": prod_policy_name,
-            "prefix": "Prod",
-            "policyId": prod_policy_id
-        },
-        "nonprod": {
-            "name": nonprod_policy_name,
-            "prefix": "NonP",
-            "policyId": nonprod_policy_id
-        }
-    }
-)
+# Create a prefix-to-ID map for use in imports
+prefix_to_policy_id = {
+    "Prod": prod_policy_id,
+    "NonP": nonprod_policy_id,
+}
+[16:56, 05/06/2025] Kuldeep: policy_id = prefix_to_policy_id.get(policy_prefix)
