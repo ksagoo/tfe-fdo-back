@@ -1,33 +1,6 @@
-def create_appsec_config(session, base_url, config_name, contract_id, group_id, hostnames, description):
-    url = f"{base_url}/appsec/v1/configs"
-    payload = {
-        "name": config_name,
-        "contractId": contract_id,
-        "groupId": int(group_id),
-        "hostnames": hostnames,
-        "description": description
-    }
+config_id = cfg.get("id") or cfg.get("configId")
+if not config_id:
+    raise RuntimeError(f"[ERROR] Config creation response missing 'id' or 'configId': {json.dumps(cfg, indent=2)}")
 
-    print(f"[INFO] Creating AppSec config '{config_name}'")
-    print("[DEBUG] Payload:")
-    print(json.dumps(payload, indent=2))
-
-    try:
-        resp = session.post(url, json=payload)
-        print(f"[DEBUG] Response status code: {resp.status_code}")
-        print(f"[DEBUG] Response body: {resp.text}")
-
-        if resp.status_code not in [200, 201]:
-            raise RuntimeError(f"[ERROR] Failed to create config: {resp.status_code} {resp.text}")
-
-        cfg = resp.json()
-
-        # Defensive check to ensure "id" exists in response
-        if "id" not in cfg:
-            raise RuntimeError(f"[ERROR] Config creation response missing 'id': {json.dumps(cfg, indent=2)}")
-
-        print(f"[OK] Created configuration ID {cfg['id']}")
-        return cfg["id"], 1  # version always starts at 1
-
-    except Exception as e:
-        raise RuntimeError(f"[FATAL] Could not create configuration: {e}")
+print(f"[OK] Created configuration ID {config_id}")
+return config_id, 1
