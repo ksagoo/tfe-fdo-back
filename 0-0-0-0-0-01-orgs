@@ -1,27 +1,20 @@
-Perfect. I’ll now update both your template_appsec_config.yaml and config_metadata.j2 to fully support:
-✅ default_policies block in YAML:
-
-default_policies:
-  prod:
-    name: "PL-{{ config.access_group }}-Prod"
-    prefix: "Prod"
-  nonprod:
-    name: "PL-{{ config.access_group }}-NonProd"
-    prefix: "NonP"
-
-✅ config_metadata.j2 update:
-
-"default_policies": {
-  "prod": {
-    "name": "{{ config.default_policies.prod.name }}",
-    "prefix": "{{ config.default_policies.prod.prefix }}"
-  },
-  "nonprod": {
-    "name": "{{ config.default_policies.nonprod.name }}",
-    "prefix": "{{ config.default_policies.nonprod.prefix }}"
+{
+  "configuration_name": "{{ config.name }}",
+  "contract_id": "{{ config.contract_id }}",
+  "group_id": "{{ config.group_id }}",
+  "description": "{{ config.description }}",
+  "access_group": "{{ config.access_group }}",
+  "version_notes": "{{ config.version_notes }}",
+  "dry_run": {{ config.dry_run | lower }},
+  "hostnames": {{ config.hostnames | tojson }},
+  "default_policies": {
+    "prod": {
+      "name": "{{ config.default_policies.prod.name }}",
+      "prefix": "{{ config.default_policies.prod.prefix }}"
+    },
+    "nonprod": {
+      "name": "{{ config.default_policies.nonprod.name }}",
+      "prefix": "{{ config.default_policies.nonprod.prefix }}"
+    }
   }
 }
-
-I'll also ensure akamai_config_generator.py reads these values after rendering, and avoids policy creation in the importer if they exist.
-
-Let me know when you'd like the full updated script or if you'd like me to proceed with edits now.
