@@ -1,24 +1,46 @@
-prod_policy_name = f"PL-{access_group}-Prod"
-nonprod_policy_name = f"PL-{access_group}-NonProd"
+def create_default_security_policies(session, base_url, config_id, version, default_policies):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+    created_policy_ids = {}
 
-update_config_metadata(
-    output_path=args.output_dir,
-    config_name=config_name,
-    contract_id=contract_id,
-    group_id=group_id,
-    access_group=args.access_group,
-    hostnames=hostnames,
-    description=description,
-    default_policies={
-        "prod": {
-            "name": prod_policy_name,
-            "prefix": "Prod",
-            "policyId": prod_policy_id
-        },
-        "nonprod": {
-            "name": nonprod_policy_name,
-            "prefix": "NonP",
-            "policyId": nonprod_policy_id
+    for env in ["prod", "nonprod"]:
+        policy_data = default_policies.get(env)
+        if not policy_data:
+            print(f"[WARNING] Missing default policy config for {env}, skipping.")
+            continue
+
+        name = policy_data["name"]
+        prefix = policy_data["prefix"]
+
+        payload = {
+            "policyName": name,
+            "policyPrefix": prefix,
+            "policyDescription": f"Default policy created for {name}"
         }
-    }
-)
+
+        try:
+            resp = session.post(url, json=payload)
+            if resp.status_code in [200, 201]:
+                policy = resp.json()
+                policy_id = policy.get("policyId")
+                created_policy_ids[env] = {
+                    "name": name,
+                    "prefix": prefix,
+                    "policyId": policy_id
+                }
+                print(f"[INFO] Created default policy {name} with ID {policy_id}")
+            else:
+                print(f"[ERROR] Failed to create policy {name} ({resp.status_code}): {resp.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception while creating policy {name}: {e}")
+
+    return created_policy_ids
+
+created_policies = create_default_security_policies(session, base_url, config_id, version, default_policies)
+
+prod_policy = created_policies.get("prod", {})
+nonprod_policy = created_policies.get("nonprod", {})
+
+prod_policy_name = prod_policy.get("name", f"PL-{args.access_group}-Prod")
+prod_policy_id = prod_policy.get("policyId")
+nonprod_policy_name = nonprod_policy.get("name", f"PL-{args.access_group}-NonProd")
+nonprod_policy_id = nonprod_policy.get("policyId")
