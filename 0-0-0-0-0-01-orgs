@@ -1,46 +1,96 @@
-def create_default_security_policies(session, base_url, config_id, version, default_policies):
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
-    created_policy_ids = {}
+def main():
+    # Load metadata YAML
+    with open(meta_path, "r") as f:
+        metadata = json.load(f)
 
-    for env in ["prod", "nonprod"]:
-        policy_data = default_policies.get(env)
-        if not policy_data:
-            print(f"[WARNING] Missing default policy config for {env}, skipping.")
-            continue
+    config_name = metadata["configuration_name"]
+    hostnames = metadata.get("hostnames", [])
+    description = metadata.get("description", "Created by onboarding automation.")
 
-        name = policy_data["name"]
-        prefix = policy_data["prefix"]
+    if not hostnames:
+        raise ValueError("Hostnames list in config_metadata.json cannot be empty.")
 
-        payload = {
-            "policyName": name,
-            "policyPrefix": prefix,
-            "policyDescription": f"Default policy created for {name}"
-        }
-
+    try:
+        config_id, version = get_config_id(session, base_url, config_name)
+    except ValueError:
+        print(f"[INFO] Configuration '{config_name}' not found. Attempting to create it...")
         try:
-            resp = session.post(url, json=payload)
-            if resp.status_code in [200, 201]:
-                policy = resp.json()
-                policy_id = policy.get("policyId")
-                created_policy_ids[env] = {
-                    "name": name,
-                    "prefix": prefix,
-                    "policyId": policy_id
-                }
-                print(f"[INFO] Created default policy {name} with ID {policy_id}")
+            config_id, version = create_appsec_config(
+                session, base_url, config_name,
+                contract_id, group_id, hostnames, description
+            )
+
+            if config_id is not None:
+                # Create default policies for new config
+                default_policies = metadata.get("default_policies", {})
+                create_default_security_policies(
+                    session, base_url, config_id, version, default_policies
+                )
+
+                # Generate policy names and dummy IDs (if creation returns ID, assign here)
+                prod_policy_name = f"PL-{args.access_group}-Prod"
+                nonprod_policy_name = f"PL-{args.access_group}-NonProd"
+
+                prod_policy_id = "PROD_POLICY_ID_FROM_API"     # <- update if API returns it
+                nonprod_policy_id = "NONPROD_POLICY_ID_FROM_API"
+
+                update_config_metadata(
+                    output_path=args.output_dir,
+                    config_name=config_name,
+                    contract_id=contract_id,
+                    group_id=group_id,
+                    access_group=args.access_group,
+                    hostnames=hostnames,
+                    description=description,
+                    default_policies={
+                        "prod": {
+                            "name": prod_policy_name,
+                            "prefix": "Prod",
+                            "policyId": prod_policy_id
+                        },
+                        "nonprod": {
+                            "name": nonprod_policy_name,
+                            "prefix": "NonP",
+                            "policyId": nonprod_policy_id
+                        }
+                    }
+                )
+
             else:
-                print(f"[ERROR] Failed to create policy {name} ({resp.status_code}): {resp.text}")
+                print("[WARNING] Config creation returned no ID. Skipping policy creation.")
+
         except Exception as e:
-            print(f"[ERROR] Exception while creating policy {name}: {e}")
+            print(f"[ERROR] Could not create configuration: {e}")
+            sys.exit(1)
 
-    return created_policy_ids
+    else:
+        print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
 
-created_policies = create_default_security_policies(session, base_url, config_id, version, default_policies)
+        # Configuration exists — use metadata to extract policy info
+        default_policies = metadata.get("default_policies", {})
 
-prod_policy = created_policies.get("prod", {})
-nonprod_policy = created_policies.get("nonprod", {})
+        prod_policy = default_policies.get("prod", {})
+        nonprod_policy = default_policies.get("nonprod", {})
 
-prod_policy_name = prod_policy.get("name", f"PL-{args.access_group}-Prod")
-prod_policy_id = prod_policy.get("policyId")
-nonprod_policy_name = nonprod_policy.get("name", f"PL-{args.access_group}-NonProd")
-nonprod_policy_id = nonprod_policy.get("policyId")
+        prod_policy_name = prod_policy.get("name")
+        prod_policy_id = prod_policy.get("policyId")
+
+        nonprod_policy_name = nonprod_policy.get("name")
+        nonprod_policy_id = nonprod_policy.get("policyId")
+
+        if not all([prod_policy_name, prod_policy_id, nonprod_policy_name, nonprod_policy_id]):
+            print("[ERROR] One or more default policy fields missing in config_metadata.json.")
+            sys.exit(1)
+
+    if not args.dry_run:
+        print("\n Importing configs to Akamai AppSec...\n")
+
+        metadata_path = os.path.join(args.output_dir, "config_metadata.json")
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+
+        section_name = args.account
+        session, base_url = setup_session(args.edgerc_file, section_name)
+
+        config_id, version = get_config_id(session, base_url, metadata["configuration_name"])
+        print(f"Connected to Akamai: Config ID = {config_id}, Version = {version}\n")
