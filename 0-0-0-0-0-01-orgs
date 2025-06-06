@@ -1,1 +1,24 @@
-policy_id = prefix_to_policy_id.get(policy_prefix)
+prod_policy_name = f"PL-{access_group}-Prod"
+nonprod_policy_name = f"PL-{access_group}-NonProd"
+
+update_config_metadata(
+    output_path=args.output_dir,
+    config_name=config_name,
+    contract_id=contract_id,
+    group_id=group_id,
+    access_group=args.access_group,
+    hostnames=hostnames,
+    description=description,
+    default_policies={
+        "prod": {
+            "name": prod_policy_name,
+            "prefix": "Prod",
+            "policyId": prod_policy_id
+        },
+        "nonprod": {
+            "name": nonprod_policy_name,
+            "prefix": "NonP",
+            "policyId": nonprod_policy_id
+        }
+    }
+)
