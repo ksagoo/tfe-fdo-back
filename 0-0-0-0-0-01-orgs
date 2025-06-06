@@ -1,1 +1,12 @@
-print(f"[INFO] Using existing policy IDs from metadata: {prod_policy_id}, {nonprod_policy_id}")
+[17:52, 06/06/2025] Kuldeep: try:
+    config_id, version = get_config_id(session, base_url, config_name)
+except ValueError:
+    print(f"[INFO] Configuration '{config_name}' not found. Attempting to create it...")
+    ...
+[17:52, 06/06/2025] Kuldeep: try:
+    config_id, version = get_config_id(session, base_url, config_name)
+except ValueError:
+    print(f"[INFO] Configuration '{config_name}' not found. Attempting to create it...")
+    ...
+else:
+    print(f"[INFO] Using existing policy IDs from metadata: {prod_policy_id}, {nonprod_policy_id}")
