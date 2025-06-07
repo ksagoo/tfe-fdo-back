@@ -1,2 +1,6 @@
-default_policy_name = f"PL-{args.access_group}-Prod" if args.isProd else f"PL-{args.access_group}-NonProd"
-default_policy_prefix = "Prod" if args.isProd else "NonP"
+config_data["default_policies"] = [
+    {
+        "name": default_policy_name,
+        "prefix": default_policy_prefix
+    }
+]
