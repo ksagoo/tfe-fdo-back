@@ -1,2 +1,1 @@
-default_policy_name = f"PL-{params['access_group']}-Prod" if params['isProd'] else f"PL-{params['access_group']}-NonProd"
-default_policy_prefix = "Prod" if params['isProd'] else "NonP"
+params['isProd'] = str2bool(params.get('isProd', 'false'))
