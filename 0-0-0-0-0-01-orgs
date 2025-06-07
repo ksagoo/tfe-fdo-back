@@ -1,1 +1,2 @@
-default_policy_name = f"PL-{args.access_group}-{'Prod' if args.isProd else 'NonProd'}"
+default_policy_name = f"PL-{params['access_group']}-Prod" if params['isProd'] else f"PL-{params['access_group']}-NonProd"
+default_policy_prefix = "Prod" if params['isProd'] else "NonP"
