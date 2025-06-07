@@ -1,5 +1,6 @@
+env = "prod" if str2bool(args.isProd) else "nonprod"
 default_policies_block = {
-    "prod" if str2bool(args.isProd) else "nonprod": {
+    env: {
         "name": policy_name,
         "prefix": policy_prefix,
         "policyID": policy_id
