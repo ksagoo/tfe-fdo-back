@@ -1,3 +1,17 @@
+config:
+  name: "SC-{{ access_group }}"
+  contract_id: "{{ contract_id }}"
+  group_id: "{{ group_id }}"
+  description: "Akamai Shift-Left Onboarding, managed by DevOps via Akamai API Automation."
+  version_notes: "Akamai Shift-Left Onboarding"
+  access_group: "{{ access_group }}"
+  deploy_staging_ver: 0
+  dry_run: false
+  hostnames:
+    - "{{ hostnames }}"
+
+vul_scan_list_name: "VUL-SCAN-PRE-PROD Security Bypass List"
+
 default_policies:
   {% if isProd %}
   prod:
@@ -10,3 +24,26 @@ default_policies:
     prefix: "NonP"
     policyID: ""
   {% endif %}
+
+client_lists:
+  - name: "IP Block List"
+    type: "IP"
+    description: ""
+    tags: []
+
+  - name: "IP Block List Exceptions"
+    type: "IP"
+    description: ""
+    tags: []
+
+  - name: "ASN Block List"
+    type: "ASN"
+    description: ""
+    tags: []
+    items:
+      - value: "12345"
+        description: "Example ASN"
+      - value: "67890"
+        description: "Another ASN"
+
+# (the rest of your content remains unchanged…)
