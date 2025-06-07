@@ -1,11 +1,8 @@
-default_policies = metadata.get("default_policies", {})
-
-if args.isProd:
-    policy_data = default_policies.get("prod", {})
-else:
-    policy_data = default_policies.get("nonprod", {})
-
-policy_name = policy_data.get("name")
-policy_prefix = policy_data.get("prefix")
-policy_id = policy_data.get("policyId")
-print(f"[INFO] Loaded policy from metadata: {policy_name} (ID: {policy_id})")
+policy_key = "prod" if params["isProd"] else "nonprod"
+config['config']['default_policies'] = {
+    policy_key: {
+        "name": default_policy_name,
+        "prefix": default_policy_prefix,
+        "policyID": ""
+    }
+}
