@@ -1,1 +1,5 @@
-default_policy_name = f"PL-{args.access_group}-{'Prod' if args.isProd else 'NonProd'}"
+    yaml_config = yaml.safe_load(f)
+
+policy_info = yaml_config["default_policies"][0]
+policy_prefix = policy_info["prefix"]
+policy_name = policy_info["name"]
