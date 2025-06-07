@@ -1,6 +1,1 @@
-config_data["default_policies"] = [
-    {
-        "name": default_policy_name,
-        "prefix": default_policy_prefix
-    }
-]
+default_policy_name = f"PL-{args.access_group}-{'Prod' if args.isProd else 'NonProd'}"
