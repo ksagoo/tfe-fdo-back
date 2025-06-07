@@ -1,8 +1,1 @@
-env = "prod" if str2bool(args.isProd) else "nonprod"
-default_policies_block = {
-    env: {
-        "name": policy_name,
-        "prefix": policy_prefix,
-        "policyID": policy_id
-    }
-}
+print(f"[INFO] Updated metadata with policy: {policy_name} (prefix: {policy_prefix}, id: {policy_id})")
