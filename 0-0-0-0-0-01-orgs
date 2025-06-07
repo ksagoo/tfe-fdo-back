@@ -1,29 +1,13 @@
-f config_id:
-        print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
-        env = "prod" if str2bool(args.isProd) else "nonprod"
-        print(f"[INFO] Updated metadata with policy: {policy_name} (prefix: {policy_prefix}, id: {policy_id})")
+try:
+    config_id, version = get_config_id(session, base_url, config_name)
+    print(f"[INFO] Found existing config: {config_name} (ID: {config_id})")
 
-        # THIS BLOCK MUST BE HERE — this is missing if config already exists!
-        default_policies_block = {
-            env: {
-                "name": policy_name,
-                "prefix": policy_prefix,
-                "policyId": policy_id
-            }
-        }
+    policy_data = default_policies.get("prod", {}) if str2bool(args.isProd) else default_policies.get("nonprod", {})
+    policy_name = policy_data.get("name")
+    policy_prefix = policy_data.get("prefix")
+    policy_id = policy_data.get("policyId")
 
-        # Now safe to update
-        update_config_metadata(
-            output_path=args.output_dir,
-            config_name=config_name,
-            contract_id=contract_id,
-            group_id=group_id,
-            hostnames=hostnames,
-            access_group=args.access_group,
-            description=description,
-            default_policies=default_policies_block
-        )
+    print(f"[INFO] Using existing policy ID from metadata - Policy Name: {policy_name}, Policy ID: {policy_id}")
 
-
-if not policy_id or not policy_name:
-    print(f"[WARNING] Policy ID or Name is blank. Check default_policies content or creation step.")
+except ValueError:
+    print(f"[INFO] Configuration '{config_name}' not found. Attempting to create it...")
