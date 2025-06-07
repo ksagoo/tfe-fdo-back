@@ -1,1 +1,1 @@
-params['isProd'] = str2bool(params.get('isProd', 'false'))
+args.isProd = str2bool(args.isProd)
