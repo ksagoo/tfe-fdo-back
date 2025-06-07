@@ -1,5 +1,11 @@
-    yaml_config = yaml.safe_load(f)
+default_policies = metadata.get("default_policies", {})
 
-policy_info = yaml_config["default_policies"][0]
-policy_prefix = policy_info["prefix"]
-policy_name = policy_info["name"]
+if args.isProd:
+    policy_data = default_policies.get("prod", {})
+else:
+    policy_data = default_policies.get("nonprod", {})
+
+policy_name = policy_data.get("name")
+policy_prefix = policy_data.get("prefix")
+policy_id = policy_data.get("policyId")
+print(f"[INFO] Loaded policy from metadata: {policy_name} (ID: {policy_id})")
