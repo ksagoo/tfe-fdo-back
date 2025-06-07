@@ -1,8 +1,35 @@
-policy_key = "prod" if params["isProd"] else "nonprod"
-config['config']['default_policies'] = {
-    policy_key: {
-        "name": default_policy_name,
-        "prefix": default_policy_prefix,
-        "policyID": ""
-    }
-}
+def create_default_security_policies(session, base_url, config_id, version, default_policies):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+    created_policy_ids = {}
+
+    for env, policy_data in default_policies.items():
+        if not policy_data:
+            print(f"[WARNING] Missing default policy config for {env}, skipping.")
+            continue
+
+        name = policy_data["name"]
+        prefix = policy_data["prefix"]
+
+        payload = {
+            "policyName": name,
+            "policyPrefix": prefix,
+            "policyDescription": f"Default policy created for {name}"
+        }
+
+        try:
+            resp = session.post(url, json=payload)
+            if resp.status_code in [200, 201]:
+                policy = resp.json()
+                policy_id = policy.get("policyId")
+                created_policy_ids[env] = {
+                    "name": name,
+                    "prefix": prefix,
+                    "policyId": policy_id
+                }
+                print(f"[INFO] Created default policy {name} with ID {policy_id}")
+            else:
+                print(f"[ERROR] Failed to create policy {name} ({resp.status_code}): {resp.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception while creating policy {name}: {e}")
+
+    return created_policy_ids
