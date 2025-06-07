@@ -1,12 +1,30 @@
-policy_data = default_policies.get("prod" if str2bool(args.isProd) else "nonprod", {})
-    policy_prefix = policy_data.get("prefix")
-    policy_name = policy_data.get("name")
-    policy_id = policy_data.get("policyID")  # <- this sets prod_policy_id or nonprod_policy_id
+if config_id is not None:
+    created_policies = create_default_security_policies(...)
 
-default_policies_block = {
-    "prod" if str2bool(args.isProd) else "nonprod": {
-        "name": policy_name,
-        "prefix": policy_prefix,
-        "policyID": policy_id
+    if str2bool(args.isProd):
+        prod_policy = created_policies.get("prod")
+        policy_name = prod_policy.get("name", f"PL-{args.access_group}-Prod")
+        policy_id = prod_policy.get("policyId")
+        policy_prefix = "Prod"
+    else:
+        nonprod_policy = created_policies.get("nonprod")
+        policy_name = nonprod_policy.get("name", f"PL-{args.access_group}-NonProd")
+        policy_id = nonprod_policy.get("policyId")
+        policy_prefix = "NonP"
+
+if str2bool(args.isProd):
+    default_policies_block = {
+        "prod": {
+            "name": policy_name,
+            "prefix": policy_prefix,
+            "policyID": policy_id
+        }
     }
-}
+else:
+    default_policies_block = {
+        "nonprod": {
+            "name": policy_name,
+            "prefix": policy_prefix,
+            "policyID": policy_id
+        }
+    }
