@@ -1,13 +1,23 @@
 if config_id:
-    print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
-    
-    env = "prod" if str2bool(args.isProd) else "nonprod"
-    print(f"[INFO] Updated metadata with policy: {policy_name} (prefix: {policy_prefix}, id: {policy_id})")
+        print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
+        env = "prod" if str2bool(args.isProd) else "nonprod"
+        print(f"[INFO] Updated metadata with policy: {policy_name} (prefix: {policy_prefix}, id: {policy_id})")
 
-    default_policies_block = {
-        env: {
-            "name": policy_name,
-            "prefix": policy_prefix,
-            "policyID": policy_id
+        # THIS BLOCK MUST BE HERE — this is missing if config already exists!
+        default_policies_block = {
+            env: {
+                "name": policy_name,
+                "prefix": policy_prefix,
+                "policyId": policy_id
+            }
         }
-    }
+
+        # Now safe to update
+        update_config_metadata(
+            output_path=args.output_dir,
+            config_name=config_name,
+            contract_id=contract_id,
+            group_id=group_id,
+            hostnames=hos…
+if not policy_id or not policy_name:
+    print(f"[WARNING] Policy ID or Name is blank. Check default_policies content or creation step.")
