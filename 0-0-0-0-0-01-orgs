@@ -1,1 +1,13 @@
-print(f"[INFO] Updated metadata with policy: {policy_name} (prefix: {policy_prefix}, id: {policy_id})")
+if config_id:
+    print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
+    
+    env = "prod" if str2bool(args.isProd) else "nonprod"
+    print(f"[INFO] Updated metadata with policy: {policy_name} (prefix: {policy_prefix}, id: {policy_id})")
+
+    default_policies_block = {
+        env: {
+            "name": policy_name,
+            "prefix": policy_prefix,
+            "policyID": policy_id
+        }
+    }
