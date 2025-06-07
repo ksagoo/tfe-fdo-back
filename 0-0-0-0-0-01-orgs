@@ -1,30 +1,20 @@
-if config_id is not None:
-    created_policies = create_default_security_policies(
-        session, base_url, config_id, version, default_policies
-    )
-
-    if args.isProd:
-        prod_policy = created_policies.get("prod", {})
-        prod_policy_name = prod_policy.get("name", f"PL-{args.access_group}-Prod")
-        prod_policy_id = prod_policy.get("policyId", "")
-    else:
-        nonprod_policy = created_policies.get("nonprod", {})
-        nonprod_policy_name = nonprod_policy.get("name", f"PL-{args.access_group}-NonProd")
-        nonprod_policy_id = nonprod_policy.get("policyId", "")
-
-if args.isProd:
-    default_policies_block = {
-        "prod": {
-            "name": prod_policy_name,
-            "prefix": "Prod",
-            "policyId": prod_policy_id
-        }
+"default_policies":
+{% if config.default_policies.prod is defined %}
+  {
+    "prod": {
+      "name": "{{ config.default_policies.prod.name }}",
+      "prefix": "{{ config.default_policies.prod.prefix }}",
+      "policyId": "{{ config.default_policies.prod.policyId }}"
     }
-else:
-    default_policies_block = {
-        "nonprod": {
-            "name": nonprod_policy_name,
-            "prefix": "NonP",
-            "policyId": nonprod_policy_id
-        }
+  }
+{% elif config.default_policies.nonprod is defined %}
+  {
+    "nonprod": {
+      "name": "{{ config.default_policies.nonprod.name }}",
+      "prefix": "{{ config.default_policies.nonprod.prefix }}",
+      "policyId": "{{ config.default_policies.nonprod.policyId }}"
     }
+  }
+{% else %}
+  {}
+{% endif %}
