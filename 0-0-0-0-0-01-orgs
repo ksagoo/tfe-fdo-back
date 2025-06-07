@@ -1,5 +1,4 @@
-[00:29, 08/06/2025] Kuldeep: Me
-[00:29, 08/06/2025] Kuldeep: update_config_metadata(
+update_config_metadata(
     output_path=args.output_dir,
     config_name=config_name,
     contract_id=contract_id,
