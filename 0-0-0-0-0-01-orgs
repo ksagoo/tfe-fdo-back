@@ -1,4 +1,12 @@
-default_policies = config.get("config", {}).get("default_policies", {})
+policy_data = default_policies.get("prod" if str2bool(args.isProd) else "nonprod", {})
+    policy_prefix = policy_data.get("prefix")
+    policy_name = policy_data.get("name")
+    policy_id = policy_data.get("policyID")  # <- this sets prod_policy_id or nonprod_policy_id
 
-print("[DEBUG] full config keys:", config.keys())
-print("[DEBUG] default_policies block:", default_policies)
+default_policies_block = {
+    "prod" if str2bool(args.isProd) else "nonprod": {
+        "name": policy_name,
+        "prefix": policy_prefix,
+        "policyID": policy_id
+    }
+}
