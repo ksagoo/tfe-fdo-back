@@ -1,6 +1,2 @@
-default_policies = config.get("default_policies", {})
-
-if str2bool(args.isProd):
-    policy_data = default_policies.get("prod", {})
-else:
-    policy_data = default_policies.get("nonprod", {})
+default_policies_all = config.get("default_policies", {})
+policy_data = default_policies_all.get("prod" if str2bool(args.isProd) else "nonprod", {})
