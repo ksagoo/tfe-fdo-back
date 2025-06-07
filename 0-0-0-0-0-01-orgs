@@ -1,9 +1,31 @@
-update_config_metadata(
-    output_path=args.output_dir,
-    config_name=config_name,
-    contract_id=contract_id,
-    group_id=group_id,
-    access_group=args.access_group,
-    description=description,
-    default_policies=default_policies_block
-)
+if config_id:
+    print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
+    
+    # Extract policy from metadata (if it exists)
+    policy_data = default_policies.get("prod", {}) if str2bool(args.isProd) else default_policies.get("nonprod", {})
+    policy_name = policy_data.get("name")
+    policy_prefix = policy_data.get("prefix")
+    policy_id = policy_data.get("policyId")
+
+    # Only update if we have a valid policy ID
+    if policy_id and policy_name:
+        print(f"[INFO] Using existing policy ID from metadata - Policy Name: {policy_name}, Policy ID: {policy_id}")
+        
+        default_policies_block = {
+            "env": "prod" if str2bool(args.isProd) else "nonprod",
+            "name": policy_name,
+            "prefix": policy_prefix,
+            "policyId": policy_id
+        }
+
+        update_config_metadata(
+            output_path=args.output_dir,
+            config_name=config_name,
+            contract_id=contract_id,
+            group_id=group_id,
+            access_group=args.access_group,
+            description=description,
+            default_policies=default_policies_block
+        )
+    else:
+        print("[WARN] Policy ID or Name is blank. Skipping metadata update. Check metadata or policy creation.")
