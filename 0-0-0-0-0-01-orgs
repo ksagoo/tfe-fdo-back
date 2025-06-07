@@ -1,12 +1,1 @@
-default_policies:
-  {% if config.default_policies.prod is defined %}
-  prod:
-    name: "{{ config.default_policies.prod.name }}"
-    prefix: "{{ config.default_policies.prod.prefix }}"
-    policyID: "{{ config.default_policies.prod.policyID }}"
-  {% elif config.default_policies.nonprod is defined %}
-  nonprod:
-    name: "{{ config.default_policies.nonprod.name }}"
-    prefix: "{{ config.default_policies.nonprod.prefix }}"
-    policyID: "{{ config.default_policies.nonprod.policyID }}"
-  {% endif %}
+default_policy_name = f"PL-{args.access_group}-{'Prod' if args.isProd else 'NonProd'}"
