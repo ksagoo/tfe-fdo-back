@@ -1,20 +1,12 @@
-"default_policies":
-{% if config.default_policies.prod is defined %}
-  {
-    "prod": {
-      "name": "{{ config.default_policies.prod.name }}",
-      "prefix": "{{ config.default_policies.prod.prefix }}",
-      "policyId": "{{ config.default_policies.prod.policyId }}"
-    }
-  }
-{% elif config.default_policies.nonprod is defined %}
-  {
-    "nonprod": {
-      "name": "{{ config.default_policies.nonprod.name }}",
-      "prefix": "{{ config.default_policies.nonprod.prefix }}",
-      "policyId": "{{ config.default_policies.nonprod.policyId }}"
-    }
-  }
-{% else %}
-  {}
-{% endif %}
+default_policies:
+  {% if isProd %}
+  prod:
+    name: "PL-{{ access_group }}-Prod"
+    prefix: "Prod"
+    policyID: ""
+  {% else %}
+  nonprod:
+    name: "PL-{{ access_group }}-NonProd"
+    prefix: "NonP"
+    policyID: ""
+  {% endif %}
