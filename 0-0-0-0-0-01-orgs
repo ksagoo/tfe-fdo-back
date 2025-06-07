@@ -1,1 +1,6 @@
-print("[DEBUG] default_policies loaded:", default_policies)
+default_policies = config.get("default_policies", {})
+
+if str2bool(args.isProd):
+    policy_data = default_policies.get("prod", {})
+else:
+    policy_data = default_policies.get("nonprod", {})
