@@ -1,5 +1,21 @@
-env = "prod" if str2bool(args.isProd) else "nonprod"
-policy_data = default_policies.get(env, {})
-policy_name = policy_data.get("name")
-policy_prefix = policy_data.get("prefix")
-policy_id = policy_data.get("policyId")
+[23:52, 07/06/2025] Kuldeep: try:
+    config_id, version = get_config_id(session, base_url, config_name)
+    print(f"[INFO] Found existing config: {config_name} (ID: {config_id})")
+    
+    # Always extract policy info from config if it already exists
+    if str2bool(args.isProd):
+        policy_data = default_policies.get("prod", {})
+    else:
+        policy_data = default_policies.get("nonprod", {})
+
+    policy_name = policy_data.get("name")
+    policy_prefix = policy_data.get("prefix")
+    policy_id = policy_data.get("policyId")
+
+    print(f"[INFO] Using existing policy ID from metadata - Policy Name: {policy_name}, Policy ID: {policy_id}")
+
+except ValueError:
+    ...
+[23:53, 07/06/2025] Kuldeep: if not policy_id or not policy_name:
+    print("[ERROR] Policy ID or Name is blank. Check default_policies content or creation step.")
+    sys.exit(1)
