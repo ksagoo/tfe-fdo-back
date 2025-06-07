@@ -1,21 +1,83 @@
-[23:52, 07/06/2025] Kuldeep: try:
+# Load default policies from config
+default_policies = config.get("default_policies", {})
+policy_data = default_policies.get("prod", {}) if str2bool(args.isProd) else default_policies.get("nonprod", {})
+
+config_id = None
+version = None
+
+try:
+    # Try to find existing config
     config_id, version = get_config_id(session, base_url, config_name)
     print(f"[INFO] Found existing config: {config_name} (ID: {config_id})")
-    
-    # Always extract policy info from config if it already exists
-    if str2bool(args.isProd):
-        policy_data = default_policies.get("prod", {})
-    else:
-        policy_data = default_policies.get("nonprod", {})
 
-    policy_name = policy_data.get("name")
-    policy_prefix = policy_data.get("prefix")
-    policy_id = policy_data.get("policyId")
-
-    print(f"[INFO] Using existing policy ID from metadata - Policy Name: {policy_name}, Policy ID: {policy_id}")
+    # If config exists, get policy data from metadata
+    policy_data = default_policies.get("prod", {}) if str2bool(args.isProd) else default_policies.get("nonprod", {})
 
 except ValueError:
-    ...
-[23:53, 07/06/2025] Kuldeep: if not policy_id or not policy_name:
-    print("[ERROR] Policy ID or Name is blank. Check default_policies content or creation step.")
+    print(f"[INFO] Configuration '{config_name}' not found. Attempting to create it...")
+
+    try:
+        config_id, version = create_appsec_config(
+            session, base_url, config_name, contract_id, group_id, hostnames, description
+        )
+
+        if config_id is not None:
+            created_policies = create_default_security_policies(session, base_url, config_id, version, default_policies)
+
+            if str2bool(args.isProd):
+                prod_policy = created_policies.get("prod")
+                policy_name = prod_policy.get("name")
+                policy_prefix = f"PL-{args.access_group}-Prod"
+                policy_id = prod_policy.get("policyId")
+            else:
+                nonprod_policy = created_policies.get("nonprod")
+                policy_name = nonprod_policy.get("name")
+                policy_prefix = f"PL-{args.access_group}-NonProd"
+                policy_id = nonprod_policy.get("policyId")
+
+            # Prepare policy_data from newly created
+            policy_data = {
+                "name": policy_name,
+                "prefix": policy_prefix,
+                "policyId": policy_id
+            }
+
+        else:
+            print("[WARNING] Config creation returned no ID. Skipping policy creation.")
+
+    except Exception as e:
+        print(f"[ERROR] Could not create configuration: {e}")
+        sys.exit(1)
+
+if config_id:
+    print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
+
+# Final extraction — always done after policy_data is known
+policy_name = policy_data.get("name")
+policy_prefix = policy_data.get("prefix")
+policy_id = policy_data.get("policyId")
+
+print(f"[INFO] Updated metadata with policy: {policy_name} (prefix: {policy_prefix}, id: {policy_id})")
+
+# ---- Guard Clause: prevent blank metadata entries ----
+if not policy_name or not policy_id:
+    print("[ERROR] Policy ID or name is blank. Check default_policies content or creation step.")
     sys.exit(1)
+
+# ---- Write metadata ----
+default_policies_block = {
+    "name": policy_name,
+    "prefix": policy_prefix,
+    "policyId": policy_id
+}
+
+update_config_metadata(
+    output_path=args.output_dir,
+    config_id=config_id,
+    contract_id=contract_id,
+    group_id=group_id,
+    config_name=config_name,
+    access_group=args.access_group,
+    description=description,
+    default_policies=default_policies_block
+)
