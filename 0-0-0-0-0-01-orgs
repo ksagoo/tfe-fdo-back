@@ -1,5 +1,4 @@
 if config_id is not None:
-    # Create only the required policy
     created_policies = create_default_security_policies(
         session, base_url, config_id, version, default_policies
     )
@@ -12,10 +11,7 @@ if config_id is not None:
         nonprod_policy = created_policies.get("nonprod", {})
         nonprod_policy_name = nonprod_policy.get("name", f"PL-{args.access_group}-NonProd")
         nonprod_policy_id = nonprod_policy.get("policyId", "")
-else:
-    print("[WARNING] Config creation returned no ID. Skipping policy creation.")
 
-# Decide which policy to update based on isProd flag
 if args.isProd:
     default_policies_block = {
         "prod": {
@@ -32,15 +28,3 @@ else:
             "policyId": nonprod_policy_id
         }
     }
-
-# Then call update_config_metadata as before
-update_config_metadata(
-    output_path=args.output_dir,
-    config_name=config_name,
-    contract_id=contract_id,
-    group_id=group_id,
-    access_group=args.access_group,
-    hostnames=hostnames,
-    description=description,
-    default_policies=default_policies_block
-)
