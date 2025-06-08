@@ -1,38 +1,44 @@
-[18:23, 08/06/2025] Kuldeep: def get_policy_id(session, base_url, config_id, env, default_policies):
+def get_policy_id(session, base_url, config_id, env, default_policies):
     """
-    Retrieve policy ID for the given environment using existing config_id.
-
-    Args:
-        session (requests.Session): Authenticated Akamai session.
-        base_url (str): Akamai API base URL.
-        config_id (str): Existing security configuration ID.
-        env (str): 'prod' or 'nonprod'.
-        default_policies (dict): Contains 'prod' and 'nonprod' policy details with names or prefixes.
+    Get the policy ID from Akamai using config ID and expected policy name for env ('prod' or 'nonprod').
 
     Returns:
-        str or None: The policy ID if found, else None.
+        str or None
     """
     try:
         url = f"{base_url}/appsec/v1/configs/{config_id}/security-policies"
+        print(f"[INFO] Fetching policies from: {url}")
         response = session.get(url)
-        response.raise_for_status()
 
+        if response.status_code == 404:
+            print(f"[WARN] No policies found for config {config_id}. HTTP 404 returned.")
+            return None
+
+        response.raise_for_status()
         policies = response.json().get("securityPolicies", [])
-        target_policy_name = default_policies.get(env, {}).get("name")
+        if not policies:
+            print(f"[WARN] No policies defined in config {config_id}.")
+            return None
+
+        expected_name = default_policies.get(env, {}).get("name")
+        if not expected_name:
+            print(f"[ERROR] No expected policy name found for env '{env}' in metadata.")
+            return None
 
         for policy in policies:
-            if policy.get("policyName") == target_policy_name:
+            if policy.get("policyName") == expected_name:
+                print(f"[INFO] Found policy '{expected_name}' with ID {policy.get('policyId')}")
                 return policy.get("policyId")
 
-        print(f"[WARN] Policy name '{target_policy_name}' not found for env '{env}' in config '{config_id}'")
+        print(f"[WARN] No matching policy found with name '{expected_name}' in config {config_id}.")
         return None
 
     except Exception as e:
-        print(f"[ERROR] Failed to get policy ID: {e}")
+        print(f"[ERROR] Failed to retrieve policy ID: {e}")
         return None
-[18:23, 08/06/2025] Kuldeep: # If config_id already exists
-if config_id and not policy_id:
-    policy_id = get_policy_id(session, base_url, config_id, "prod", metadata["default_policies"])
+
+if config_id:
+    policy_id = get_policy_id(session, base_url, config_id, env, metadata["default_policies"])
     if policy_id:
-        metadata["default_policies"]["prod"]["id"] = policy_id
-        update_config_metadata(metadata_path, metadata)
+        metadata["default_policies"][env]["policyId"] = policy_id
+        update_config_metadata(output_dir, config_id, version, access_group, metadata["default_policies"][env])
