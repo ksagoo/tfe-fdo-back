@@ -1,6 +1,7 @@
-created_policies = create_default_security_policies(session, base_url, config_id, version, default_policies)
+metadata_path = os.path.join(args.output_dir, "config_metadata.json")
+with open(metadata_path) as f:
+    metadata = json.load(f)
 
-env = "Prod" if args.isProd else "NonProd"
-policy_id = created_policies.get(env, {}).get("policyId")
-
-hostname_coverage = resolve_hostname_coverage(hostname, policy_id, previous_config_id)
+env = "Prod" if str2bool(args.isProd) else "NonProd"
+policy_name = metadata["default_policies"][env]["name"]
+policy_id = metadata["default_policies"][env]["policyId"]
