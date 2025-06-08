@@ -1,54 +1,30 @@
-if config_id:
-    print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
+[14:45, 08/06/2025] Kuldeep: Me
+[14:46, 08/06/2025] Kuldeep: def update_config_metadata(output_dir, config_id, version, access_group, policy_metadata):
+    metadata_path = os.path.join(output_dir, "config_metadata.json")
 
-    # Check if we already have a known policy
-    policy_data = default_policies.get("prod" if strtobool(args.isProd) else "nonprod", {})
-    policy_name = policy_data.get("name")
-    policy_prefix = policy_data.get("prefix")
-    policy_id = policy_data.get("policyId")
-
-    if policy_name and policy_id:
-        print(f"[INFO] Using existing policy ID from metadata - Policy Name: {policy_name}, Policy ID: {policy_id}")
+    if os.path.exists(metadata_path):
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
     else:
-        print(f"[INFO] No policy info found in metadata. Creating default security policy...")
+        metadata = {}
 
-        try:
-            created_policies = create_default_security_policies(
-                session, base_url, config_id, version, default_policies
-            )
+    # Always update these
+    metadata["config_id"] = config_id
+    metadata["version"] = version
+    metadata["access_group"] = access_group
 
-            if strtobool(args.isProd):
-                created_policy = created_policies.get("prod")
-            else:
-                created_policy = created_policies.get("nonprod")
+    # Only update the correct default policy block
+    env = policy_metadata["env"]  # either "prod" or "nonprod"
+    if "default_policies" not in metadata:
+        metadata["default_policies"] = {}
 
-            policy_name = created_policy.get("name")
-            policy_prefix = created_policy.get("prefix")
-            policy_id = created_policy.get("policyId")
+    metadata["default_policies"][env] = {
+        "name": policy_metadata["name"],
+        "prefix": policy_metadata["prefix"],
+        "policyId": policy_metadata["policyId"]
+    }
 
-            if policy_name and policy_id:
-                print(f"[INFO] Created default policy {policy_name} with ID {policy_id}")
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f, indent=2)
 
-                default_policies_block = {
-                    "env": "prod" if strtobool(args.isProd) else "nonprod",
-                    "name": policy_name,
-                    "prefix": policy_prefix,
-                    "policyId": policy_id,
-                }
-
-                print(f"[INFO] Writing metadata block: {default_policies_block}")
-                update_config_metadata(
-                    config_metadata_path,
-                    output_dir,
-                    config_id,
-                    config_name,
-                    args.access_group,
-                    default_policies_block,
-                )
-            else:
-                print("[WARNING] Policy ID or Name is blank. Skipping metadata update. Check default_policies content or creation step.")
-
-        except Exception as e:
-            print(f"[ERROR] Could not create default policy: {e}")
-else:
-    print("[WARNING] Config creation returned no ID. Skipping policy creation.")
+    print(f"[INFO] Updated metadata for {env.upper()} default policy.")
