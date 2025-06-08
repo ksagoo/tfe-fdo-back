@@ -1,3 +1,76 @@
-if not policy_name or not policy_id:
-        print("[ERROR] Missing policy_name or policy_id from metadata. Aborting metadata update.")
+if not hostnames:
+    raise ValueError("hostnames list in config_metadata.json cannot be empty.")
+
+default_policies = config.get("default_policies", {})
+policy_data = default_policies.get("prod", {}) if str2bool(args.isProd) else default_policies.get("nonprod", {})
+policy_name = policy_data.get("name")
+policy_prefix = policy_data.get("prefix")
+policy_id = policy_data.get("policyId")
+
+config_id = None
+version = None
+
+try:
+    # Try to find existing config
+    config_id, version = get_config_id(session, base_url, config_name)
+    print(f"[INFO] Found existing config: {config_name} (ID: {config_id})")
+
+    # Pull policy ID from existing metadata if present
+    policy_data = default_policies.get("prod", {}) if str2bool(args.isProd) else default_policies.get("nonprod", {})
+    policy_name = policy_data.get("name")
+    policy_prefix = policy_data.get("prefix")
+    policy_id = policy_data.get("policyId")
+    print(f"[INFO] Using existing policy ID from metadata - Policy Name: {policy_name}, Policy ID: {policy_id}")
+
+except ValueError:
+    print(f"[INFO] Configuration '{config_name}' not found. Attempting to create it...")
+
+    try:
+        config_id, version = create_appsec_config(
+            session, base_url, config_name, contract_id, group_id, hostnames, description
+        )
+
+        if config_id is not None:
+            created_policies = create_default_security_policies(session, base_url, config_id, version, default_policies)
+
+            if str2bool(args.isProd):
+                prod_policy = created_policies.get("prod")
+                policy_name = prod_policy.get("name")
+                policy_prefix = f"PL-{args.access_group}-Prod"
+                policy_id = prod_policy.get("policyId")
+            else:
+                nonprod_policy = created_policies.get("nonprod")
+                policy_name = nonprod_policy.get("name")
+                policy_prefix = f"PL-{args.access_group}-NonProd"
+                policy_id = nonprod_policy.get("policyId")
+        else:
+            print("[WARNING] Config creation returned no ID. Skipping policy creation.")
+
+    except Exception as e:
+        print(f"[ERROR] Could not create configuration: {e}")
         sys.exit(1)
+
+if config_id:
+    print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
+    print(f"[INFO] Updated metadata with policy: {policy_name} (prefix: {policy_prefix}, id: {policy_id})")
+
+    if not policy_id or not policy_name:
+        print("[WARN] Policy ID or Name is blank. Skipping metadata update. Check default_policies content or creation step.")
+    else:
+        default_policies_block = {
+            "env": "prod" if str2bool(args.isProd) else "nonprod",
+            "name": policy_name,
+            "prefix": policy_prefix,
+            "policyId": policy_id
+        }
+
+        update_config_metadata(
+            output_path=args.output_dir,
+            config_id=config_id,
+            contract_id=contract_id,
+            group_id=group_id,
+            access_group=args.access_group,
+            hostnames=hostnames,
+            description=description,
+            default_policies=default_policies_block
+        )
