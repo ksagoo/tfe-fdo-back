@@ -1,30 +1,4 @@
-
-def update_config_metadata(output_dir, config_id, version, access_group, policy_metadata):
-    metadata_path = os.path.join(output_dir, "config_metadata.json")
-
-    if os.path.exists(metadata_path):
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
-    else:
-        metadata = {}
-
-    # Always update these
-    metadata["config_id"] = config_id
-    metadata["version"] = version
-    metadata["access_group"] = access_group
-
-    # Only update the correct default policy block
-    env = policy_metadata["env"]  # either "prod" or "nonprod"
-    if "default_policies" not in metadata:
-        metadata["default_policies"] = {}
-
-    metadata["default_policies"][env] = {
-        "name": policy_metadata["name"],
-        "prefix": policy_metadata["prefix"],
-        "policyId": policy_metadata["policyId"]
-    }
-
-    with open(metadata_path, "w") as f:
-        json.dump(metadata, f, indent=2)
-
-    print(f"[INFO] Updated metadata for {env.upper()} default policy.")
+# Only update the correct default policy block
+if not policy_metadata:
+    raise ValueError("Policy metadata is empty. Cannot update config metadata.")
+env = next(iter(policy_metadata.keys()))
