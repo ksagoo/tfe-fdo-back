@@ -1,7 +1,3 @@
-if not policy_id or not policy_name:
-    # Reload from metadata to avoid overwriting with blank
-    stored_policy = default_policies.get("prod", {}) if str2bool(args.isProd) else default_policies.get("nonprod", {})
-    policy_name = stored_policy.get("name")
-    policy_prefix = stored_policy.get("prefix")
-    policy_id = stored_policy.get("policyId")
-    print(f"[INFO] Re-using policy from metadata: Name={policy_name}, ID={policy_id}")
+if not policy_name or not policy_id:
+        print("[ERROR] Missing policy_name or policy_id from metadata. Aborting metadata update.")
+        sys.exit(1)
