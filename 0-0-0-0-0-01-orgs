@@ -1,16 +1,6 @@
-# After policy_id is resolved:
-hostname = "psos-dev-01.hsbc.com.hk"
-previous_config_id = 112470
-hostname_coverage = resolve_hostname_coverage(hostname, policy_id, previous_config_id)
+created_policies = create_default_security_policies(session, base_url, config_id, version, default_policies)
 
-# Call activation with hostnameCoverage
-activation_id = activate_security_configuration(
-    session,
-    base_url,
-    config_id,
-    version,
-    args.network,
-    args.note,
-    args.emails,
-    hostname_coverage=hostname_coverage
-)
+env = "Prod" if args.isProd else "NonProd"
+policy_id = created_policies.get(env, {}).get("policyId")
+
+hostname_coverage = resolve_hostname_coverage(hostname, policy_id, previous_config_id)
