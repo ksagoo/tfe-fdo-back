@@ -1,14 +1,33 @@
-{
-  "action": "ACTIVATE",
-  "network": "STAGING",
-  "configId": <new_config_id>,
-  "version": <version>,
-  "note": "Activating new config with hostname transfer",
-  "hostnameCoverage": [
-    {
-      "hostname": "psos-dev-01.hsbc.com.hk",
-      "policyId": <your_policy_id>,
-      "previousConfigId": 112470
-    }
-  ]
+payload = {
+    "action": "ACTIVATE",
+    "activationConfigs": [{
+        "configId": config_id,
+        "configVersion": config_version
+    }],
+    "network": network.upper(),
+    "note": note,
+    "notificationEmails": emails
 }
+
+if hostname_coverage:
+    payload["hostnameCoverage"] = hostname_coverage
+[23:26, 08/06/2025] Kuldeep: def resolve_hostname_coverage(session, base_url, hostname, policy_id, previous_config_id):
+    return [{
+        "hostname": hostname,
+        "policyId": policy_id,
+        "previousConfigId": previous_config_id
+    }]
+
+hostname = "psos-dev-01.hsbc.com.hk"
+previous_config_id = 112470
+hostname_coverage = resolve_hostname_coverage(session, base_url, hostname, policy_id, previous_config_id)
+
+activate_security_configuration(
+    session, base_url,
+    config_id=config_id,
+    config_version=config_version,
+    network="STAGING",
+    note="Activating with hostname move",
+    emails=["you@example.com"],
+    hostname_coverage=hostname_coverage
+)
