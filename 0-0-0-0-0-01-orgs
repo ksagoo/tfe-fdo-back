@@ -1,4 +1,6 @@
-# Only update the correct default policy block
-if not policy_metadata:
-    raise ValueError("Policy metadata is empty. Cannot update config metadata.")
-env = next(iter(policy_metadata.keys()))
+env_data = policy_metadata.get(env, {})
+metadata["default_policies"][env] = {
+    "name": env_data.get("name", ""),
+    "prefix": env_data.get("prefix", ""),
+    "policyId": env_data.get("policyId", "")
+}
