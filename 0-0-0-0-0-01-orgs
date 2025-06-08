@@ -2,3 +2,4 @@ https://techdocs.akamai.com/application-security/reference/get-policies
 url = "https://hostname/appsec/v1/configs/116183/versions/1/security-policies"
 
 url = "https://hostname/appsec/v1/configs/116183/versions/1/security-policies/policyId"
+url = "https://hostname/appsec/v1/configs/configId/versions/versionNumber/security-policies"
