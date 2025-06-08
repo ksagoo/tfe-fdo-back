@@ -1,44 +1,4 @@
-def get_policy_id(session, base_url, config_id, env, default_policies):
-    """
-    Get the policy ID from Akamai using config ID and expected policy name for env ('prod' or 'nonprod').
+https://techdocs.akamai.com/application-security/reference/get-policies
+url = "https://hostname/appsec/v1/configs/116183/versions/1/security-policies"
 
-    Returns:
-        str or None
-    """
-    try:
-        url = f"{base_url}/appsec/v1/configs/{config_id}/security-policies"
-        print(f"[INFO] Fetching policies from: {url}")
-        response = session.get(url)
-
-        if response.status_code == 404:
-            print(f"[WARN] No policies found for config {config_id}. HTTP 404 returned.")
-            return None
-
-        response.raise_for_status()
-        policies = response.json().get("securityPolicies", [])
-        if not policies:
-            print(f"[WARN] No policies defined in config {config_id}.")
-            return None
-
-        expected_name = default_policies.get(env, {}).get("name")
-        if not expected_name:
-            print(f"[ERROR] No expected policy name found for env '{env}' in metadata.")
-            return None
-
-        for policy in policies:
-            if policy.get("policyName") == expected_name:
-                print(f"[INFO] Found policy '{expected_name}' with ID {policy.get('policyId')}")
-                return policy.get("policyId")
-
-        print(f"[WARN] No matching policy found with name '{expected_name}' in config {config_id}.")
-        return None
-
-    except Exception as e:
-        print(f"[ERROR] Failed to retrieve policy ID: {e}")
-        return None
-
-if config_id:
-    policy_id = get_policy_id(session, base_url, config_id, env, metadata["default_policies"])
-    if policy_id:
-        metadata["default_policies"][env]["policyId"] = policy_id
-        update_config_metadata(output_dir, config_id, version, access_group, metadata["default_policies"][env])
+url = "https://hostname/appsec/v1/configs/116183/versions/1/security-policies/policyId"
