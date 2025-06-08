@@ -1,36 +1,38 @@
-def get_policy_id(session, base_url, config_id, env):
+[18:23, 08/06/2025] Kuldeep: def get_policy_id(session, base_url, config_id, env, default_policies):
     """
-    Retrieve the policy ID from Akamai for the given configuration ID and environment.
+    Retrieve policy ID for the given environment using existing config_id.
 
     Args:
-        session: Authenticated session object.
+        session (requests.Session): Authenticated Akamai session.
         base_url (str): Akamai API base URL.
-        config_id (str): Security configuration ID.
-        env (str): Environment name, e.g., 'prod' or 'nonprod'.
+        config_id (str): Existing security configuration ID.
+        env (str): 'prod' or 'nonprod'.
+        default_policies (dict): Contains 'prod' and 'nonprod' policy details with names or prefixes.
 
     Returns:
-        str: The policy ID if found, or None.
+        str or None: The policy ID if found, else None.
     """
     try:
         url = f"{base_url}/appsec/v1/configs/{config_id}/security-policies"
-        resp = session.get(url)
+        response = session.get(url)
+        response.raise_for_status()
 
-        if resp.status_code not in [200, 201]:
-            print(f"[ERROR] Failed to retrieve policies. Status: {resp.status_code}, Response: {resp.text}")
-            return None
-
-        policies = resp.json().get("securityPolicies", [])
-        env_prefix = "Prod" if env.lower() == "prod" else "NonProd"
+        policies = response.json().get("securityPolicies", [])
+        target_policy_name = default_policies.get(env, {}).get("name")
 
         for policy in policies:
-            name = policy.get("policyName", "")
-            if env_prefix.lower() in name.lower():
-                print(f"[INFO] Found {env.upper()} policy in Akamai: {name} (ID: {policy['policyId']})")
-                return policy["policyId"]
+            if policy.get("policyName") == target_policy_name:
+                return policy.get("policyId")
 
-        print(f"[WARN] No matching policy found in Akamai for environment: {env}")
+        print(f"[WARN] Policy name '{target_policy_name}' not found for env '{env}' in config '{config_id}'")
         return None
 
     except Exception as e:
-        print(f"[ERROR] Exception while retrieving policy ID: {e}")
+        print(f"[ERROR] Failed to get policy ID: {e}")
         return None
+[18:23, 08/06/2025] Kuldeep: # If config_id already exists
+if config_id and not policy_id:
+    policy_id = get_policy_id(session, base_url, config_id, "prod", metadata["default_policies"])
+    if policy_id:
+        metadata["default_policies"]["prod"]["id"] = policy_id
+        update_config_metadata(metadata_path, metadata)
