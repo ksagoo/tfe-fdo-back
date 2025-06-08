@@ -1,9 +1,30 @@
-https://techdocs.akamai.com/application-security/reference/get-policies
-url = "https://hostname/appsec/v1/configs/116183/versions/1/security-policies"
+[19:08, 08/06/2025] Kuldeep: def get_policy_id(session, base_url, config_id, version, policy_name):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+    print(f"[INFO] Fetching policies from: {url}")
+    
+    resp = session.get(url)
+    if resp.status_code == 200:
+        policies = resp.json().get("securityPolicies", [])
+        for policy in policies:
+            if policy["policyName"] == policy_name:
+                print(f"[INFO] Found matching policy: {policy_name}, ID: {policy['policyId']}")
+                return policy["policyId"]
+        print(f"[WARN] No policy found with name: {policy_name}")
+    else:
+        print(f"[WARN] Failed to fetch policies for config ID {config_id}, HTTP {resp.status_code}")
 
-url = "https://hostname/appsec/v1/configs/116183/versions/1/security-policies/policyId"
-url = "https://hostname/appsec/v1/configs/configId/versions/versionNumber/security-policies"
+    return None
+[19:08, 08/06/2025] Kuldeep: if config_id:
+    version = 1  # adjust if you fetch version dynamically
+    policy_name = f"PL-{config_name}-{'Prod' if str2bool(args.isProd) else 'NonProd'}"
+    policy_id = get_policy_id(session, base_url, config_id, version, policy_name)
 
-
-
-https://techdocs.akamai.com/application-security/reference/get-policy
+    if policy_id:
+        default_policies = {
+            "prod" if str2bool(args.isProd) else "nonprod": {
+                "name": policy_name,
+                "prefix": "Prod" if str2bool(args.isProd) else "NonProd",
+                "policyId": policy_id
+            }
+        }
+        update_config_metadata(args.output_dir, config_id, version, access_group, default_policies)
