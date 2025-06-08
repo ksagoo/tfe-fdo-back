@@ -1,5 +1,5 @@
-[14:45, 08/06/2025] Kuldeep: Me
-[14:46, 08/06/2025] Kuldeep: def update_config_metadata(output_dir, config_id, version, access_group, policy_metadata):
+
+def update_config_metadata(output_dir, config_id, version, access_group, policy_metadata):
     metadata_path = os.path.join(output_dir, "config_metadata.json")
 
     if os.path.exists(metadata_path):
