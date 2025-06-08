@@ -1,145 +1,36 @@
-import os
-import json
-import argparse
-from jinja2 import Environment, FileSystemLoader
-from utils import setup_session, render_template, str2bool
+def get_policy_id(session, base_url, config_id, env):
+    """
+    Retrieve the policy ID from Akamai for the given configuration ID and environment.
 
-REGION_SETTINGS = {
-    "WPB-APAC-IN-CyberWASPTesting": {
-        "contract_id": "V-5A82MTA",
-        "group_id": "272095"
-    }
-}
+    Args:
+        session: Authenticated session object.
+        base_url (str): Akamai API base URL.
+        config_id (str): Security configuration ID.
+        env (str): Environment name, e.g., 'prod' or 'nonprod'.
 
-def load_yaml_config(config_path):
-    with open(config_path, 'r') as f:
-        return json.load(f)
-
-def render_templates(template_dir, output_dir, context):
-    env = Environment(loader=FileSystemLoader(template_dir), trim_blocks=True, lstrip_blocks=True)
-    templates = [
-        'client_list_template.j2',
-        'custom_rule_template.j2',
-        'custom_bots.json',
-        'rate_limit_template.j2',
-        'waf_rule_exceptions_template.j2',
-        'waf_group_actions_template.j2',
-        'akamai_bot_category_actions_template.j2',
-        'config_metadata.j2'
-    ]
-    for template_name in templates:
-        render_template(env, template_name, context, output_dir)
-
-def get_config_id(base_url, session, config_name):
-    resp = session.get(f"{base_url}/appsec/v1/configs")
-    for config in resp.json().get("configurations", []):
-        if config["name"] == config_name:
-            return config["id"], config["latestVersion"]
-    raise ValueError(f"Configuration '{config_name}' not found.")
-
-def create_appsec_config(session, base_url, config_name, contract_id, group_id, hostnames, description):
-    payload = {
-        "name": config_name,
-        "contractId": contract_id,
-        "groupId": group_id,
-        "hostnames": hostnames,
-        "description": description
-    }
-    print(f"[INFO] Creating AppSec config: {config_name}")
-    resp = session.post(f"{base_url}/appsec/v1/configs", json=payload)
-    if resp.status_code not in [200, 201]:
-        raise RuntimeError(f"[ERROR] Failed to create config: {resp.status_code}, {resp.text}")
-    config_id = resp.json()['id']
-    version = resp.json()['version']
-    return config_id, version
-
-def create_default_security_policies(session, base_url, config_id, version, default_policies):
-    created = {}
-    for env, policy_data in default_policies.items():
-        payload = {
-            "policyName": policy_data["name"],
-            "prefix": policy_data["prefix"]
-        }
-        print(f"[INFO] Creating default policy {policy_data['name']}")
-        resp = session.post(f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies", json=payload)
-        if resp.status_code in [200, 201]:
-            created[env] = {
-                "name": policy_data["name"],
-                "prefix": policy_data["prefix"],
-                "policyId": resp.json().get("policyId")
-            }
-            print(f"[INFO] Created default policy {policy_data['name']} with ID {resp.json().get('policyId')}")
-        else:
-            print(f"[WARN] Failed to create policy {policy_data['name']}: {resp.text}")
-    return created
-
-def update_config_metadata(output_path, config_id, version, access_group, policy_metadata):
-    metadata_path = os.path.join(output_path, "config_metadata.json")
-    if os.path.exists(metadata_path):
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
-    else:
-        metadata = {}
-
-    metadata["config_id"] = config_id
-    metadata["version"] = version
-    metadata["access_group"] = access_group
-
-    if policy_metadata:
-        env = list(policy_metadata.keys())[0]
-        if "default_policies" not in metadata:
-            metadata["default_policies"] = {}
-        metadata["default_policies"][env] = {
-            "name": policy_metadata[env]["name"],
-            "prefix": policy_metadata[env]["prefix"],
-            "policyId": policy_metadata[env]["policyId"]
-        }
-
-    with open(metadata_path, "w") as f:
-        json.dump(metadata, f, indent=2)
-    print(f"[INFO] Updated metadata for {env.upper()} default policy.")
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default='config/appsec_config.yaml', help="YAML config path")
-    parser.add_argument('--isProd', type=str2bool, nargs='?', const=True, default=False, help="Set to False for nonprod")
-    parser.add_argument('--access_group', required=True, help="Access Group")
-    parser.add_argument('--template_dir', default='templates', help="Jinja template directory")
-    parser.add_argument('--output_dir', default='generated', help="Directory to output rendered files")
-    parser.add_argument('--edgerc_file', default='~/.edgerc', help="Path to .edgerc file")
-    parser.add_argument('--account', default='DEV', help="Account section name in edgerc")
-    args = parser.parse_args()
-
-    config = load_yaml_config(args.config)
-    access_group = args.access_group
-    contract_id = REGION_SETTINGS[access_group]["contract_id"]
-    group_id = REGION_SETTINGS[access_group]["group_id"]
-
-    base_url, session = setup_session(args.edgerc_file, args.account)
-    config_name = config["config"]["name"]
-    hostnames = config["config"]["hostnames"]
-    description = config["config"]["description"]
-
-    output_dir = args.output_dir
-    default_policies = {
-        "prod": config.get("default_policies", {}).get("prod"),
-        "nonprod": config.get("default_policies", {}).get("nonprod")
-    }
-    env_key = "prod" if args.isProd else "nonprod"
-
+    Returns:
+        str: The policy ID if found, or None.
+    """
     try:
-        config_id, version = get_config_id(base_url, session, config_name)
-        print(f"[INFO] Found existing config ID: {config_id}, version: {version}")
-        print("[INFO] Skipping config/policy creation.")
-    except ValueError:
-        config_id, version = create_appsec_config(session, base_url, config_name, contract_id, group_id, hostnames, description)
-        created_policies = create_default_security_policies(session, base_url, config_id, version, {env_key: default_policies[env_key]})
-        update_config_metadata(output_dir, config_id, version, access_group, created_policies)
-        print(f"[SUCCESS] Config ID: {config_id}, Version: {version}")
-        return
+        url = f"{base_url}/appsec/v1/configs/{config_id}/security-policies"
+        resp = session.get(url)
 
-    print(f"[INFO] Connected to Akamai Config ID: {config_id}, Version: {version}")
-    render_templates(args.template_dir, output_dir, config)
+        if resp.status_code not in [200, 201]:
+            print(f"[ERROR] Failed to retrieve policies. Status: {resp.status_code}, Response: {resp.text}")
+            return None
 
-if _name_ == "_main_":
-    main()
+        policies = resp.json().get("securityPolicies", [])
+        env_prefix = "Prod" if env.lower() == "prod" else "NonProd"
+
+        for policy in policies:
+            name = policy.get("policyName", "")
+            if env_prefix.lower() in name.lower():
+                print(f"[INFO] Found {env.upper()} policy in Akamai: {name} (ID: {policy['policyId']})")
+                return policy["policyId"]
+
+        print(f"[WARN] No matching policy found in Akamai for environment: {env}")
+        return None
+
+    except Exception as e:
+        print(f"[ERROR] Exception while retrieving policy ID: {e}")
+        return None
