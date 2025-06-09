@@ -1,7 +1,33 @@
-metadata_path = os.path.join(args.output_dir, "config_metadata.json")
-with open(metadata_path) as f:
-    metadata = json.load(f)
-
-env = "Prod" if str2bool(args.isProd) else "NonProd"
-policy_name = metadata["default_policies"][env]["name"]
-policy_id = metadata["default_policies"][env]["policyId"]
+[
+{
+  "defaultPolicyId": {{ target.policy_id }},
+  "securityPolicyId": {{ target.policy_id }},
+  "type": "{{ target.match_types }}",
+  "matchType": "hostname",
+  "sequence": 1,
+  "useHeaders": [],
+  "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
+  "isNegativePathMatch": false,
+  "fileExtensions": [
+    {% for ext in target.file_extensions %}
+    "{{ ext }}"{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ],
+  "hostnames": [
+    {% for h in target.hostnames %}
+    "{{ h }}"{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ],
+  "pathMatchType": "PREFIXED",
+  "matches": [
+    {
+      "matchOperator": "IS_ONE_OF",
+      "values": [
+        {% for p in target.paths %}
+        "{{ p }}"{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    }
+  ]
+}
+]
