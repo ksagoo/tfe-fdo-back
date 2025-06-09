@@ -1,3 +1,4 @@
+[
 {% for target in targets %}
 {
   "securityPolicy": { "policyId": "{{ target.policy_id }}" },
@@ -13,7 +14,7 @@
 }
 {% if not loop.last %},{% endif %}
 {% endfor %}
-
+]
 
 
 payload = {
