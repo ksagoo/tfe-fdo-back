@@ -1,8 +1,47 @@
+ {
+  "defaultPolicyId": "{{ target.policy_id }}",
+  "securityPolicyId": "{{ target.policy_id }}",
+  "type": "{{ target.match_types }}",
+  "matchType": "hostname",
+  "sequence": 0,
+  "useHeaders": [],
+  "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
+  "isSharedWAFMatch": false,
+  "fileExtensions": [
+    {% for ext in target.file_extensions %}
+    "{{ ext }}"{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ],
+  "hostnames": [
+    {% for h in target.hostnames %}
+    "{{ h }}"{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ],
+  "pathMatchType": "PREFIXED",
+  "matches": [
+    {
+      "matchOperator": "IS_ONE_OF",
+      "values": [
+        {% for p in target.paths %}
+        "{{ p }}"{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    }
+  ]
+}
+
+# ---- Render match_targets ----
 if 'match_targets' in config:
     rendered_targets = []
     for target in config['match_targets']:
-        output = render_template(env, 'match_targets.j2', {'target': target})
-        rendered_targets.append(json.loads(output))
+        rendered = render_template(env, 'match_targets.j2', {'target': target})
+        try:
+            rendered_targets.append(json.loads(rendered))
+        except json.JSONDecodeError as e:
+            print(f"[ERROR] Failed to parse match target:\n{target}")
+            print(f"[ERROR] Rendered JSON:\n{rendered}")
+            print(f"[EXCEPTION] {e}")
+            sys.exit(1)
 
-    # Save entire list as JSON array
+    # Save final match_targets.json
     save_rendered_output(args.output_dir, 'match_targets.json', json.dumps(rendered_targets, indent=2))
