@@ -1,3 +1,25 @@
+url = "https://hostname/appsec/v1/configs"
+
+payload = {
+    "createFrom": {
+        "configId": 107918,
+        "version": 1
+    },
+    "hostnames": ["example.com", "example2.com"],
+    "groupId": 36789
+}
+
+url = "https://hostname/appsec/v1/configs/107918/versions/1/security-policies"
+
+payload = {
+    "defaultSettings": "true",
+    "policyName": "PL-accessgroup-NonProd",
+    "policyPrefix": "NonP",
+    "source": "onboarding"
+}
+
+
+
 "/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/custom-rules"
 "/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/rate-policies"
 "/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/ip-geo-firewall"
