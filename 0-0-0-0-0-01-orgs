@@ -1,19 +1,19 @@
 {
   "securityPolicyId": "{{ target.policy_id }}",
-  "type": "website",
+  "type": [ {% for t in target.match_types %}"{{ t }}"{% if not loop.last %}, {% endif %}{% endfor %} ],
   "matchType": "hostname",
   "sequence": 0,
   "useHeaders": [],
   "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
-  "isSharedWildcardMatch": false,
+  "isSharedWAFMatch": false,
   "fileExtensions": [
     {% for ext in target.file_extensions %}
-      "{{ ext }}"{% if not loop.last %},{% endif %}
+      "{{ ext }}"{% if not loop.last %}, {% endif %}
     {% endfor %}
   ],
   "hostnames": [
     {% for h in target.hostnames %}
-      "{{ h }}"{% if not loop.last %},{% endif %}
+      "{{ h }}"{% if not loop.last %}, {% endif %}
     {% endfor %}
   ],
   "pathMatchType": "PREFIXED",
@@ -22,7 +22,7 @@
       "matchOperator": "IS_ONE_OF",
       "values": [
         {% for p in target.paths %}
-          "{{ p }}"{% if not loop.last %},{% endif %}
+          "{{ p }}"{% if not loop.last %}, {% endif %}
         {% endfor %}
       ]
     }
