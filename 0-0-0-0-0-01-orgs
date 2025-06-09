@@ -1,3 +1,50 @@
+"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/custom-rules"
+"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/rate-policies"
+"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/ip-geo-firewall"
+"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/reputation-profiles"
+"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/custom-rules"
+"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/api-endpoints"
+"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/slow-post"
+"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/rules"
+"/appsec/v1/configs/configId/versions/versionNumber/match-targets"
+
+
+
+def export_module(session, base_url, url_path, filename):
+    full_url = urljoin(base_url, url_path)
+    print(f"[INFO] Fetching {filename} from {full_url}")
+    try:
+        response = session.get(full_url)
+        response.raise_for_status()
+        data = response.json()
+        out_path = os.path.join(OUTPUT_DIR, filename)
+        with open(out_path, "w") as f:
+            json.dump(data, f, indent=2)
+        print(f"[SUCCESS] Saved {filename}")
+    except requests.HTTPError as e:
+        if e.response.status_code == 404:
+            print(f"[WARN] Skipping {filename}: {e}")
+        else:
+            print(f"[ERROR] Failed to fetch {filename}: {e}")
+    except Exception as e:
+        print(f"[ERROR] Unexpected error in {filename}: {e}")
+
+def export_all_modules(session, base_url, config_id, version, policy_id):
+    paths = [
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets", "match_targets.json"),
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/client-list-overrides", "client_list_overrides.json"),
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/custom-rules", "custom_rules.json"),
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/reputation-profiles", "reputation_profiles.json"),
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/slow-post", "slow_post_protection.json"),
+        (f"/appsec/v1/configs/{…
+
+
+
+
+
+
+
+
 try:
     export_module(session, base_url, config_id, version, policy_id, "client-list-overrides.json", f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/client-list-overrides")
 except requests.HTTPError as e:
