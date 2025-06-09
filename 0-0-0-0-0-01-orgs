@@ -1,1 +1,1 @@
-rendered = render_template(env, "match_targets.j2", {"target": target})
+env = Environment(loader=FileSystemLoader(args.template_dir), trim_blocks=True, lstrip_blocks=True)
