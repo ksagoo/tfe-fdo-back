@@ -1,9 +1,20 @@
-rendered = render_template(env, "match_targets.j2", {"target": target})
-try:
-    target_obj = json.loads(rendered)
-    if isinstance(target_obj, dict):
-        rendered_targets.append(target_obj)
-    else:
-        print("[ERROR] Rendered target is not a dictionary. Skipping.")
-except Exception as e:
-    print(f"[ERROR] Failed to parse rendered target: {e}")
+[
+  {
+    "securityPolicyId": "{{ target.policy_id }}",
+    "type": [{% for t in target.match_types %}"{{ t }}"{% if not loop.last %}, {% endif %}{% endfor %}],
+    "matchType": "hostname",
+    "sequence": 0,
+    "useHeaders": [],
+    "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
+    "isSharedMAFMatch": false,
+    "fileExtensions": [{% for ext in target.file_extensions %}"{{ ext }}"{% if not loop.last %}, {% endif %}{% endfor %}],
+    "hostnames": [{% for h in target.hostnames %}"{{ h }}"{% if not loop.last %}, {% endif %}{% endfor %}],
+    "pathMatchType": "PREFIXED",
+    "matches": [
+      {
+        "matchOperator": "IS_ONE_OF",
+        "values": [{% for p in target.paths %}"{{ p }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+      }
+    ]
+  }
+]
