@@ -21,6 +21,25 @@ def export_all_modules(session, base_url, config_id, version, policy_id):
         (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/slow-post", "slow_post_protection.json"),
         (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rules", "waf_rules.json"),
 
+        
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/reputation-profiles")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rate-policies")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/urlProtectionActions")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/api-request-constraints")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/malwarePolicyActions")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/protections")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/recommendations")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/attack-groups")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/mode")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/behavioral-ddo")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/bypass-network-lists")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/cpc")
+ (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/behavioral-ddo")
+
+
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rate-policies")
+
+
         # Global config-level (non-policy) module
         (f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets", "match_targets.json"),
     ]
