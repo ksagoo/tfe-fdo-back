@@ -1,29 +1,11 @@
-{
-  "securityPolicyId": "{{ target.policy_id }}",
-  "matchType": "hostname",
-  "sequence": 0,
-  "useHeaders": [],
-  "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
-  "isSharedWAFMatch": false,
-  "fileExtensions": [
-    {% for ext in target.file_extensions %}
-      "{{ ext }}"{% if not loop.last %}, {% endif %}
-    {% endfor %}
-  ],
-  "hostnames": [
-    {% for h in target.hostnames %}
-      "{{ h }}"{% if not loop.last %}, {% endif %}
-    {% endfor %}
-  ],
-  "pathMatchType": "PREFIXED",
-  "matches": [
-    {
-      "matchOperator": "IS_ONE_OF",
-      "values": [
-        {% for p in target.paths %}
-          "{{ p }}"{% if not loop.last %}, {% endif %}
-        {% endfor %}
-      ]
-    }
-  ]
-}
+match_targets:
+  - policy_prefix: "defpol"               # Used to resolve policy ID
+    match_types: ["website"]              # This is fine
+    file_extensions:
+      - ".html"
+      - ".php"
+    hostnames:
+      - "www.example.com"
+    paths:
+      - "/"
+    is_negative_file_extension_match: false
