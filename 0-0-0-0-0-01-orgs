@@ -10,6 +10,25 @@
 
 
 
+def export_all_modules(session, base_url, config_id, version, policy_id):
+    paths = [
+        # Policy-specific modules
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/custom-rules", "custom_rules.json"),
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rate-policies", "rate_limit_policies.json"),
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall", "ip_geo_firewall.json"),
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/reputation-profiles", "reputation_profiles.json"),
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/api-endpoints", "api_endpoints.json"),
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/slow-post", "slow_post_protection.json"),
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rules", "waf_rules.json"),
+
+        # Global config-level (non-policy) module
+        (f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets", "match_targets.json"),
+    ]
+
+    for url_path, filename in paths:
+        export_module(session, base_url, url_path, filename)
+
+
 def export_module(session, base_url, url_path, filename):
     full_url = urljoin(base_url, url_path)
     print(f"[INFO] Fetching {filename} from {full_url}")
