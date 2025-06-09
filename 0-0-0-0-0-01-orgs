@@ -1,6 +1,6 @@
 
 appsec/v1/configs
-url = "https://hostname/appsec/v1/configs/configId/versions/versionNumber/security-policies"
+appsec/v1/configs/configId/versions/versionNumber/security-policies
 
 python export_appsec.py --config-name "My-Security-Config" --policy-prefix "NonP" 
 
