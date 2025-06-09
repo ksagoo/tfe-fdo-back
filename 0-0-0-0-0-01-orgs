@@ -1,4 +1,7 @@
-
+try:
+    export_module(session, base_url, config_id, version, policy_id, "client-list-overrides.json", f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/client-list-overrides")
+except requests.HTTPError as e:
+    print(f"[WARN] Skipping client-list-overrides: {e}")
 appsec/v1/configs
 appsec/v1/configs/configId/versions/versionNumber/security-policies
 
