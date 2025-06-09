@@ -1,29 +1,14 @@
-{
-  "securityPolicyId": "{{ target.policy_id }}",
-  "matchType": "hostname",
-  "sequence": 0,
-  "useHeaders": [],
-  "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
-  "isSharedWildcardMatch": false,
-  "fileExtensions": [
-    {% for ext in target.file_extensions %}
-    "{{ ext }}"{% if not loop.last %},{% endif %}
-    {% endfor %}
-  ],
-  "hostnames": [
-    {% for h in target.hostnames %}
-    "{{ h }}"{% if not loop.last %},{% endif %}
-    {% endfor %}
-  ],
-  "pathMatchType": "PREFIXED",
-  "matches": [
-    {
-      "matchOperator": "IS_ONE_OF",
-      "values": [
-        {% for p in target.paths %}
-        "{{ p }}"{% if not loop.last %},{% endif %}
-        {% endfor %}
-      ]
-    }
-  ]
-}
+
+with open(file_path) as f:
+    try:
+        items = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] Failed to parse {label}.json: {e}")
+        return
+
+# Wrap single item if it's a dict
+if isinstance(items, dict):
+    items = [items]
+elif not isinstance(items, list):
+    print(f"[ERROR] {label}.json is not valid list or dict.")
+    return
