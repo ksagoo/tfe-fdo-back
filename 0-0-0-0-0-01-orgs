@@ -1,25 +1,9 @@
-[
-{% for target in targets %}
-{
-  "securityPolicyId": "{{ target.policy_id }}",
-  "type": "{{ target.match_types[0] }}",
-  "matchType": "hostname",
-  "sequence": 0,
-  "useHeaders": [],
-  "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
-  "isSharedAliasMatch": false,
-  "fileExtensions": [{% for ext in target.file_extensions %}"{{ ext }}"{% if not loop.last %}, {% endif %}{% endfor %}],
-  "hostnames": [{% for h in target.hostnames %}"{{ h }}"{% if not loop.last %}, {% endif %}{% endfor %}],
-  "pathMatchType": "PREFIXED",
-  "matches": [
-    {
-      "matchOperator": "IS_ONE_OF",
-      "values": [{% for p in target.paths %}"{{ p }}"{% if not loop.last %}, {% endif %}{% endfor %}]
-    }
-  ]
+url = "https://hostname/appsec/v1/configs/115678/versions/1/match-targets"
+
+payload = {
+    "securityPolicy": { "policyId": "NonP-35267" },
+    "type": "website",
+    "isNegativeFileExtensionMatch": False,
+    "hostnames": ["example.co.uk"],
+    "fileExtensions": ["html", "php"]
 }
-{% if not loop.last %},{% endif %}
-{% endfor %}
-]
-"FileExtensions": [ {% for ext in target.file_extensions %}"{{ ext.lstrip('.') }}"{% if not loop.last %}, {% endif %}{% endfor %} ],
-"securityPolicy": "{{ target.policy_id }}",
