@@ -1,31 +1,21 @@
+for item in items:
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/{endpoint}"
+    r = session.post(url, json=item)
 
-  "defaultPolicyId": "{{ target.policy_id }}",
-  "securityPolicyId": "{{ target.policy_id }}",
-  "type": ["{{ target.match_types }}"],
-  "matchType": "hostname",
-  "sequence": 0,
-  "useHeaders": [],
-  "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
-  "isSharedWAFMatch": false,
-  "fileExtensions": [
-    {% for ext in target.file_extensions %}
-    "{{ ext }}"{% if not loop.last %},{% endif %}
-    {% endfor %}
-  ],
-  "hostnames": [
-    {% for h in target.hostnames %}
-    "{{ h }}"{% if not loop.last %},{% endif %}
-    {% endfor %}
-  ],
-  "pathMatchType": "PREFIXED",
-  "matches": [
-    {
-      "matchOperator": "IS_ONE_OF",
-      "values": [
-        {% for p in target.paths %}
-        "{{ p }}"{% if not loop.last %},{% endif %}
-        {% endfor %}
-      ]
-    }
-  ]
-}
+    # Safe label resolution
+    if isinstance(item, dict):
+        item_name = item.get("name") or item.get("id") or "unnamed"
+    else:
+        item_name = str(item)
+
+    if r.status_code in (200, 201):
+        print(f"Created {label}: {item_name}")
+    else:
+        print(f"Failed to create {label}: {item_name}")
+        print(r.status_code, r.text)
+[09:34, 09/06/2025] Kuldeep: with open(file_path) as f:
+    items = json.load(f)
+
+if not isinstance(items, list):
+    print(f"[ERROR] {label}.json does not contain a list.")
+    return
