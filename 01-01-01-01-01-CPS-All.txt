@@ -1,3 +1,31 @@
+match_targets:
+  - configId: 123456
+    configVersion: 1
+    targetId: 987654
+    defaultFile: "NO_MATCH"
+    filePaths: ["/"]
+    hostnames: ["dummy-apac-cn.hostname"]
+    isNegativeFileExtensionMatch: false
+    isSharedAliasMatch: false
+    securityPolicy:
+      policyId: "TEMP_285595"
+    sequence: 1
+    effectiveSecurityControls:
+      applyApiConstraintControls: true
+      applyApplicationLayerControls: true
+      applyBotmanControls: true
+      applyNetworkLayerControls: true
+      applyRateControls: true
+      applyReputationControls: true
+      applySlowPostControls: true
+      applyIpProtectionControls: false
+    bypassNetworkLists:
+      - id: "123456_SECURITYBYPASSLIST"
+        listType: "CL"
+        name: "Template Security Bypass List"
+        type: "IP"
+
+
 rendered = render_template(env, "match_targets_full_template.j2", {"match_targets": your_targets})
 
 [
