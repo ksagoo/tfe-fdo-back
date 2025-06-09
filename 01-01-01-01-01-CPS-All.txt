@@ -1,3 +1,5 @@
+rendered = render_template(env, "match_targets_full_template.j2", {"match_targets": your_targets})
+
 [
 {% for target in match_targets %}
 {
