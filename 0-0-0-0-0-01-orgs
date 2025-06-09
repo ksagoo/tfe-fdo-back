@@ -2,7 +2,7 @@
 {% for target in targets %}
 {
   "securityPolicyId": "{{ target.policy_id }}",
-  "type": {{ target.match_types | tojson }},
+  "type": "{{ target.match_types[0] }}",
   "matchType": "hostname",
   "sequence": 0,
   "useHeaders": [],
@@ -21,5 +21,3 @@
 {% if not loop.last %},{% endif %}
 {% endfor %}
 ]
-
-rendered = render_template(env, "match_targets.j2", {"targets": config["match_targets"]})
