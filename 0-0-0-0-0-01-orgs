@@ -1,5 +1,3 @@
-akamai_export_appsec_config.py
-
 import os
 import sys
 import yaml
@@ -58,9 +56,9 @@ def export_module(session, base_url, url_path, filename):
     response = session.get(urljoin(base_url, url_path))
     response.raise_for_status()
     data = response.json()
-    with open(filename, "w") as f:
+    with open(os.path.join(OUTPUT_DIR, filename), "w") as f:
         json.dump(data, f, indent=2)
-    print(f"✓ Saved {filename}")
+    print(f"Saved {filename}")
 
 def export_all_modules(session, base_url, config_id, version, policy_id):
     export_module(session, base_url,
@@ -95,15 +93,18 @@ def export_all_modules(session, base_url, config_id, version, policy_id):
                   f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/advanced-settings/bot-manager",
                   "bot_manager.json")
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export Akamai AppSec configuration by config name and policy prefix.")
     parser.add_argument("--section", default='DEV', required=True, help="Section name from .edgerc")
     parser.add_argument("--config-name", required=True, help="Name of the security configuration to export")
     parser.add_argument("--prefix", default='TEMP', required=True, help="Policy name prefix to match (e.g., NonP or Prod)")
     parser.add_argument("--version", type=int, default=1, help="(Optional) Specific version number to export. Defaults to latest.")
+    parser.add_argument("--output-dir", default="export", help="Directory to save exported JSON files")
 
     args = parser.parse_args()
+    
+    OUTPUT_DIR = args.output_dir
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     session, base_url = setup_session(args.section)
 
@@ -117,7 +118,7 @@ if __name__ == "__main__":
     try:
         if args.version:
             version = args.version
-            print(f"→ Using provided version: {version}")
+            print(f"Using provided version: {version}")
         else:
             version = get_latest_version(session, base_url, config_id)
             print(f"Auto-detected latest version: {version}")
