@@ -8,6 +8,92 @@
 "/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/rules"
 "/appsec/v1/configs/configId/versions/versionNumber/match-targets"
 
+
+def export_all_modules(session, base_url, config_id, version, policy_id):
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets",
+        "match_targets.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/custom-rules",
+        "custom_rules.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rate-policies",
+        "rate_policies.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall",
+        "ip_geo_firewall.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/reputation-profiles",
+        "reputation_profiles.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/api-endpoints",
+        "api_endpoints.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/slow-post",
+        "slow_post_protection.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rules",
+        "waf_rules.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/urlProtectionActions",
+        "url_protection_actions.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/api-request-constraints",
+        "api_request_constraints.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/malwarePolicyActions",
+        "malware_policy_actions.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/protections",
+        "protections.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/recommendations",
+        "recommendations.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/attack-groups",
+        "attack_groups.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/mode",
+        "mode.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/behavioral-ddo",
+        "behavioral_ddos.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/bypass-network-lists",
+        "bypass_network_lists.json")
+
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/cpc",
+        "cpc.json")
+
+    # ✅ NEW: Custom Bots
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/custom-bots",
+        "custom_bots.json")
+
+    # ✅ NEW: Bot Manager Settings
+    export_module(session, base_url,
+        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/advanced-settings/bot-manager",
+        "bot_manager.json")
+
+
+
 def export_all_modules(session, base_url, config_id, version, policy_id):
     paths = [
         # Match Targets (global level)
