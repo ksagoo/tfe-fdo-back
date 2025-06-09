@@ -1,13 +1,11 @@
 {
   "securityPolicyId": "{{ target.policy_id }}",
-  "type": {
-    "matchType": "website"
-  },
+  "type": "website",
   "matchType": "hostname",
   "sequence": 0,
   "useHeaders": [],
   "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
-  "isSharedWaFMatch": false,
+  "isSharedWildcardMatch": false,
   "fileExtensions": [
     {% for ext in target.file_extensions %}
       "{{ ext }}"{% if not loop.last %},{% endif %}
@@ -30,61 +28,3 @@
     }
   ]
 }
-
-def post_config_items(session, base_url, config_id, version, file_path, endpoint, label):
-    if not os.path.exists(file_path):
-        print(f"[WARN] No {label}.json found. Skipping...")
-        return
-
-    with open(file_path, "r") as f:
-        try:
-            items = json.load(f)
-        except json.JSONDecodeError as e:
-            print(f"[ERROR] Failed to parse {label}.json: {e}")
-            return
-
-    # Normalize item format
-    if isinstance(items, dict):
-        items = [items]
-    elif not isinstance(items, list):
-        print(f"[ERROR] {label}.json is not a valid list or dict.")
-        return
-
-    print(f"\n[DEBUG] Posting {label} (length: {len(items)})")
-
-    for item in items:
-        print(f"[DEBUG] Validating item:\n{json.dumps(item, indent=2)}")
-
-        # --- Validation ---
-        required_fields = [
-            "securityPolicyId",
-            "type",
-            "matchType",
-            "hostnames",
-            "pathMatchType",
-            "matches"
-        ]
-        for field in required_fields:
-            if field not in item:
-                print(f"[ERROR] Missing required field '{field}' in item. Skipping.")
-                continue
-
-        if isinstance(item.get("type"), dict):
-            if "matchType" not in item["type"]:
-                print(f"[ERROR] 'type' dict missing 'matchType'. Skipping.")
-                continue
-        else:
-            print(f"[ERROR] 'type' should be a dict with key 'matchType'. Skipping.")
-            continue
-
-        # --- POST ---
-        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/{endpoint}"
-        r = session.post(url, json=item)
-
-        item_name = item.get("name") or item.get("id") or "unnamed"
-
-        if r.status_code in (200, 201):
-            print(f"[INFO] Created {label}: {item_name}")
-        else:
-            print(f"[ERROR] Failed to create {label}: {item_name}")
-            print(f"Status: {r.status_code}, Response: {r.text}")
