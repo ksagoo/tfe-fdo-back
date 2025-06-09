@@ -30,7 +30,8 @@
     }
   ]
 }
-[11:29, 09/06/2025] Kuldeep: def post_config_items(session, base_url, config_id, version, file_path, endpoint, label):
+
+def post_config_items(session, base_url, config_id, version, file_path, endpoint, label):
     if not os.path.exists(file_path):
         print(f"[WARN] No {label}.json found. Skipping...")
         return
