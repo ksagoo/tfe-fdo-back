@@ -1,21 +1,27 @@
-for item in items:
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/{endpoint}"
-    r = session.post(url, json=item)
+def post_config_items(session, base_url, config_id, version, file_path, endpoint, label):
+    if not os.path.exists(file_path):
+        print(f"No {label}.json found. Skipping...")
+        return
 
-    # Safe label resolution
-    if isinstance(item, dict):
-        item_name = item.get("name") or item.get("id") or "unnamed"
-    else:
-        item_name = str(item)
+    with open(file_path) as f:
+        items = json.load(f)
 
-    if r.status_code in (200, 201):
-        print(f"Created {label}: {item_name}")
-    else:
-        print(f"Failed to create {label}: {item_name}")
-        print(r.status_code, r.text)
-[09:34, 09/06/2025] Kuldeep: with open(file_path) as f:
-    items = json.load(f)
+    if not isinstance(items, list):
+        print(f"[ERROR] {label}.json does not contain a list.")
+        return
 
-if not isinstance(items, list):
-    print(f"[ERROR] {label}.json does not contain a list.")
-    return
+    for item in items:
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/{endpoint}"
+        r = session.post(url, json=item)
+
+        # Safe label resolution
+        if isinstance(item, dict):
+            item_name = item.get("name") or item.get("id") or "unnamed"
+        else:
+            item_name = str(item)
+
+        if r.status_code in (200, 201):
+            print(f"Created {label}: {item_name}")
+        else:
+            print(f"Failed to create {label}: {item_name}")
+            print(r.status_code, r.text)
