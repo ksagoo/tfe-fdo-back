@@ -1,14 +1,36 @@
-
-with open(file_path) as f:
-    try:
-        items = json.load(f)
-    except json.JSONDecodeError as e:
-        print(f"[ERROR] Failed to parse {label}.json: {e}")
+def post_config_items(session, base_url, config_id, version, file_path, endpoint, label):
+    if not os.path.exists(file_path):
+        print(f"[INFO] No {label}.json found. Skipping...")
         return
 
-# Wrap single item if it's a dict
-if isinstance(items, dict):
-    items = [items]
-elif not isinstance(items, list):
-    print(f"[ERROR] {label}.json is not valid list or dict.")
-    return
+    with open(file_path) as f:
+        try:
+            items = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"[ERROR] Failed to parse {label}.json: {e}")
+            return
+
+    # Wrap single object into a list
+    if isinstance(items, dict):
+        items = [items]
+    elif not isinstance(items, list):
+        print(f"[ERROR] {label}.json is not a valid list or object. Skipping...")
+        return
+
+    for idx, item in enumerate(items, 1):
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/{endpoint}"
+
+        # Debug: print item JSON being sent
+        print(f"\n[DEBUG] Posting {label} item #{idx}:")
+        print(json.dumps(item, indent=2))
+
+        r = session.post(url, json=item)
+
+        # Resolve name for log
+        item_name = item.get("name") or item.get("id") or item.get("securityPolicyId") or "unnamed"
+
+        if r.status_code in (200, 201):
+            print(f"[INFO] Created {label}: {item_name}")
+        else:
+            print(f"[ERROR] Failed to create {label}: {item_name}")
+            print(f"        Status: {r.status_code}, Response: {r.text}")
