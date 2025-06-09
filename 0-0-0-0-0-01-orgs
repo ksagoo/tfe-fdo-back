@@ -1,3 +1,5 @@
+python export_appsec.py --config-name "My-Security-Config" --policy-prefix "NonP" 
+
 import os
 import sys
 import yaml
