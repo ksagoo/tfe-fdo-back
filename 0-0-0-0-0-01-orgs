@@ -21,3 +21,4 @@
 {% if not loop.last %},{% endif %}
 {% endfor %}
 ]
+"FileExtensions": [ {% for ext in target.file_extensions %}"{{ ext.lstrip('.') }}"{% if not loop.last %}, {% endif %}{% endfor %} ],
