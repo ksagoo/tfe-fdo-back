@@ -1,1 +1,15 @@
-"securityPolicy": { "policyId": "{{ target.policy_id }}" },
+{% for target in targets %}
+{
+  "securityPolicy": { "policyId": "{{ target.policy_id }}" },
+  "type": "{{ target.match_types[0] }}",
+  "matchType": "hostname",
+  "sequence": 0,
+  "useHeaders": [],
+  "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
+  "isSharedAliasMatch": false,
+  "fileExtensions": [{% for ext in target.file_extensions %}"{{ ext | replace('.', '') }}"{% if not loop.last %}, {% endif %}{% endfor %}],
+  "filePaths": [{% for p in target.paths %}"{{ p }}"{% if not loop.last %}, {% endif %}{% endfor %}],
+  "hostnames": [{% for h in target.hostnames %}"{{ h }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+}
+{% if not loop.last %},{% endif %}
+{% endfor %}
