@@ -1,2 +1,29 @@
-type": "{{ target.match_types }}",
-https://techdocs.akamai.com/application-security/reference/post-match-targets
+{
+  "securityPolicyId": "{{ target.policy_id }}",
+  "matchType": "hostname",
+  "sequence": 0,
+  "useHeaders": [],
+  "isNegativeFileExtensionMatch": {{ target.is_negative_file_extension_match | default(false) | lower }},
+  "isSharedWildcardMatch": false,
+  "fileExtensions": [
+    {% for ext in target.file_extensions %}
+    "{{ ext }}"{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ],
+  "hostnames": [
+    {% for h in target.hostnames %}
+    "{{ h }}"{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ],
+  "pathMatchType": "PREFIXED",
+  "matches": [
+    {
+      "matchOperator": "IS_ONE_OF",
+      "values": [
+        {% for p in target.paths %}
+        "{{ p }}"{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    }
+  ]
+}
