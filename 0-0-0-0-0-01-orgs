@@ -1,14 +1,17 @@
-if 'match_targets' in config:
+if "match_targets" in config:
     rendered_targets = []
-    prefix = "Prod" if args.isProd else "NonP"
+    prefix = "Prod" if str2bool(args.isProd) else "NonP"
     policy_data = config.get("default_policies", {}).get(prefix, {})
     policy_id = policy_data.get("policy_id")
 
-    for target in config['match_targets']:
-        # Inject resolved policy_id into each target
+    for target in config["match_targets"]:
         target["policy_id"] = policy_id
-        rendered = render_template(env, 'match_targets.j2', {'target': target})
+        rendered = render_template(env, "match_targets.j2", target=target)
         rendered_targets.append(json.loads(rendered))
 
-    # Save as JSON array
-    save_rendered_output(args.output_dir, 'match_targets.json', json.dumps(rendered_targets, indent=2))
+    save_rendered_output(
+        args.output_dir,
+        "match_targets.json",
+        json.dumps(rendered_targets, indent=2)
+    )
+env = Environment(loader=FileSystemLoader(...), ...)
