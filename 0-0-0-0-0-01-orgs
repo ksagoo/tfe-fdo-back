@@ -1,9 +1,1 @@
-url = "https://hostname/appsec/v1/configs/115678/versions/1/match-targets"
-
-payload = {
-    "securityPolicy": { "policyId": "NonP-35267" },
-    "type": "website",
-    "isNegativeFileExtensionMatch": False,
-    "hostnames": ["example.co.uk"],
-    "fileExtensions": ["html", "php"]
-}
+"securityPolicy": { "policyId": "{{ target.policy_id }}" },
