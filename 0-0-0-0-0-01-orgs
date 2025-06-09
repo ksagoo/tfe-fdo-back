@@ -13,3 +13,16 @@
 }
 {% if not loop.last %},{% endif %}
 {% endfor %}
+
+
+
+payload = {
+    "securityPolicy": { "policyId": "Non_302183" },
+    "type": "website",
+    "configId": 116259,
+    "configVersion": 1,
+    "fileExtensions": ["html", "php"],
+    "filePaths": ["/"],
+    "hostnames": ["epspos-dev-01.hsbc.com.hk"],
+    "isNegativeFileExtensionMatch": False
+}
