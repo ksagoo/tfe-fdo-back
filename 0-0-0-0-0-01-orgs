@@ -1,3 +1,16 @@
-def render_template(env, template_file, context):
-    template = env.get_template(template_file)
-    return template.render(context)
+if "match_targets" in config:
+    rendered_targets = []
+    prefix = "Prod" if str2bool(args.isProd) else "NonP"
+    policy_data = config.get("default_policies", {}).get(prefix, {})
+    policy_id = policy_data.get("policy_id")
+
+    for target in config["match_targets"]:
+        target["policy_id"] = policy_id
+        rendered = render_template(env, "match_targets.j2", {"target": target})
+        rendered_targets.append(json.loads(rendered))
+
+    save_rendered_output(
+        args.output_dir,
+        "match_targets.json",
+        json.dumps(rendered_targets, indent=2)
+    )
