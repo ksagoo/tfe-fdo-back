@@ -7,3 +7,18 @@ if response.status_code == 201:
 else:
     print(f"[ERROR] Failed to create security config: {response.status_code} - {response.text}")
     sys.exit(1)
+
+
+def validate_template_policy(session, base_url, template_config_id, template_policy_id):
+    url = urljoin(base_url, f"/appsec/v1/configs/{template_config_id}/versions/1/security-policies")
+    response = session.get(url)
+    if response.status_code == 200:
+        policies = response.json().get("policies", [])
+        for p in policies:
+            if p["policyId"] == template_policy_id:
+                print(f"[INFO] Verified template policy ID: {template_policy_id}")
+                return True
+        print(f"[ERROR] Policy ID {template_policy_id} not found in config {template_config_id}")
+    else:
+        print(f"[ERROR] Failed to fetch template policies: {response.status_code} - {response.text}")
+    return False
