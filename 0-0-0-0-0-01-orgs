@@ -1,180 +1,15 @@
-#!/usr/bin/env python3
-# ===============================================================================================
-#           Akamai Security Config Onboarding Script
-# ===============================================================================================
-#
-# This script facilitates onboarding of new Akamai AppSec security configurations
-# by cloning an existing Security Config Template and its associated policy.
-#
-# For a given FQDN list:
-# - It accepts FQDNs, using the first as primary and rest as SANs.
-# - It determines the target environment (isProd flag).
-# - It checks if the config already exists in the account.
-# - If not, it clones the template config and policy.
-#
-# Input is the target edgerc section and region.
-#
-# Arguments:
-#   --section   (required)  Edgerc section name (used for authentication context)
-#   --access_group (required)  The group name (used to find config region)
-#   --fqdn      (required, multiple)  List of FQDNs to onboard (first = primary)
-#   --isProd    (optional)  Set to true/false to create prod or nonprod policy
-#   --dry-run   (optional)  If enabled, will only simulate the onboarding without any API calls
-#
-# Example usage:
-# python akamai_appsec_onboarding.py \
-#   --section DEV \
-#   --access_group WPB-APAC-IN-CyberWASPTesting \
-#   --fqdn esppos-dev-01.hsbc.com.hk esppos-dev-02.hsbc.com.hk \
-#   --isProd false \
-#   --dry-run
-# ===============================================================================================
-
-import os
-import sys
-import json
-import yaml
-import argparse
-import requests
-from jinja2 import Environment, FileSystemLoader
-from akamai.edgegrid import EdgeGridAuth, EdgeRc
-from urllib.parse import urljoin
-
-REGION_SETTINGS = {
-    "Global":  {
-        "parent_group_name": "HSBC-DDos-KSD-D-2YN4YRH",
-        "contract_id": "P-2YN4YRH",
-        "group_id": "154041",
-        "template_config_id": "template_config_id_global",
-        "template_policy_id": "template_policy_id_global"
-    },
-    "APAC":    {
-        "parent_group_name": "HSBC - APAC-V-5A82LRN",
-        "contract_id": "V-5A82LRN",
-        "group_id": "272084",
-        "template_config_id": "template_config_id_apac",
-        "template_policy_id": "template_policy_id_apac"
-    },
-    "EMEA":    {
-        "parent_group_name": "HSBC - EMEA-V-5A82MHB",
-        "contract_id": "V-5A82MHB",
-        "group_id": "272093",
-        "template_config_id": "template_config_id_emea",
-        "template_policy_id": "template_policy_id_emea"
-    },
-    "LATAM":   {
-        "parent_group_name": "HSBC-AMER -LATAM(V-5A854K9)",
-        "contract_id": "V-5A854K9",
-        "group_id": "272094",
-        "template_config_id": "template_config_id_latam",
-        "template_policy_id": "template_policy_id_latam"
-    },
-    "AMER":    {
-        "parent_group_name": "HSBC-AMER -LATAM(V-5A854K9)",
-        "contract_id": "V-5A854K9",
-        "group_id": "272094",
-        "template_config_id": "template_config_id_amer",
-        "template_policy_id": "template_policy_id_amer"
-    },
-    "DEV":     {
-        "parent_group_name": "HSBC - DEV (V-5A82MTA)",
-        "contract_id": "V-5A82MTA",
-        "group_id": "272095",
-        "template_config_id": "template_config_id_dev",
-        "template_policy_id": "template_policy_id_dev"
-    }
-}
-
-def str2bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ("yes", "true", "t", "y", "1"):
-        return True
-    elif v.lower() in ("no", "false", "f", "n", "0"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Boolean value expected.")
-
-def setup_session(edgerc_file, section_name):
-    try:
-        edgerc = EdgeRc(os.path.expanduser(edgerc_file))
-        if not edgerc.has_section(section_name):
-            raise ValueError(f"[ERROR] Section '{section_name}' not found in .edgerc. Available sections: {[s for s in edgerc.sections()]}")
-        base_url = "https://" + edgerc.get(section_name, 'host')
-        client_token = edgerc.get(section_name, 'client_token')
-        client_secret = edgerc.get(section_name, 'client_secret')
-        access_token = edgerc.get(section_name, 'access_token')
-        session = requests.Session()
-        session.auth = EdgeGridAuth(
-            client_token=client_token,
-            client_secret=client_secret,
-            access_token=access_token
-        )
-        session.headers.update({'Content-Type': 'application/json'})
-        return session, base_url
-    except Exception as e:
-        print(f"[ERROR] Failed to initialize session: {e}")
-        sys.exit(1)
-def parse_args():
-    parser = argparse.ArgumentParser(description="Onboard new Akamai Security Config using a predefined template")
-    parser.add_argument("--section", required=True, help="Section name in .edgerc")
-    parser.add_argument("--access_group", required=True, help="Access Group Name (used to determine region)")
-    parser.add_argument("--fqdn", required=True, nargs='+', help="List of FQDNs (first is primary, rest are SANs)")
-    parser.add_argument("--isProd", type=str2bool, default=False, help="Is this a Prod onboarding?")
-    parser.add_argument("--dry-run", action="store_true", help="Show what will happen, but don't call Akamai API")
-    return parser.parse_args()
-
-def get_region_from_group(access_group):
-    for region, settings in REGION_SETTINGS.items():
-        if region.lower() in access_group.lower():
-            return region, settings
-    return None, None
-
-def config_exists(session, base_url, config_name):
-    url = urljoin(base_url, "/appsec/v1/configs")
-    response = session.get(url)
-    if response.status_code == 200:
-        configs = response.json().get("configurations", [])
-        for cfg in configs:
-            if cfg["name"] == config_name:
-                return cfg["id"]
-    return None
-
-def policy_exists(session, base_url, config_id, policy_name):
-    url = urljoin(base_url, f"/appsec/v1/configs/{config_id}/versions/1/security-policies")
-    response = session.get(url)
-    if response.status_code == 200:
-        policies = response.json().get("policies", [])
-        for pol in policies:
-            if pol["policyName"] == policy_name:
-                return pol["policyId"]
-    return None
-
-def dry_run_preview(config_name, policy_name, fqdn, region, group_id, contract_id, template_cfg, template_pol):
-    print("\n[AFTER APPROVAL]: Summary of actions to be taken:")
-    print("=========================================")
-    print(f"  Security Config Name: {config_name}")
-    print(f"  Policy Name:          {policy_name}")
-    print(f"  Policy Prefix:        {policy_name.split('-')[-1]}")
-    print(f"  Primary FQDN:         {fqdn[0]}")
-    if len(fqdn) > 1:
-    print(f"  SAN Hostnames:        {', '.join(fqdn[1:])}")
-    print(f"  Region:               {region}")
-    print(f"  Group ID:             {group_id}")
-    print(f"  Contract ID:          {contract_id}")
-    print(f"  Cloning From Config:  {template_cfg}")
-    print(f"  Cloning From Policy:  {template_pol}")
-    print("=========================================\n")
-
 def main():
     args = parse_args()
-    session, base_url = setup_session("~/.edgerc", args.section)
+    
+    session, base_url = setup_session(args.edgerc_file, args.section)
 
-    region, region_data = get_region_from_group(args.access_group)
-    if not region:
-        print(f"[ERROR] Region not recognized from access group: {args.access_group}")
+    # Get region and its associated data using account section name
+    region, region_data = get_region_from_group(args.section)
+    if not region_data:
+        print(f"[ERROR] Could not determine region for section: {args.section}")
         sys.exit(1)
 
+    # Construct names and suffixes
     config_name = f"SC-{args.access_group}"
     policy_suffix = "Prod" if args.isProd else "NonProd"
     policy_name = f"PL-{args.access_group}-{policy_suffix}"
@@ -183,96 +18,55 @@ def main():
     # Check if config already exists
     existing_config_id = config_exists(session, base_url, config_name)
     if existing_config_id:
-        # Also check policy
+        # If config exists, check if policy exists
         existing_policy_id = policy_exists(session, base_url, existing_config_id, policy_name)
         if existing_policy_id:
             print(f"[ERROR] Config '{config_name}' and Policy '{policy_name}' already exist. Aborting.")
             sys.exit(1)
         else:
-            print(f"[WARNING] Config '{config_name}' already exists. Policy '{policy_name}' does not. Aborting to avoid partial onboarding.")
+            print(f"[WARNING] Config '{config_name}' exists but Policy '{policy_name}' does not. Aborting to avoid partial onboarding.")
             sys.exit(1)
+
+    # Prepare FQDN list
+    fqdn_list = args.fqdn
+    if not fqdn_list:
+        print("[ERROR] No FQDNs provided for onboarding.")
+        sys.exit(1)
 
     if args.dry_run:
         dry_run_preview(
             config_name=config_name,
             policy_name=policy_name,
-            fqdn=args.fqdn,
+            fqdn=fqdn_list,
             region=region,
             group_id=region_data["group_id"],
             contract_id=region_data["contract_id"],
-            template_cfg=region_data["template_config_id"],
-            template_pol=region_data["template_policy_id"]
+            template_cfg_id=region_data["template_config_id"],
+            template_pol_id=region_data["template_policy_id"]
         )
         sys.exit(0)
-def create_security_config(session, base_url, config_name, group_id, template_config_id, fqdn_list):
-    url = urljoin(base_url, "/appsec/v1/configs")
-    payload = {
-        "createFrom": {
-            "configId": template_config_id,
-            "version": 1
-        },
-        "hostnames": fqdn_list,
-        "groupId": group_id,
-        "name": config_name,
-        "description": "Created via onboarding automation script"
-    }
 
-    print(f"[INFO] Creating security config '{config_name}'...")
-    response = session.post(url, json=payload)
-    if response.status_code == 201:
-        config_data = response.json()
-        config_id = config_data.get("id")
-        print(f"[SUCCESS] Created config '{config_name}' with ID {config_id}")
-        return config_id
-    else:
-        print(f"[ERROR] Failed to create security config: {response.status_code} - {response.text}")
-        sys.exit(1)
+    # Proceed with onboarding
+    print(f"\n[INFO] Proceeding with onboarding...")
 
-def create_default_policy(session, base_url, config_id, policy_name, policy_prefix, template_policy_id):
-    url = urljoin(base_url, f"/appsec/v1/configs/{config_id}/versions/1/security-policies")
-    payload = {
-        "defaultSettings": True,
-        "policyName": policy_name,
-        "policyPrefix": policy_prefix,
-        "source": "onboarding",
-        "createFromSecurityPolicy": template_policy_id
-    }
+    config_id = create_security_config(
+        session,
+        base_url,
+        config_name,
+        region_data["group_id"],
+        region_data["template_config_id"],
+        fqdn_list
+    )
 
-    print(f"[INFO] Creating default security policy '{policy_name}'...")
-    response = session.post(url, json=payload)
-    if response.status_code == 201:
-        policy_data = response.json()
-        policy_id = policy_data.get("policyId")
-        print(f"[SUCCESS] Created default policy '{policy_name}' with ID {policy_id}")
-        return policy_id
-    else:
-        print(f"[ERROR] Failed to create policy: {response.status_code} - {response.text}")
-        sys.exit(1)
+    policy_id = create_default_policy(
+        session,
+        base_url,
+        config_id,
+        policy_name,
+        policy_prefix,
+        region_data["template_policy_id"]
+    )
 
-# Add to main()
-    if not args.dry_run:
-        print("[INFO] Proceeding with onboarding...")
-
-        fqdn_list = args.fqdn
-        config_id = create_security_config(
-            session=session,
-            base_url=base_url,
-            config_name=config_name,
-            group_id=region_data["group_id"],
-            template_config_id=region_data["template_config_id"],
-            fqdn_list=fqdn_list
-        )
-
-        policy_id = create_default_policy(
-            session=session,
-            base_url=base_url,
-            config_id=config_id,
-            policy_name=policy_name,
-            policy_prefix=policy_prefix,
-            template_policy_id=region_data["template_policy_id"]
-        )
-
-        print("\n Onboarding complete.")
-        print(f"   Security Config ID: {config_id}")
-        print(f"   Security Policy ID: {policy_id}")
-        
+    print(f"\nOnboarding complete.")
+    print(f"Security Config ID: {config_id}")
+    print(f"Security Policy ID: {policy_id}")
