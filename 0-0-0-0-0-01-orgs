@@ -1,161 +1,23 @@
-#!/usr/bin/env python3
-"""
-Akamai AppSec Onboarding Script
-
-This script automates the onboarding of FQDNs to Akamai AppSec by:
-1. Cloning a security configuration from a default template.
-2. Cloning the default policy ("TEMP") from the config and creating a new named policy.
-3. Reassociating all protections (match targets, etc.) to the new policy.
-4. Removing all associations from TEMP policy and deleting it.
-
-Supports multiple --fqdn entries and --dry-run mode.
-
-Author: Kuldeep (2025)
-"""
-
-import sys
-import argparse
-from akamai.edgegrid import EdgeGridAuth
-import requests
-import json
-from urllib.parse import urljoin
-
-# -------------------- REGION SETTINGS PER ACCOUNT -------------------- #
-REGION_SETTINGS = {
-    "hsbc-emea": {
-        "contract_id": "V-5A82MHB",
-        "group_id": "272093",
-        "template_config_id": "169174",
-        "template_policy_id": "172355",
-    },
-    "hsbc-apac": {
-        "contract_id": "V-5A82LRN",
-        "group_id": "272084",
-        "template_config_id": "169188",
-        "template_policy_id": "172366",
-    }
-    # Add others as needed
-}
-
-# -------------------- AUTH SESSION -------------------- #
-def setup_session(edgerc_path, section):
-    from configparser import ConfigParser
-    config = ConfigParser()
-    config.read(edgerc_path)
-    base_url = f"https://{config[section]['host']}"
-    session = requests.Session()
-    session.auth = EdgeGridAuth(
-        client_token=config[section]['client_token'],
-        client_secret=config[section]['client_secret'],
-        access_token=config[section]['access_token']
-    )
-    return session, base_url
-
-# -------------------- CLONE CONFIG -------------------- #
-def clone_security_config(session, base_url, template_config_id, name, contract_id, group_id):
-    url = f"/appsec/v1/configs/{template_config_id}/clone"
-    payload = {
-        "name": name,
-        "contractId": contract_id,
-        "groupId": group_id
-    }
-    response = session.post(urljoin(base_url, url), json=payload)
-    response.raise_for_status()
-    return response.json()["configId"]
-
-# -------------------- CLONE POLICY -------------------- #
-def clone_policy(session, base_url, config_id, source_policy_id, new_name, new_prefix):
-    url = f"/appsec/v1/configs/{config_id}/security-policies/{source_policy_id}/clone"
-    payload = {
-        "policyName": new_name,
-        "policyPrefix": new_prefix
-    }
-    response = session.post(urljoin(base_url, url), json=payload)
-    response.raise_for_status()
-    return response.json()["policyId"]
-
-# -------------------- REASSOCIATE PROTECTIONS -------------------- #
 def reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id):
     url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
     response = session.get(urljoin(base_url, url))
     response.raise_for_status()
     match_targets = response.json()
+    
     reassigned = []
 
     for target in match_targets:
-        if target['securityPolicy']['policyId'] == old_policy_id:
+        # Ensure target is a dict and has expected nested keys
+        if isinstance(target, dict) and \
+           'securityPolicy' in target and \
+           isinstance(target['securityPolicy'], dict) and \
+           target['securityPolicy'].get('policyId') == old_policy_id:
+
             target['securityPolicy']['policyId'] = new_policy_id
-            put_url = f"{url}/{target['targetId']}"
+            put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
             put_resp = session.put(urljoin(base_url, put_url), json=target)
             put_resp.raise_for_status()
+
             reassigned.append(target['targetId'])
 
     return reassigned
-
-# -------------------- DELETE POLICY -------------------- #
-def delete_policy(session, base_url, config_id, policy_id):
-    url = f"/appsec/v1/configs/{config_id}/security-policies/{policy_id}"
-    response = session.delete(urljoin(base_url, url))
-    response.raise_for_status()
-    return response.status_code == 204
-
-# -------------------- MAIN -------------------- #
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--section', required=True)
-    parser.add_argument('--edgerc', default='~/.edgerc')
-    parser.add_argument('--access_group', required=True)
-    parser.add_argument('--fqdn', action='append', required=True)
-    parser.add_argument('--isProd', action='store_true')
-    parser.add_argument('--dry-run', action='store_true')
-    args = parser.parse_args()
-
-    section = args.section
-    region = REGION_SETTINGS.get(section)
-    if not region:
-        print(f"[ERROR] No region settings for section '{section}'")
-        sys.exit(1)
-
-    # Variables
-    new_config_name = f"{args.access_group}-Web-App-Security"
-    new_policy_name = f"PL-{args.access_group}-{'Prod' if args.isProd else 'NonProd'}"
-    new_policy_prefix = "Prod" if args.isProd else "NonP"
-
-    # DRY RUN MODE
-    if args.dry_run:
-        print("=== Dry Run Mode ===")
-        print(f"Config to be created: {new_config_name}")
-        print(f"Policy to be created: {new_policy_name} (prefix: {new_policy_prefix})")
-        print(f"FQDNs: {args.fqdn}")
-        print(f"Cloning from template config: {region['template_config_id']}, policy: {region['template_policy_id']}")
-        print(f"Group ID: {region['group_id']}, Contract ID: {region['contract_id']}")
-        sys.exit(0)
-
-    session, base_url = setup_session(args.edgerc, section)
-
-    print(f"[INFO] Cloning security configuration...")
-    config_id = clone_security_config(
-        session, base_url, region['template_config_id'],
-        new_config_name, region['contract_id'], region['group_id']
-    )
-
-    print(f"[INFO] Cloning policy from template...")
-    new_policy_id = clone_policy(
-        session, base_url, config_id,
-        region['template_policy_id'], new_policy_name, new_policy_prefix
-    )
-
-    print(f"[INFO] Reassigning protections from TEMP policy...")
-    reassigned = reassign_match_targets(
-        session, base_url, config_id, 1,
-        region['template_policy_id'], new_policy_id
-    )
-    print(f"[INFO] Reassigned match targets: {reassigned}")
-
-    print(f"[INFO] Deleting TEMP policy...")
-    delete_policy(session, base_url, config_id, region['template_policy_id'])
-
-    print(f"[SUCCESS] Onboarding complete. Config ID: {config_id}, Policy ID: {new_policy_id}")
-
-if _name_ == "_main_":
-    main()
