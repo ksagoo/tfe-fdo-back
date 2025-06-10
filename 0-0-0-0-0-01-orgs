@@ -1,23 +1,9 @@
-config_id = create_security_config(
-    session,
-    base_url,
-    config_name,
-    group_id=region_data["group_id"],
-    contract_id=region_data["contract_id"],
-    template_config_id=region_data["template_config_id"],
-    fqdn_list=fqdns
-)
-
-def create_security_config(session, base_url, config_name, group_id, contract_id, template_config_id, fqdn_list):
-    url = urljoin(base_url, "/appsec/v1/configs")
-    payload = {
-        "createFrom": {
-            "configId": template_config_id,
-            "version": 1
-        },
-        "hostnames": fqdn_list,
-        "groupId": group_id,
-        "contractId": contract_id,
-        "name": config_name,
-        "description": "Created via onboarding automation script"
-    }
+response = session.post(url, json=payload)
+if response.status_code == 201:
+    config_data = response.json()
+    config_id = config_data.get("configId")  # use the correct key
+    print(f"[SUCCESS] Created config '{config_name}' with ID {config_id}")
+    return config_id
+else:
+    print(f"[ERROR] Failed to create security config: {response.status_code} - {response.text}")
+    sys.exit(1)
