@@ -1,12 +1,20 @@
+def dry_run_preview(config_name, policy_name, fqdn_list, region, group_id, contract_id, template_cfg, template_pol):
+    print("\n[AFTER APPROVAL]: Summary of actions to be taken:")
+    print("--------------------------------------------------")
+    print(f"  Security Config Name : {config_name}")
+    print(f"  Policy Name          : {policy_name}")
+    print(f"  Policy Prefix        : {policy_name.split('-')[-1]}")
 
-parser.add_argument(
-    "--fqdn",
-    required=True,
-    action="append",
-    help="FQDNs to onboard (first is primary, rest are SANs). Use multiple --fqdn flags"
-)
-fqdn_list = args.fqdn
+    if fqdn_list:
+        print(f"  Primary FQDN         : {fqdn_list[0]}")
+        if len(fqdn_list) > 1:
+            print(f"  SAN Hostnames        : {', '.join(fqdn_list[1:])}")
+        else:
+            print("  SAN Hostnames        : None")
 
-primary_fqdn = fqdn_list[0]
-
-san_fqdns = fqdn_list[1:] if len(fqdn_list) > 1 else []
+    print(f"  Account              : {region}")
+    print(f"  Group ID             : {group_id}")
+    print(f"  Contract ID          : {contract_id}")
+    print(f"  Cloning From Config  : {template_cfg}")
+    print(f"  Cloning From Policy  : {template_pol}")
+    print("--------------------------------------------------\n")
