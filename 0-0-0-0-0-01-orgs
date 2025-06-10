@@ -1,6 +1,9 @@
 for target in match_targets:
     print(f"[VALIDATE] Target Entry: {json.dumps(target, indent=2)}")
-    if isinstance(target, dict) and target.get("securityPolicy", {}).get("policyId") == old_policy_id:
+    current_policy = target.get("securityPolicy", {}).get("policyId", "").strip()
+    print(f"[DEBUG] Comparing: {current_policy} == {old_policy_id.strip()}")
+
+    if current_policy == old_policy_id.strip():
         target["securityPolicy"]["policyId"] = new_policy_id
         put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
         put_resp = session.put(urljoin(base_url, put_url), json=target)
