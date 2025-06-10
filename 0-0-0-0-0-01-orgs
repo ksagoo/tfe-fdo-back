@@ -1,24 +1,37 @@
-response = session.post(url, json=payload)
-if response.status_code == 201:
-    config_data = response.json()
-    config_id = config_data.get("configId")  # use the correct key
-    print(f"[SUCCESS] Created config '{config_name}' with ID {config_id}")
-    return config_id
-else:
-    print(f"[ERROR] Failed to create security config: {response.status_code} - {response.text}")
+parser.add_argument("--template_config_name", default="Security Policy Template",
+                    help="Name of the template configuration to clone from (default: 'Security Policy Template')")
+parser.add_argument("--template_version", type=int, default=1,
+                    help="Version number of the template config (default: 1)")
+
+def get_config_id_by_name(session, base_url, config_name):
+    url = urljoin(base_url, "/appsec/v1/configs")
+    response = session.get(url)
+    if response.status_code != 200:
+        print(f"[ERROR] Failed to fetch configs: {response.text}")
+        sys.exit(1)
+
+    configs = response.json().get("configurations", [])
+    for cfg in configs:
+        if cfg.get("name") == config_name:
+            return cfg.get("id")
+
+    print(f"[ERROR] No config found with name: {config_name}")
     sys.exit(1)
 
-
-def validate_template_policy(session, base_url, template_config_id, template_policy_id):
-    url = urljoin(base_url, f"/appsec/v1/configs/{template_config_id}/versions/1/security-policies")
+def get_policy_id_from_config(session, base_url, config_id, version):
+    url = urljoin(base_url, f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies")
     response = session.get(url)
-    if response.status_code == 200:
-        policies = response.json().get("policies", [])
-        for p in policies:
-            if p["policyId"] == template_policy_id:
-                print(f"[INFO] Verified template policy ID: {template_policy_id}")
-                return True
-        print(f"[ERROR] Policy ID {template_policy_id} not found in config {template_config_id}")
-    else:
-        print(f"[ERROR] Failed to fetch template policies: {response.status_code} - {response.text}")
-    return False
+    if response.status_code != 200:
+        print(f"[ERROR] Failed to fetch policies for config {config_id}: {response.text}")
+        sys.exit(1)
+
+    policies = response.json().get("policies", [])
+    if not policies:
+        print(f"[ERROR] No policies found in config {config_id} version {version}")
+        sys.exit(1)
+
+    # For now, return first found (we can refine later)
+    return policies[0]["policyId"]
+
+template_config_id = get_config_id_by_name(session, base_url, args.template_config_name)
+template_policy_id = get_policy_id_from_config(session, base_url, template_config_id, args.template_version)
