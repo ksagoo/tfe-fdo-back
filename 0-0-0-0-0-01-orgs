@@ -11,3 +11,5 @@ def delete_policy(session, base_url, config_id, policy_id):
     else:
         print(f" Failed to delete TEMP policy: {response.status_code} - {response.text}")
         return False
+
+    delete_policy(session, base_url, new_config_id, temp_policy_id)
