@@ -1,6 +1,13 @@
 for target in match_targets:
     print(f"[VALIDATE] Target Entry: {json.dumps(target, indent=2)}")
-    current_policy = str(target.get("securityPolicy", {}).get("policyId", "")).strip()
+
+    security_policy = target.get("securityPolicy")
+    if isinstance(security_policy, dict):
+        current_policy = security_policy.get("policyId", "").strip()
+    else:
+        print(f"[WARN] Skipping target due to invalid securityPolicy format: {security_policy}")
+        continue
+
     print(f"[DEBUG] Comparing: {current_policy} == {old_policy_id.strip()}")
 
     if current_policy == old_policy_id.strip():
