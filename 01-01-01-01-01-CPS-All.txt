@@ -1,3 +1,6 @@
+print("[DEBUG] Raw rendered match_targets:")
+print(rendered)
+
 [
 {% for target in match_targets %}
 {
