@@ -1,66 +1,41 @@
-print("[DEBUG] Raw rendered match_targets:")
-print(rendered)
-
 [
 {% for target in match_targets %}
-{
-  "configId": {{ target.configId }},
-  "configVersion": {{ target.configVersion }},
-  "targetId": {{ target.targetId }},
-  "sequence": {{ target.sequence }},
-  "type": "{{ target.type }}",
-  "bypassNetworkLists": [
-    {% for bnl in target.bypassNetworkLists %}
-    {
-      "id": "{{ bnl.id }}",
-      "listType": "{{ bnl.listType }}",
-      "name": "{{ bnl.name }}",
-      "type": "{{ bnl.type }}"
-    }{% if not loop.last %},{% endif %}
-    {% endfor %}
-  ],
-  "defaultFile": "{{ target.defaultFile }}",
-  "effectiveSecurityControls": {
-    "applyApiConstraintControls": {{ target.effectiveSecurityControls.applyApiConstraintControls | lower }},
-    "applyApplicationLayerControls": {{ target.effectiveSecurityControls.applyApplicationLayerControls | lower }},
-    "applyBotmanControls": {{ target.effectiveSecurityControls.applyBotmanControls | lower }},
-    "applyNetworkLayerControls": {{ target.effectiveSecurityControls.applyNetworkLayerControls | lower }},
-    "applyRateControls": {{ target.effectiveSecurityControls.applyRateControls | lower }},
-    "applyReputationControls": {{ target.effectiveSecurityControls.applyReputationControls | lower }},
-    "applySlowPostControls": {{ target.effectiveSecurityControls.applySlowPostControls | lower }},
-    "applyApiProtectionControls": {{ target.effectiveSecurityControls.applyApiProtectionControls | lower }},
-    "applyAccountProtectionControls": {{ target.effectiveSecurityControls.applyAccountProtectionControls | lower }}
-  },
-  "filePaths": [{% for path in target.filePaths %}"{{ path }}"{% if not loop.last %}, {% endif %}{% endfor %}],
-  "hostnames": [{% for host in target.hostnames %}"{{ host }}"{% if not loop.last %}, {% endif %}{% endfor %}],
-  "isNegativeFileExtensionMatch": {{ target.isNegativeFileExtensionMatch | lower }},
-  "isSharedAliasMatch": {{ target.isSharedAliasMatch | lower }},
-  "securityPolicy": {
-    "policyId": "{{ target.securityPolicy.policyId }}"
-  },
-  "apiTargets": []
-}
-{% if not loop.last %},{% endif %}
+  {
+    "configId": {{ target.configId }},
+    "configVersion": {{ target.configVersion }},
+    "targetId": {{ target.targetId }},
+    "sequence": {{ target.sequence }},
+    "type": "{{ target.type }}",
+    "bypassNetworkLists": [
+      {% for bnl in target.bypassNetworkLists %}
+      {
+        "id": "{{ bnl.id }}",
+        "listType": "{{ bnl.listType }}",
+        "name": "{{ bnl.name }}",
+        "type": "{{ bnl.type }}"
+      }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    ],
+    "defaultFile": "{{ target.defaultFile }}",
+    "effectiveSecurityControls": {
+      "applyApiConstraintControls": {{ target.effectiveSecurityControls.applyApiConstraintControls | lower }},
+      "applyApplicationLayerControls": {{ target.effectiveSecurityControls.applyApplicationLayerControls | lower }},
+      "applyBotmanControls": {{ target.effectiveSecurityControls.applyBotmanControls | lower }},
+      "applyNetworkLayerControls": {{ target.effectiveSecurityControls.applyNetworkLayerControls | lower }},
+      "applyRateControls": {{ target.effectiveSecurityControls.applyRateControls | lower }},
+      "applyReputationControls": {{ target.effectiveSecurityControls.applyReputationControls | lower }},
+      "applySlowPostControls": {{ target.effectiveSecurityControls.applySlowPostControls | lower }},
+      "applyApiProtectionControls": {{ target.effectiveSecurityControls.applyApiProtectionControls | lower }},
+      "applyAccountProtectionControls": {{ target.effectiveSecurityControls.applyAccountProtectionControls | lower }}
+    },
+    "filePaths": [{% for path in target.filePaths %}"{{ path }}"{% if not loop.last %}, {% endif %}{% endfor %}],
+    "hostnames": [{% for host in target.hostnames %}"{{ host }}"{% if not loop.last %}, {% endif %}{% endfor %}],
+    "isNegativeFileExtensionMatch": {{ target.isNegativeFileExtensionMatch | lower }},
+    "isSharedAliasMatch": {{ target.isSharedAliasMatch | lower }},
+    "securityPolicy": {
+      "policyId": "{{ target.securityPolicy.policyId }}"
+    },
+    "apiTargets": []
+  }{% if not loop.last %},{% endif %}
 {% endfor %}
 ]
-
-if "match_targets" in config:
-    rendered = render_template(
-        env,
-        "match_targets_full_template.j2",
-        {"match_targets": config["match_targets"]}
-    )
-    try:
-        target_list = json.loads(rendered)
-        if isinstance(target_list, list):
-            save_rendered_output(args.output_dir, "match_targets.json", json.dumps(target_list, indent=2))
-        else:
-            print("[ERROR] Rendered match_targets is not a list.")
-    except Exception as e:
-        print(f"[ERROR] Failed to render match_targets list: {e}")
-
-env = Environment(
-    loader=FileSystemLoader(args.template_dir),
-    trim_blocks=True,
-    lstrip_blocks=True
-)
