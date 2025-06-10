@@ -1,23 +1,12 @@
-def reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
-    response = session.get(urljoin(base_url, url))
-    response.raise_for_status()
-    match_targets = response.json()
-    
-    reassigned = []
+version = 1  # Or dynamically look up latest version
+reassigned = reassign_match_targets(
+    session,
+    base_url,
+    config_id,
+    version,
+    template_policy_id,
+    policy_id
+)
 
-    for target in match_targets:
-        # Ensure target is a dict and has expected nested keys
-        if isinstance(target, dict) and \
-           'securityPolicy' in target and \
-           isinstance(target['securityPolicy'], dict) and \
-           target['securityPolicy'].get('policyId') == old_policy_id:
-
-            target['securityPolicy']['policyId'] = new_policy_id
-            put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
-            put_resp = session.put(urljoin(base_url, put_url), json=target)
-            put_resp.raise_for_status()
-
-            reassigned.append(target['targetId'])
-
-    return reassigned
+if not match_targets:
+    print(f"[WARNING] No match targets found for config {config_id} version {version}")
