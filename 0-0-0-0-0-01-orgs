@@ -1,12 +1,11 @@
-version = 1  # Or dynamically look up latest version
-reassigned = reassign_match_targets(
-    session,
-    base_url,
-    config_id,
-    version,
-    template_policy_id,
-    policy_id
-)
+for target in match_targets:
+    print(f"[VALIDATE] Target Entry: {target}")
+    if isinstance(target, dict) and \
+       target.get('securityPolicyId') == old_policy_id:
 
-if not match_targets:
-    print(f"[WARNING] No match targets found for config {config_id} version {version}")
+        target['securityPolicyId'] = new_policy_id
+        put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
+        put_resp = session.put(urljoin(base_url, put_url), json=target)
+        put_resp.raise_for_status()
+        reassigned.append(target['targetId'])
+        print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
