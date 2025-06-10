@@ -1,6 +1,6 @@
 for target in match_targets:
     print(f"[VALIDATE] Target Entry: {json.dumps(target, indent=2)}")
-    current_policy = target.get("securityPolicy", {}).get("policyId", "").strip()
+    current_policy = str(target.get("securityPolicy", {}).get("policyId", "")).strip()
     print(f"[DEBUG] Comparing: {current_policy} == {old_policy_id.strip()}")
 
     if current_policy == old_policy_id.strip():
