@@ -1,20 +1,23 @@
-def dry_run_preview(config_name, policy_name, fqdn_list, region, group_id, contract_id, template_cfg, template_pol):
-    print("\n[AFTER APPROVAL]: Summary of actions to be taken:")
-    print("--------------------------------------------------")
-    print(f"  Security Config Name : {config_name}")
-    print(f"  Policy Name          : {policy_name}")
-    print(f"  Policy Prefix        : {policy_name.split('-')[-1]}")
+config_id = create_security_config(
+    session,
+    base_url,
+    config_name,
+    group_id=region_data["group_id"],
+    contract_id=region_data["contract_id"],
+    template_config_id=region_data["template_config_id"],
+    fqdn_list=fqdns
+)
 
-    if fqdn_list:
-        print(f"  Primary FQDN         : {fqdn_list[0]}")
-        if len(fqdn_list) > 1:
-            print(f"  SAN Hostnames        : {', '.join(fqdn_list[1:])}")
-        else:
-            print("  SAN Hostnames        : None")
-
-    print(f"  Account              : {region}")
-    print(f"  Group ID             : {group_id}")
-    print(f"  Contract ID          : {contract_id}")
-    print(f"  Cloning From Config  : {template_cfg}")
-    print(f"  Cloning From Policy  : {template_pol}")
-    print("--------------------------------------------------\n")
+def create_security_config(session, base_url, config_name, group_id, contract_id, template_config_id, fqdn_list):
+    url = urljoin(base_url, "/appsec/v1/configs")
+    payload = {
+        "createFrom": {
+            "configId": template_config_id,
+            "version": 1
+        },
+        "hostnames": fqdn_list,
+        "groupId": group_id,
+        "contractId": contract_id,
+        "name": config_name,
+        "description": "Created via onboarding automation script"
+    }
