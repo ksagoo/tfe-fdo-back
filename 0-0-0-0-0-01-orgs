@@ -1,11 +1,7 @@
-for target in match_targets:
-    print(f"[VALIDATE] Target Entry: {target}")
-    if isinstance(target, dict) and \
-       target.get('securityPolicyId') == old_policy_id:
-
-        target['securityPolicyId'] = new_policy_id
-        put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
-        put_resp = session.put(urljoin(base_url, put_url), json=target)
-        put_resp.raise_for_status()
-        reassigned.append(target['targetId'])
-        print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
+if isinstance(target, dict) and target.get("securityPolicy", {}).get("policyId") == old_policy_id:
+    target["securityPolicy"]["policyId"] = new_policy_id
+    put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
+    put_resp = session.put(urljoin(base_url, put_url), json=target)
+    put_resp.raise_for_status()
+    reassigned.append(target["targetId"])
+    print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
