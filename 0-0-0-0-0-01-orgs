@@ -1,1 +1,12 @@
+def get_region_from_section(section_name):
+    for region, data in REGION_SETTINGS.items():
+        if region.lower() == section_name.lower():
+            return region, data
+    return None, None
+
 region, region_data = get_region_from_group(args.section)
+
+region, region_data = get_region_from_section(args.section)
+if not region_data:
+    print(f"[ERROR] Could not determine region for section: {args.section}")
+    sys.exit(1)
