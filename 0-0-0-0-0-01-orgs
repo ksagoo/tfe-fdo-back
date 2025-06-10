@@ -1,26 +1,9 @@
-def reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
-    response = session.get(urljoin(base_url, url))
-    response.raise_for_status()
-    match_targets = response.json()
-
-    print(f"[VALIDATE] New Config ID: {config_id}")
-    print(f"[VALIDATE] Temp Policy ID: {old_policy_id}")
-    print(f"[VALIDATE] New Policy ID: {new_policy_id}")
-    print(f"[VALIDATE] Matched Targets Returned: {json.dumps(match_targets, indent=2)}")
-
-    reassigned = []
-
-    for target in match_targets:
-        print(f"[VALIDATE] Target Entry: {json.dumps(target, indent=2)}")
-        if isinstance(target, dict) and target.get("securityPolicy", {}).get("policyId") == old_policy_id:
-            target["securityPolicy"]["policyId"] = new_policy_id
-
-            put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
-            put_resp = session.put(urljoin(base_url, put_url), json=target)
-            put_resp.raise_for_status()
-            reassigned.append(target["targetId"])
-
-            print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
-
-    return reassigned
+for target in match_targets:
+    print(f"[VALIDATE] Target Entry: {json.dumps(target, indent=2)}")
+    if isinstance(target, dict) and target.get("securityPolicy", {}).get("policyId") == old_policy_id:
+        target["securityPolicy"]["policyId"] = new_policy_id
+        put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
+        put_resp = session.put(urljoin(base_url, put_url), json=target)
+        put_resp.raise_for_status()
+        reassigned.append(target["targetId"])
+        print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
