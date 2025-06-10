@@ -1,369 +1,176 @@
-url = "https://hostname/appsec/v1/configs"
+#!/usr/bin/env python3
+# ============================================================
+# Akamai AppSec Onboarding Script from Template Configuration
+# ============================================================
 
-payload = {
-    "createFrom": {
-        "configId": 107918,
-        "version": 1
-    },
-    "hostnames": ["example.com", "example2.com"],
-    "groupId": 36789
-}
+# Script Name:
+#   akamai_onboard_from_template.py
 
-url = "https://hostname/appsec/v1/configs/107918/versions/1/security-policies"
+# Description:
+#   This script simplifies onboarding of new Akamai AppSec security configurations
+#   by cloning a default template configuration and its associated policy.
+#   It supports the following features:
+#
+#     • Accepts FQDN(s), with the first as primary and rest as SANs
+#     • Accepts --isProd to determine environment
+#     • Looks up internal template config/policy per account
+#     • Supports --dry-run to preview creation actions
+#     • Aborts if the target config/policy already exists
+#
+# Parameters:
+#   --section (required)     Edgerc section name (used for authentication context)
+#   --access_group (required) Name of the new access group (used in config/policy name)
+#   --fqdn (required, multiple) One or more FQDNs. First is primary, others are SANs.
+#   --isProd (optional)      Flag to indicate if config is production. Defaults to false.
+#   --dry-run (optional)     Preview what will be created without performing any API calls.
+#
+# Example:
+#   python akamai_onboard_from_template.py \
+#       --section dev \
+#       --access_group WPB-APAC-IN-CyberWASPTesting \
+#       --fqdn esppos-dev-01.hsbc.com.hk esppos-dev-02.hsbc.com.hk \
+#       --isProd \
+#       --dry-run
 
-payload = {
-    "defaultSettings": "true",
-    "policyName": "PL-accessgroup-NonProd",
-    "policyPrefix": "NonP",
-    "source": "onboarding"
-}
-
-
-
-"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/custom-rules"
-"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/rate-policies"
-"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/ip-geo-firewall"
-"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/reputation-profiles"
-"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/custom-rules"
-"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/api-endpoints"
-"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/slow-post"
-"/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/rules"
-"/appsec/v1/configs/configId/versions/versionNumber/match-targets"
-
-
-def export_all_modules(session, base_url, config_id, version, policy_id):
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets",
-        "match_targets.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/custom-rules",
-        "custom_rules.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rate-policies",
-        "rate_policies.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall",
-        "ip_geo_firewall.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/reputation-profiles",
-        "reputation_profiles.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/api-endpoints",
-        "api_endpoints.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/slow-post",
-        "slow_post_protection.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rules",
-        "waf_rules.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/urlProtectionActions",
-        "url_protection_actions.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/api-request-constraints",
-        "api_request_constraints.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/malwarePolicyActions",
-        "malware_policy_actions.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/protections",
-        "protections.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/recommendations",
-        "recommendations.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/attack-groups",
-        "attack_groups.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/mode",
-        "mode.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/behavioral-ddo",
-        "behavioral_ddos.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/bypass-network-lists",
-        "bypass_network_lists.json")
-
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/cpc",
-        "cpc.json")
-
-    # ✅ NEW: Custom Bots
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/custom-bots",
-        "custom_bots.json")
-
-    # ✅ NEW: Bot Manager Settings
-    export_module(session, base_url,
-        f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/advanced-settings/bot-manager",
-        "bot_manager.json")
-
-
-
-def export_all_modules(session, base_url, config_id, version, policy_id):
-    paths = [
-        # Match Targets (global level)
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets", "match_targets.json"),
-
-        # Policy-level modules
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/custom-rules", "custom_rules.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rate-policies", "rate_policies.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall", "ip_geo_firewall.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/reputation-profiles", "reputation_profiles.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/api-endpoints", "api_endpoints.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/slow-post", "slow_post_protection.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rules", "waf_rules.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/urlProtectionActions", "url_protection_actions.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/api-request-constraints", "api_request_constraints.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/malwarePolicyActions", "malware_policy_actions.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/protections", "protections.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/recommendations", "recommendations.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/attack-groups", "attack_groups.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/mode", "mode.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/behavioral-ddo", "behavioral_ddos.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/bypass-network-lists", "bypass_network_lists.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/cpc", "cpc.json"),
-    ]
-
-    for url_path, filename in paths:
-        export_module(session, base_url, url_path, filename)
-
-def export_all_modules(session, base_url, config_id, version, policy_id):
-    paths = [
-        # Policy-specific modules
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/custom-rules", "custom_rules.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rate-policies", "rate_limit_policies.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall", "ip_geo_firewall.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/reputation-profiles", "reputation_profiles.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/api-endpoints", "api_endpoints.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/slow-post", "slow_post_protection.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rules", "waf_rules.json"),
-
-        
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/reputation-profiles")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rate-policies")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/urlProtectionActions")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/api-request-constraints")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/malwarePolicyActions")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/protections")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/recommendations")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/attack-groups")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/mode")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/behavioral-ddo")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/bypass-network-lists")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/cpc")
- (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/behavioral-ddo")
-
-
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rate-policies")
-
-
-        # Global config-level (non-policy) module
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets", "match_targets.json"),
-    ]
-
-    for url_path, filename in paths:
-        export_module(session, base_url, url_path, filename)
-
-
-def export_module(session, base_url, url_path, filename):
-    full_url = urljoin(base_url, url_path)
-    print(f"[INFO] Fetching {filename} from {full_url}")
-    try:
-        response = session.get(full_url)
-        response.raise_for_status()
-        data = response.json()
-        out_path = os.path.join(OUTPUT_DIR, filename)
-        with open(out_path, "w") as f:
-            json.dump(data, f, indent=2)
-        print(f"[SUCCESS] Saved {filename}")
-    except requests.HTTPError as e:
-        if e.response.status_code == 404:
-            print(f"[WARN] Skipping {filename}: {e}")
-        else:
-            print(f"[ERROR] Failed to fetch {filename}: {e}")
-    except Exception as e:
-        print(f"[ERROR] Unexpected error in {filename}: {e}")
-
-def export_all_modules(session, base_url, config_id, version, policy_id):
-    paths = [
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets", "match_targets.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/client-list-overrides", "client_list_overrides.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/custom-rules", "custom_rules.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/reputation-profiles", "reputation_profiles.json"),
-        (f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/slow-post", "slow_post_protection.json"),
-        (f"/appsec/v1/configs/{…
-
-
-
-
-
-
-
-
-try:
-    export_module(session, base_url, config_id, version, policy_id, "client-list-overrides.json", f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/client-list-overrides")
-except requests.HTTPError as e:
-    print(f"[WARN] Skipping client-list-overrides: {e}")
-appsec/v1/configs
-appsec/v1/configs/configId/versions/versionNumber/security-policies
-
-python export_appsec.py --config-name "My-Security-Config" --policy-prefix "NonP" 
-
-import os
 import sys
-import yaml
 import json
 import argparse
+from akamai.edgegrid import EdgeGridAuth
 import requests
-from jinja2 import Environment, FileSystemLoader
-from akamai.edgegrid import EdgeGridAuth, EdgeRc
+from urllib.parse import urljoin
 
-# Setup API session
-def setup_session(edgerc_path, section):
-    from configparser import ConfigParser
-    config = ConfigParser()
+# --- Internal template map (per account) ---
+TEMPLATE_LOOKUP = {
+    "dev": {
+        "configId": 107918,
+        "policyId": "TEMP_285595"
+    },
+    # Add other accounts as needed
+}
+
+# --- Setup EdgeGrid session ---
+def setup_session(section: str):
+    import configparser
+    import os
+
+    edgerc_path = os.path.expanduser("~/.edgerc")
+    config = configparser.ConfigParser()
     config.read(edgerc_path)
+
+    if section not in config:
+        raise ValueError(f"[ERROR] Section '{section}' not found in {edgerc_path}")
 
     session = requests.Session()
     session.auth = EdgeGridAuth(
-        client_token=config[section]["client_token"],
-        client_secret=config[section]["client_secret"],
-        access_token=config[section]["access_token"]
+        client_token=config[section]['client_token'],
+        client_secret=config[section]['client_secret'],
+        access_token=config[section]['access_token']
     )
-    session.headers.update({'Content-Type': 'application/json'})
-    base_url = f"https://{config[section]['host']}/"
-    return session, base_url
+    base_url = config[section]['host']
+    return session, f"https://{base_url}"
 
-# Get configuration ID from name
-def get_config_id(session, base_url, config_name):
+# --- Check if config exists ---
+def check_config_exists(session, base_url, name):
     url = urljoin(base_url, "/appsec/v1/configs")
     response = session.get(url)
     response.raise_for_status()
-    configs = response.json().get("configurations", [])
-    for config in configs:
-        if config["name"] == config_name:
-            return config["id"]
-    raise Exception(f"Config '{config_name}' not found.")
+    for item in response.json():
+        if item.get("name") == name:
+            return item.get("id")
+    return None
 
-# Get latest version
-def get_latest_version(session, base_url, config_id):
-    url = urljoin(base_url, f"/appsec/v1/configs/{config_id}/versions")
+# --- Check if policy exists for config ---
+def check_policy_exists(session, base_url, config_id, policy_name):
+    url = urljoin(base_url, f"/appsec/v1/configs/{config_id}/versions/1/security-policies")
     response = session.get(url)
     response.raise_for_status()
-    return response.json()["versions"][-1]["version"]
+    for policy in response.json().get("policies", []):
+        if policy.get("policyName") == policy_name:
+            return policy.get("policyId")
+    return None
 
-def get_policy_id_by_prefix(session, base_url, config_id, version, prefix):
-    url = urljoin(base_url, f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies")
-    response = session.get(url)
+# --- Create new config by cloning from template ---
+def create_config(session, base_url, group_id, hostnames, template_config_id):
+    url = urljoin(base_url, "/appsec/v1/configs")
+    payload = {
+        "createFrom": {
+            "configId": template_config_id,
+            "version": 1
+        },
+        "hostnames": hostnames,
+        "groupId": int(group_id)
+    }
+    response = session.post(url, json=payload)
     response.raise_for_status()
-    policies = response.json()["securityPolicies"]
-    for policy in policies:
-        if policy["policyName"].startswith(prefix):
-            return policy["policyId"]
-    raise Exception(f"No policy found with prefix '{prefix}'.")
+    return response.json()
 
-def export_module(session, base_url, url_path, filename):
-    print(f"Fetching {filename}...")
-    response = session.get(urljoin(base_url, url_path))
+# --- Create new policy by cloning from template ---
+def create_policy(session, base_url, config_id, policy_name, prefix, template_policy_id):
+    url = urljoin(base_url, f"/appsec/v1/configs/{config_id}/versions/1/security-policies")
+    payload = {
+        "defaultSettings": "true",
+        "policyName": policy_name,
+        "policyPrefix": prefix,
+        "source": "onboarding",
+        "createFromSecurityPolicy": template_policy_id
+    }
+    response = session.post(url, json=payload)
     response.raise_for_status()
-    data = response.json()
-    with open(os.path.join(OUTPUT_DIR, filename), "w") as f:
-        json.dump(data, f, indent=2)
-    print(f"Saved {filename}")
+    return response.json()
 
-def export_all_modules(session, base_url, config_id, version, policy_id):
-    export_module(session, base_url,
-                  f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets",
-                  "match_targets.json")
-
-    export_module(session, base_url,
-                  f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/client-list-overrides",
-                  "client_list_overrides.json")
-
-    export_module(session, base_url,
-                  f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/custom-rules",
-                  "custom_rules.json")
-
-    export_module(session, base_url,
-                  f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/reputation-profiles",
-                  "reputation_profiles.json")
-
-    export_module(session, base_url,
-                  f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/slow-post",
-                  "slow_post_protection.json")
-
-    export_module(session, base_url,
-                  f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/rate-policies",
-                  "rate_limit_policies.json")
-
-    export_module(session, base_url,
-                  f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/waf-rules",
-                  "waf_rules.json")
-
-    export_module(session, base_url,
-                  f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/advanced-settings/bot-manager",
-                  "bot_manager.json")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Export Akamai AppSec configuration by config name and policy prefix.")
-    parser.add_argument("--section", default='DEV', required=True, help="Section name from .edgerc")
-    parser.add_argument("--config-name", required=True, help="Name of the security configuration to export")
-    parser.add_argument("--prefix", default='TEMP', required=True, help="Policy name prefix to match (e.g., NonP or Prod)")
-    parser.add_argument("--version", type=int, default=1, help="(Optional) Specific version number to export. Defaults to latest.")
-    parser.add_argument("--output-dir", default="export", help="Directory to save exported JSON files")
-
+# --- Main ---
+def main():
+    parser = argparse.ArgumentParser(description="Clone AppSec config & policy from template")
+    parser.add_argument("--section", required=True)
+    parser.add_argument("--access_group", required=True)
+    parser.add_argument("--fqdn", required=True, nargs="+")
+    parser.add_argument("--isProd", action="store_true", default=False)
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    
-    OUTPUT_DIR = args.output_dir
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    policy_suffix = "Prod" if args.isProd else "NonProd"
+    policy_prefix = "Prod" if args.isProd else "NonP"
+
+    config_name = f"SC-{args.access_group}"
+    policy_name = f"PL-{args.access_group}-{policy_suffix}"
+
+    primary_hostname = args.fqdn[0]
+    all_hostnames = args.fqdn
+
+    if args.section not in TEMPLATE_LOOKUP:
+        print(f"[ERROR] No template config/policy found for section: {args.section}")
+        sys.exit(1)
+
+    template_info = TEMPLATE_LOOKUP[args.section]
 
     session, base_url = setup_session(args.section)
 
-    try:
-        config_id = get_config_id(session, base_url, args.config_name)
-        print(f"Found config ID: {config_id}")
-    except Exception as e:
-        print(f"Failed to get config ID: {e}")
-        sys.exit(1)
-
-    try:
-        if args.version:
-            version = args.version
-            print(f"Using provided version: {version}")
+    existing_config_id = check_config_exists(session, base_url, config_name)
+    if existing_config_id:
+        existing_policy_id = check_policy_exists(session, base_url, existing_config_id, policy_name)
+        if existing_policy_id:
+            print(f"[ERROR] Config '{config_name}' and policy '{policy_name}' already exist.")
+            sys.exit(1)
         else:
-            version = get_latest_version(session, base_url, config_id)
-            print(f"Auto-detected latest version: {version}")
-    except Exception as e:
-        print(f"Failed to determine config version: {e}")
-        sys.exit(1)
+            print(f"[ERROR] Config '{config_name}' exists but not policy '{policy_name}'. Aborting to avoid conflict.")
+            sys.exit(1)
 
-    try:
-        policy_id = get_policy_id_by_prefix(session, base_url, config_id, version, args.prefix)
-        print(f"Found policy ID: {policy_id}")
-    except Exception as e:
-        print(f"Failed to get policy ID: {e}")
-        sys.exit(1)
+    print("==== DRY RUN MODE ====" if args.dry_run else "==== EXECUTING CREATION ====")
+    print(f"[INFO] Config to be created: {config_name}")
+    print(f"[INFO] Policy to be created: {policy_name}")
+    print(f"[INFO] Hostnames: {all_hostnames}")
+    print(f"[INFO] Using template configId={template_info['configId']}, policyId={template_info['policyId']}")
 
-    try:
-        export_all_modules(session, base_url, config_id, version, policy_id)
-        print("Export completed successfully.")
-    except Exception as e:
-        print(f"Export failed: {e}")
-        sys.exit(1)
+    if args.dry_run:
+        print("[DRY RUN] No API calls made.")
+        return
+
+    created_config = create_config(session, base_url, group_id=template_info.get("groupId", 0), hostnames=all_hostnames, template_config_id=template_info["configId"])
+    new_config_id = created_config["id"]
+    print(f"[SUCCESS] Created config ID: {new_config_id}")
+
+    created_policy = create_policy(session, base_url, new_config_id, policy_name, policy_prefix, template_info["policyId"])
+    print(f"[SUCCESS] Created policy ID: {created_policy.get('policyId')}")
+
+if _name_ == "_main_":
+    main()
