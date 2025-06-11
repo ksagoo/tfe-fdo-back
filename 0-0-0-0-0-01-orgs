@@ -1,7 +1,4 @@
-def list_client_lists(session, base_url):
-    """
-    Lists all accessible client lists using /client-list/v1/lists
-    """
+def search_client_lists(session, base_url, keyword):
     url = urljoin(base_url, "/client-list/v1/lists?includeItems=true&includeDeprecated=true")
     headers = {"Accept": "application/json"}
     resp = session.get(url, headers=headers)
@@ -9,12 +6,17 @@ def list_client_lists(session, base_url):
     if not resp.ok:
         raise Exception(f"[ERROR] {resp.status_code}: {resp.text}")
 
-    print(f"[OK] Retrieved {len(resp.json().get('content', []))} client list blocks")
+    print(f"\n[INFO] Searching for client lists containing: '{keyword}'\n")
+    found = False
 
     for cl in resp.json().get("content", []):
-        list_items = cl.get("items", [])
-        print(f"\n[CLIENT LIST] Group: {cl.get('groupName')} | Created: {cl.get('createdDate')}")
-        for item in list_items:
-            print(f"  - {item.get('description')} (Status: {item.get('productionStatus')})")
+        name = cl.get("groupName", "")
+        items = cl.get("items", [])
+        for item in items:
+            description = item.get("description", "")
+            if keyword.lower() in name.lower() or keyword.lower() in description.lower():
+                found = True
+                print(f"[MATCH] {name} → {description} ({item.get('productionStatus')})")
 
- list_client_lists(session, base_url)
+    if not found:
+        print("[INFO] No matches found.")
