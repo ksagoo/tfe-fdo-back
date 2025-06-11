@@ -1,3 +1,18 @@
+def remove_existing_bypass_lists(website_target):
+    """
+    Removes all bypassNetworkLists entries from the given website target.
+    """
+    if "bypassNetworkLists" in website_target:
+        original_count = len(website_target["bypassNetworkLists"])
+        website_target["bypassNetworkLists"] = []
+        print(f"[INFO] Removed {original_count} existing bypass network list(s)")
+    else:
+        print("[INFO] No bypassNetworkLists present to remove.")
+
+
+# Remove existing bypass network lists (Phase 1 cleanup)
+remove_existing_bypass_lists(website_target)
+
 def find_appsec_bypass_lists_by_name(session, base_url, config_id, version, substring):
     """
     Fetches all match targets, extracts unique bypass network lists where the name contains the given substring.
