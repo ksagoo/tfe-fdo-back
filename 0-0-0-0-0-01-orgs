@@ -1,3 +1,17 @@
+# Endpoint
+endpoint = f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/bypass-network-lists"
+url = urljoin(base_url, endpoint)
+
+# Request
+response = session.get(url)
+if response.ok:
+    data = response.json()
+    print("Bypass Network Lists attached:")
+    for nl_id in data.get("bypassNetworkList", []):
+        print(f"- {nl_id}")
+else:
+    print(f"Error: {response.status_code} - {response.text}")
+
 url = urljoin(base_url, "/network-list/v2/network-lists")
 
 # Send request
