@@ -1,3 +1,18 @@
+# Normalize both sides to ensure match
+normalized_current = current_policy.strip().lower()
+normalized_old = old_policy_id.strip().lower()
+
+print(f"[DEBUG] Comparing normalized: {normalized_current} == {normalized_old}")
+
+if normalized_current == normalized_old:
+    # Proceed with reassignment
+    target["securityPolicy"]["policyId"] = new_policy_id
+    put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
+    put_resp = session.put(urljoin(base_url, put_url), json=target)
+    put_resp.raise_for_status()
+    reassigned.append(target["targetId"])
+    print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
+
 def reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id):
     url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
     response = session.get(urljoin(base_url, url))
