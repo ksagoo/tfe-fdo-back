@@ -1,7 +1,6 @@
-def find_network_list_ids_by_name_substring(session, base_url, name_substring, return_first=False):
+def print_all_network_lists(session, base_url):
     """
-    Finds network lists whose name contains the given substring (case-insensitive).
-    Returns a list of dicts with 'name' and 'id', or just one if return_first=True.
+    Fetches and prints all available network lists with name and uniqueId, regardless of match.
     """
     list_url = urljoin(base_url, "/network-list/v2/network-lists")
     resp = session.get(list_url)
@@ -9,43 +8,22 @@ def find_network_list_ids_by_name_substring(session, base_url, name_substring, r
     if not resp.ok:
         raise Exception(f"Failed to list network lists: {resp.status_code} - {resp.text}")
 
-    matched = []
+    entries = resp.json().get("networkLists", [])
+    print(f"[INFO] Found {len(entries)} network list entries")
 
-    for entry in resp.json().get("networkLists", []):
+    for entry in entries:
         list_id = entry.get("id")
         if not list_id:
+            print("[WARN] Skipping list with missing 'id'")
             continue
 
-        # Fetch full details to get name + uniqueId
         detail_url = urljoin(base_url, f"/network-list/v2/network-lists/{list_id}")
         detail_resp = session.get(detail_url)
-        if not detail_resp.ok:
-            print(f"[WARN] Skipped list ID {list_id} (status {detail_resp.status_code})")
-            continue
 
-        data = detail_resp.json()
-        name = data.get("name", "")
-        unique_id = data.get("uniqueId")
-
-        if name_substring.lower() in name.lower():
-            print(f"[MATCH] Name: {name} → ID: {unique_id}")
-            matched.append({"name": name, "id": unique_id})
-            if return_first:
-                return matched[0]
-
-    if not matched:
-        print(f"[INFO] No network lists found matching '{name_substring}'")
-
-    return matched[0] if return_first and matched else matched
-
-
-
-
-lists = find_network_list_ids_by_name_substring(session, base_url, "VUL")
-for l in lists:
-    print(f"- {l['name']} → {l['id']}")
-
-nl = find_network_list_ids_by_name_substring(session, base_url, "SC-MyAppGroup", return_first=True)
-print(f"Selected: {nl['name']} → {nl['id']}")
-
-
+        if detail_resp.ok:
+            data = detail_resp.json()
+            name = data.get("name", "<no name>")
+            unique_id = data.get("uniqueId", "<no uniqueId>")
+            print(f"- {name} → {unique_id}")
+        else:
+            print(f"[ERROR] Failed to get details for list ID {list_id}: {detail_resp.status_code}")
