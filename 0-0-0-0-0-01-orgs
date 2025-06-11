@@ -1,29 +1,20 @@
-def find_client_list_by_name(session, base_url, name_substring, return_first=False):
+def list_client_lists(session, base_url):
     """
-    Finds AppSec Client Lists matching the given name substring (case-insensitive).
-    Returns full client list object(s) with 'name' and 'id'.
+    Lists all accessible client lists using /client-list/v1/lists
     """
-    url = urljoin(base_url, "/appsec/v1/client-lists")
-    resp = session.get(url)
+    url = urljoin(base_url, "/client-list/v1/lists?includeItems=true&includeDeprecated=true")
+    headers = {"Accept": "application/json"}
+    resp = session.get(url, headers=headers)
 
     if not resp.ok:
-        raise Exception(f"Failed to retrieve client lists: {resp.status_code} - {resp.text}")
+        raise Exception(f"[ERROR] {resp.status_code}: {resp.text}")
 
-    results = []
-    for cl in resp.json():
-        name = cl.get("name", "")
-        cl_id = cl.get("id")
-        if name_substring.lower() in name.lower():
-            print(f"[MATCH] {name} → ID: {cl_id}")
-            results.append({"name": name, "id": cl_id})
-            if return_first:
-                return results[0]
+    print(f"[OK] Retrieved {len(resp.json().get('content', []))} client list blocks")
 
-    if not results:
-        print(f"[INFO] No client lists matched '{name_substring}'")
-    return results[0] if return_first and results else results
+    for cl in resp.json().get("content", []):
+        list_items = cl.get("items", [])
+        print(f"\n[CLIENT LIST] Group: {cl.get('groupName')} | Created: {cl.get('createdDate')}")
+        for item in list_items:
+            print(f"  - {item.get('description')} (Status: {item.get('productionStatus')})")
 
- matches = find_client_list_by_name(session, base_url, "VUL", return_first=False)
-    print("\nMatched Client Lists:")
-    for cl in matches:
-        print(f"- {cl['name']} → {cl['id']}")
+ list_client_lists(session, base_url)
