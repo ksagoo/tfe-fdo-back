@@ -23,3 +23,7 @@ def find_client_list_by_name(session, base_url, name_substring, return_first=Fal
         print(f"[INFO] No client lists matched '{name_substring}'")
     return results[0] if return_first and results else results
 
+ matches = find_client_list_by_name(session, base_url, "VUL", return_first=False)
+    print("\nMatched Client Lists:")
+    for cl in matches:
+        print(f"- {cl['name']} → {cl['id']}")
