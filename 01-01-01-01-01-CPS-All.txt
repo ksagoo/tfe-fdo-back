@@ -1,136 +1,45 @@
-# Normalize both sides to ensure match
-normalized_current = current_policy.strip().lower()
-normalized_old = old_policy_id.strip().lower()
-
-print(f"[DEBUG] Comparing normalized: {normalized_current} == {normalized_old}")
-
-if normalized_current == normalized_old:
-    # Proceed with reassignment
-    target["securityPolicy"]["policyId"] = new_policy_id
-    put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
-    put_resp = session.put(urljoin(base_url, put_url), json=target)
-    put_resp.raise_for_status()
-    reassigned.append(target["targetId"])
-    print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
-
 def reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id):
     url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
     response = session.get(urljoin(base_url, url))
     response.raise_for_status()
     match_targets = response.json()
 
+    website_targets = match_targets.get("websiteTargets", [])
     print(f"[VALIDATE] New Config ID: {config_id}")
     print(f"[VALIDATE] Temp Policy ID: {old_policy_id}")
     print(f"[VALIDATE] New Policy ID: {new_policy_id}")
-    print(f"[VALIDATE] Matched Targets Returned: {json.dumps(match_targets, indent=2)}")
+    print(f"[VALIDATE] Matched Targets Returned: {json.dumps(website_targets, indent=2)}")
 
     reassigned = []
 
-    for target in match_targets:
+    for target in website_targets:
         print(f"[VALIDATE] Target Entry: {json.dumps(target, indent=2)}")
 
+        # Ensure target has a targetId
         if "targetId" not in target:
             print(f"[WARN] Skipping target without 'targetId': {json.dumps(target)}")
             continue
 
+        # Extract and normalize the securityPolicy
         security_policy = target.get("securityPolicy", None)
 
         if isinstance(security_policy, dict):
             current_policy = security_policy.get("policyId", "").strip()
         elif isinstance(security_policy, str):
             current_policy = security_policy.strip()
-            print(f"[WARN] securityPolicy is a string instead of dict: {security_policy}")
+            print(f"[WARN] securityPolicy is a string instead of a dict: {security_policy}")
         else:
             print(f"[WARN] Skipping target due to missing or invalid securityPolicy: {security_policy}")
             continue
 
-        print(f"[DEBUG] Comparing: {current_policy} == {old_policy_id.strip()}")
+        # Normalize both sides to ensure match
+        normalized_current = current_policy.lower()
+        normalized_old = old_policy_id.strip().lower()
 
-        if current_policy.lower() == old_policy_id.strip().lower():
-            target["securityPolicy"]["policyId"] = new_policy_id
-            put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
-            put_resp = session.put(urljoin(base_url, put_url), json=target)
-            put_resp.raise_for_status()
-            reassigned.append(target["targetId"])
-            print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
+        print(f"[DEBUG] Comparing normalized: {normalized_current} == {normalized_old}")
 
-    return reassigned
-
-
-
-
-
-for target in match_targets:
-		print(f"[VALIDATE] Target Entry: {json.dumps(target, indent=2)}")
-	
-		# Ensure target has a targetId
-		if "targetId" not in target:
-			print(f"[WARN] Skipping target without 'targetId': {json.dumps(target)}")
-			continue
-	
-		# Extract and normalize the securityPolicy
-		security_policy = target.get("securityPolicy", None)
-	
-		if isinstance(security_policy, dict):
-			current_policy = security_policy.get("policyId", "").strip()
-		elif isinstance(security_policy, str):
-			current_policy = security_policy.strip()
-			print(f"[WARN] securityPolicy is a string instead of a dict.")
-		else:
-			print(f"[WARN] Skipping target due to missing or invalid securityPolicy: {security_policy}")
-			continue
-	
-		print(f"[DEBUG] Comparing: {current_policy} == {old_policy_id.strip()}")
-	
-		# Match and reassign policyId
-		if current_policy == old_policy_id.strip():
-			target["securityPolicy"]["policyId"] = new_policy_id
-			put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
-			put_resp = session.put(urljoin(base_url, put_url), json=target)
-			put_resp.raise_for_status()
-			reassigned.append(target["targetId"])
-			print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
-
-
-security_policy = target.get("securityPolicy")
-if isinstance(security_policy, dict):
-    current_policy = security_policy.get("policyId", "").strip()
-elif isinstance(security_policy, str):
-    current_policy = security_policy.strip()
-    print("[WARN] securityPolicy is a string instead of a dict.")
-else:
-    print("[WARN] Skipping target due to missing or invalid securityPolicy.")
-    continue
-
-
-
-
-def reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
-    response = session.get(urljoin(base_url, url))
-    response.raise_for_status()
-    match_targets = response.json()
-
-    print(f"[VALIDATE] New Config ID: {config_id}")
-    print(f"[VALIDATE] Temp Policy ID: {old_policy_id}")
-    print(f"[VALIDATE] New Policy ID: {new_policy_id}")
-    print(f"[VALIDATE] Matched Targets Returned: {json.dumps(match_targets, indent=2)}")
-
-    reassigned = []
-
-    for target in match_targets:
-        print(f"[VALIDATE] Target Entry: {json.dumps(target, indent=2)}")
-
-        security_policy = target.get("securityPolicy", {})
-        if isinstance(security_policy, dict):
-            current_policy = security_policy.get("policyId", "").strip()
-        else:
-            print("[WARN] Skipping target due to invalid securityPolicy format.")
-            continue
-
-        print(f"[DEBUG] Comparing: {current_policy} == {old_policy_id.strip()}")
-
-        if current_policy == old_policy_id.strip():
+        if normalized_current == normalized_old:
+            # Proceed with reassignment
             target["securityPolicy"]["policyId"] = new_policy_id
             put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
             put_resp = session.put(urljoin(base_url, put_url), json=target)
