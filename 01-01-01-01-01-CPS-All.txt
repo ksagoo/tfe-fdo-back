@@ -1,3 +1,4 @@
+matched_lists = find_network_list_ids_by_substring(session, base_url, "VUL")
 def find_network_list_ids_by_substring(session, base_url, substring):
     """
     Returns all network list IDs where the name contains the given substring.
