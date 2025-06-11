@@ -1,112 +1,26 @@
+# Normalize both sides to ensure match
+normalized_current = current_policy.lower()
+normalized_old = old_policy_id.strip().lower()
 
-def reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id, isProd, access_group, section, hostnames):
-    url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
-    response = session.get(urljoin(base_url, url))
-    response.raise_for_status()
-    match_targets = response.json()
+print(f"[DEBUG] Comparing normalized: {normalized_current} == {normalized_old}")
 
-    website_targets = match_targets.get("websiteTargets", [])
+if normalized_current == normalized_old:
+    # Patch security policy ID
+    target["securityPolicy"]["policyId"] = new_policy_id
 
-    print(f"[VALIDATE] New Config ID: {config_id}")
-    print(f"[VALIDATE] Temp Policy ID: {old_policy_id}")
-    print(f"[VALIDATE] New Policy ID: {new_policy_id}")
-    print(f"[VALIDATE] Website Targets Returned: {json.dumps(website_targets, indent=2)}")
-
-    reassigned = []
-
-    for target in website_targets:
-        print(f"[VALIDATE] Target Entry: {json.dumps(target, indent=2)}")
-
-        if "targetId" not in target:
-            print(f"[WARN] Skipping target without 'targetId': {json.dumps(target)}")
-            continue
-
-        # Normalize and extract policy ID
-        security_policy = target.get("securityPolicy", None)
-        if isinstance(security_policy, dict):
-            current_policy = security_policy.get("policyId", "").strip()
-        elif isinstance(security_policy, str):
-            current_policy = security_policy.strip()
-            print(f"[WARN] securityPolicy is a string instead of a dict: {security_policy}")
+    # Patch hostnames safely
+    if hostnames:
+        if "filePaths" in target and isinstance(target["filePaths"], list) and target["filePaths"]:
+            target["filePaths"][0]["hostnames"] = hostnames
+            print(f"[INFO] Updated hostnames to: {hostnames}")
         else:
-            print(f"[WARN] Skipping target due to missing or invalid securityPolicy: {security_policy}")
-            continue
+            print("[WARN] Skipping hostname update — filePaths invalid")
 
-        normalized_current = current_policy.lower()
-        normalized_old = old_policy_id.strip().lower()
+    put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
+    print(f"[DEBUG] PUT URL: {put_url}")
+    print(f"[DEBUG] Final Payload:\n{json.dumps(target, indent=2)}")
 
-        print(f"[DEBUG] Comparing normalized: {normalized_current} == {normalized_old}")
-
-        if normalized_current == normalized_old:
-            # Reassign policy ID
-            target["securityPolicy"]["policyId"] = new_policy_id
-
-            # Update hostnames
-            if hostnames:
-                target["hostnames"] = hostnames
-                print(f"[INFO] Updated hostnames to: {hostnames}")
-
-            # Update bypass network lists
-            if "bypassNetworkLists" in target:
-                target["bypassNetworkLists"] = update_bypass_network_lists(
-                    target["bypassNetworkLists"],
-                    is_prod=isProd,
-                    access_group=access_group,
-                    account_name=section
-                )
-
-            # PUT updated match target
-            put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
-            put_resp = session.put(urljoin(base_url, put_url), json=target)
-            put_resp.raise_for_status()
-
-            reassigned.append(target["targetId"])
-            print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
-
-    return reassigned
-
-
-
-
-def update_bypass_network_lists(bypass_lists, is_prod, access_group, account_name):
-    updated_lists = []
-
-    config_specific_list = f"SC-{access_group}"
-    template_list_name = "Security Policy Template Security Bypass List"
-    preprod_list_name = "VUL-SCAN-PRE-PROD"
-
-    # Special-case casing: keep 'Global' as-is for prod
-    if account_name == "Global":
-        account_specific_list = "VUL-SCAN-Global"
-    else:
-        account_specific_list = f"VUL-SCAN-{account_name.upper()}"
-
-    for entry in bypass_lists:
-        name = entry.get("name", "")
-
-        # Remove template list
-        if name == template_list_name:
-            continue
-
-        if not is_prod and name == preprod_list_name:
-            updated_lists.append(entry)
-
-        if is_prod and name == account_specific_list:
-            updated_lists.append(entry)
-
-    # Always append config-specific list
-    updated_lists.append({
-        "name": config_specific_list,
-        "type": "IP",
-        "listType": "CL"
-    })
-
-    # Ensure prod always includes scan list
-    if is_prod and not any(e.get("name") == account_specific_list for e in updated_lists):
-        updated_lists.append({
-            "name": account_specific_list,
-            "type": "IP",
-            "listType": "CL"
-        })
-
-    return updated_lists
+    put_resp = session.put(urljoin(base_url, put_url), json=target)
+    put_resp.raise_for_status()
+    reassigned.append(target["targetId"])
+    print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
