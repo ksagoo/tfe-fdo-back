@@ -1,3 +1,6 @@
+url = urljoin(base_url, "/network-list/v2/network-lists")
+
+# Send request
 response = session.get(url)
 
 # Output
@@ -7,14 +10,6 @@ if response.ok:
         print(f"- ID: {nl['uniqueId']}, Name: {nl['name']}, Type: {nl['type']}, Shared: {nl.get('shared', False)}")
 else:
     print(f"Error: {response.status_code} - {response.text}")
-
-
-config_id = "12345"
-version = "1"
-endpoint = f"/appsec/v1/configs/{config_id}/versions/{version}/bypass-network-lists"
-
-# Full URL
-url = urljoin(base_url, endpoint)
 
 # GET request
 response = session.get(url)
