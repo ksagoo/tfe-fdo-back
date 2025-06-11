@@ -15,7 +15,7 @@ def find_network_list_ids_by_substring(session, base_url, substring):
 
     for entry in resp.json().get("networkLists", []):
         # Fetch full details to get name and uniqueId
-        detail_url = urljoin(base_url, f"/network-list/v2/network-lists/{entry['listId']}")
+        detail_url = urljoin(base_url, f"/network-list/v2/network-lists/{entry['id']}")
         detail_resp = session.get(detail_url)
         if detail_resp.ok:
             data = detail_resp.json()
