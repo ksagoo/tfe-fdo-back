@@ -1,5 +1,8 @@
 url = "https://hostname/network-list/v2/network-lists?search=PRE-PROD"
 
+
+/appsec/v1/configs/$ConfigID/versions/$VersionNumber/bypass-network-lists
+
 headers = {"accept": "application/json"}
 
 response = requests.get(url, headers=headers)
