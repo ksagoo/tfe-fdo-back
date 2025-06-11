@@ -1,69 +1,35 @@
-def reassign_match_targets(session, config_id, version, temp_policy_id, new_policy_id, access_group, isProd, section):
-    try:
-        url = f"https://{session.host}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
-        response = session.get(url)
-        response.raise_for_status()
-        all_targets = response.json().get("matchTargets", [])
+def find_network_list_ids_by_substring(session, base_url, substring):
+    """
+    Returns all network list IDs where the name contains the given substring.
+    Prints each match for debugging.
+    """
+    from urllib.parse import urljoin
 
-        updated_targets = []
+    url = urljoin(base_url, "/network-list/v2/network-lists")
+    resp = session.get(url)
+    if not resp.ok:
+        raise Exception(f"Failed to list network lists: {resp.status_code} - {resp.text}")
 
-        for target in all_targets:
-            current_policy_id = target.get("securityPolicy", {}).get("policyId", "")
-            if current_policy_id != temp_policy_id:
-                continue
+    matched_lists = []
 
-            #  Reassign policy ID
-            target["securityPolicy"]["policyId"] = new_policy_id
-
-            # Update hostnames if needed (if overrideHostnames exists)
-            if "hostnames" in target:
-                print(f"Updating hostnames for match target ID {target.get('targetId')}")
-
-            #  Update bypassNetworkLists
-            updated_bypass = []
-            for bypass in target.get("bypassNetworkLists", []):
-                name = bypass.get("name", "")
-                if name == "Security Policy Template Security Bypass List":
-                    continue  # remove template default
-                if isProd:
-                    if name == "VUL-SCAN-PRE-PROD":
-                        continue  # remove from prod
-                else:
-                    if name != "VUL-SCAN-PRE-PROD":
-                        continue  # keep only VUL-SCAN-PRE-PROD for non-prod
-                    updated_bypass.append(bypass)
-
-            #  Add SC-<AccessGroup> list
-            updated_bypass.append({"name": f"SC-{access_group}", "type": "NETWORK_LIST"})
-            
-            #  Add VUL-SCAN-<account> for Prod
-            if isProd:
-                account = section if section != "Global" else "Global"
-                updated_bypass.append({"name": f"VUL-SCAN-{account}", "type": "NETWORK_LIST"})
-
-            target["bypassNetworkLists"] = updated_bypass
-            updated_targets.append(target)
-
-        if not updated_targets:
-            print("No match targets matched the TEMP policy for reassignment.")
-            return
-
-        # PUT updated targets back
-        payload = {"matchTargets": updated_targets}
-        put_response = session.put(url, json=payload)
-        put_response.raise_for_status()
-        print(f"Successfully updated {len(updated_targets)} match target(s).")
-    except Exception as e:
-        print(f"[ERROR] Failed to reassign match targets: {e}")
-
-
-def delete_policy(session, config_id, version, policy_id):
-    try:
-        url = f"https://{session.host}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}"
-        response = session.delete(url)
-        if response.status_code == 204:
-            print(f"Successfully deleted TEMP policy {policy_id}")
+    for entry in resp.json().get("networkLists", []):
+        # Fetch full details to get name and uniqueId
+        detail_url = urljoin(base_url, f"/network-list/v2/network-lists/{entry['listId']}")
+        detail_resp = session.get(detail_url)
+        if detail_resp.ok:
+            data = detail_resp.json()
+            name = data.get("name", "")
+            unique_id = data.get("uniqueId")
+            if substring.lower() in name.lower():  # case-insensitive contains
+                print(f"[MATCH] Name: {name}, ID: {unique_id}")
+                matched_lists.append({
+                    "name": name,
+                    "id": unique_id
+                })
         else:
-            print(f"[WARN] Could not delete TEMP policy {policy_id}, status: {response.status_code}, body: {response.text}")
-    except Exception as e:
-        print(f"[ERROR] Failed to delete TEMP policy {policy_id}: {e}")
+            print(f"[WARN] Could not fetch details for listId: {entry['listId']}")
+
+    if not matched_lists:
+        print(f"[INFO] No network lists found containing: '{substring}'")
+
+    return matched_lists
