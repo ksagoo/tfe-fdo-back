@@ -1,4 +1,16 @@
+config_id = "12345"
+version = "1"
+endpoint = f"/appsec/v1/configs/{config_id}/versions/{version}/bypass-network-lists"
+
+# Full URL
+url = urljoin(base_url, endpoint)
+
+# GET request
+response = session.get(url)
+
 url = "https://hostname/network-list/v2/network-lists?search=PRE-PROD"
+
+https://techdocs.akamai.com/network-lists/reference/get-network-lists
 
 
 /appsec/v1/configs/$ConfigID/versions/$VersionNumber/bypass-network-lists
