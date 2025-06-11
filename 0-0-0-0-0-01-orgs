@@ -1,128 +1,51 @@
-# Endpoint
-endpoint = f"/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/bypass-network-lists"
-url = urljoin(base_url, endpoint)
+def find_network_list_ids_by_name_substring(session, base_url, name_substring, return_first=False):
+    """
+    Finds network lists whose name contains the given substring (case-insensitive).
+    Returns a list of dicts with 'name' and 'id', or just one if return_first=True.
+    """
+    list_url = urljoin(base_url, "/network-list/v2/network-lists")
+    resp = session.get(list_url)
 
-# Request
-response = session.get(url)
-if response.ok:
-    data = response.json()
-    print("Bypass Network Lists attached:")
-    for nl_id in data.get("bypassNetworkList", []):
-        print(f"- {nl_id}")
-else:
-    print(f"Error: {response.status_code} - {response.text}")
+    if not resp.ok:
+        raise Exception(f"Failed to list network lists: {resp.status_code} - {resp.text}")
 
-url = urljoin(base_url, "/network-list/v2/network-lists")
+    matched = []
 
-# Send request
-response = session.get(url)
-
-# Output
-if response.ok:
-    lists = response.json()
-    for nl in lists.get("networkLists", []):
-        print(f"- ID: {nl['uniqueId']}, Name: {nl['name']}, Type: {nl['type']}, Shared: {nl.get('shared', False)}")
-else:
-    print(f"Error: {response.status_code} - {response.text}")
-
-# GET request
-response = session.get(url)
-
-url = "https://hostname/network-list/v2/network-lists?search=PRE-PROD"
-
-https://techdocs.akamai.com/network-lists/reference/get-network-lists
-
-
-/appsec/v1/configs/$ConfigID/versions/$VersionNumber/bypass-network-lists
-
-headers = {"accept": "application/json"}
-
-response = requests.get(url, headers=headers)
-
-print(response.text)
-
-def reassign_match_targets_and_update_hostnames(session, base_url,config_id, version, temp_policy_id, new_policy_id, fqdn_list, is_prod, account, access_group):
-    print("Fetching match targets for reassignment...")
-    match_targets_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
-    response = session.get(match_targets_url)
-    response.raise_for_status()
-    match_targets = response.json().get("matchTargets", [])
-
-    reassigned = []
-    updated_targets = []
-
-    for match_target in match_targets:
-        if match_target.get("type") != "website":
+    for entry in resp.json().get("networkLists", []):
+        list_id = entry.get("id")
+        if not list_id:
             continue
 
-        changed = False
-        for website_target in match_target.get("websiteTargets", []):
-            policy_id = website_target.get("securityPolicy", {}).get("policyId", "")
-            if policy_id.lower() == temp_policy_id.lower():
-                print(f"Updating matchTarget {match_target['targetId']}")
-                # Update policy ID
-                website_target["securityPolicy"]["policyId"] = new_policy_id
-                # Update hostnames
-                website_target["hostnames"] = fqdn_list
-                # Update bypass lists
-                website_target["bypassNetworkLists"] = build_bypass_list(
-                    session=session,
-                    base_url=base_url,
-                    config_id=config_id,
-                    account=account,
-                    access_group=access_group,
-                    is_prod=is_prod
-                )
-                changed = True
-
-        if changed:
-            target_id = match_target["targetId"]
-            update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target_id}"
-            print(f"Updating match target {target_id} via: {update_url}")
-            print("Payload:", json.dumps(match_target, indent=2))
-            put_response = session.put(update_url, json=match_target)
-            put_response.raise_for_status()
-            reassigned.append(target_id)
-            updated_targets.append(match_target)
-
-    print(f"Reassigned match targets: {reassigned}")
-    return reassigned
-
-
-def build_bypass_list(session, base_url, config_id, account, access_group, is_prod):
-    print("Building bypass list...")
-    list_url = f"{base_url}/appsec/v1/network-lists"
-    response = session.get(list_url)
-    response.raise_for_status()
-    all_lists = response.json().get("networkLists", [])
-
-    bypass_ids = []
-
-    # Remove default Security Policy Template list
-    for net_list in all_lists:
-        name = net_list.get("name", "")
-        list_id = net_list.get("id")
-        if name == "Security Policy Template Security Bypass List":
-            print(f"🗑 Removing template bypass list: {name}")
+        # Fetch full details to get name + uniqueId
+        detail_url = urljoin(base_url, f"/network-list/v2/network-lists/{list_id}")
+        detail_resp = session.get(detail_url)
+        if not detail_resp.ok:
+            print(f"[WARN] Skipped list ID {list_id} (status {detail_resp.status_code})")
             continue
 
-        # For non-prod: keep VUL-SCAN-PRE-PROD
-        if not is_prod and name == "VUL-SCAN-PRE-PROD":
-            bypass_ids.append(list_id)
-            print(f"Keeping non-prod list: {name}")
+        data = detail_resp.json()
+        name = data.get("name", "")
+        unique_id = data.get("uniqueId")
 
-        # For prod: use VUL-SCAN-<account> (e.g. VUL-SCAN-APAC)
-        if is_prod:
-            target_list = "VUL-SCAN-APAC" if account.upper() == "DEV" else f"VUL-SCAN-{account}"
-            if name == target_list:
-                bypass_ids.append(list_id)
-                print(f"Using prod list: {name}")
+        if name_substring.lower() in name.lower():
+            print(f"[MATCH] Name: {name} → ID: {unique_id}")
+            matched.append({"name": name, "id": unique_id})
+            if return_first:
+                return matched[0]
 
-        # Add SC-specific list
-        expected_sc_name = f"SC-{access_group}"
-        if name == expected_sc_name:
-            bypass_ids.append(list_id)
-            print(f"Adding SC-specific list: {name}")
+    if not matched:
+        print(f"[INFO] No network lists found matching '{name_substring}'")
 
-    print(f"Final bypass list IDs: {bypass_ids}")
-    return bypass_ids
+    return matched[0] if return_first and matched else matched
+
+
+
+
+lists = find_network_list_ids_by_name_substring(session, base_url, "VUL")
+for l in lists:
+    print(f"- {l['name']} → {l['id']}")
+
+nl = find_network_list_ids_by_name_substring(session, base_url, "SC-MyAppGroup", return_first=True)
+print(f"Selected: {nl['name']} → {nl['id']}")
+
+
