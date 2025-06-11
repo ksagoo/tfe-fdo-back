@@ -1,3 +1,16 @@
+security_policy = target.get("securityPolicy")
+if isinstance(security_policy, dict):
+    current_policy = security_policy.get("policyId", "").strip()
+elif isinstance(security_policy, str):
+    current_policy = security_policy.strip()
+    print("[WARN] securityPolicy is a string instead of a dict.")
+else:
+    print("[WARN] Skipping target due to missing or invalid securityPolicy.")
+    continue
+
+
+
+
 def reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id):
     url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
     response = session.get(urljoin(base_url, url))
