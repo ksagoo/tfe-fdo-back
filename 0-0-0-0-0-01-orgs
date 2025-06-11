@@ -1,26 +1,53 @@
-def find_network_list_ids_by_name_substring_fast(session, base_url, name_substring, return_first=False):
+from urllib.parse import urljoin
+
+def find_network_list_ids_by_name_substring(session, base_url, name_substring, return_first=False):
     """
-    Searches all network lists (via /network-lists) using only top-level 'name' and 'uniqueId' fields.
-    Supports partial substring matching (case-insensitive).
+    Finds Akamai network lists whose name contains the given substring (case-insensitive).
+    Handles missing 'id' field by falling back to 'listId'.
+    Returns a list of dicts {name, id}, or the first match if return_first=True.
     """
-    url = urljoin(base_url, "/network-list/v2/network-lists")
-    resp = session.get(url)
+    list_url = urljoin(base_url, "/network-list/v2/network-lists")
+    resp = session.get(list_url)
 
     if not resp.ok:
-        raise Exception(f"Failed to list network lists: {resp.status_code} - {resp.text}")
+        raise Exception(f"[ERROR] Failed to list network lists: {resp.status_code} - {resp.text}")
+
+    entries = resp.json().get("networkLists", [])
+    print(f"[INFO] Total networkLists returned: {len(entries)}")
 
     matched = []
 
-    for nl in resp.json().get("networkLists", []):
-        name = nl.get("name", "")
-        unique_id = nl.get("uniqueId", "")
+    for entry in entries:
+        # Debug: show entire raw entry
+        print(f"[DEBUG] Raw entry: {entry}")
+
+        # Try id, then listId
+        list_id = entry.get("id") or entry.get("listId")
+        if not list_id:
+            print("[WARN] Skipping list — missing both 'id' and 'listId'")
+            continue
+
+        # Fetch full list detail to get name + uniqueId
+        detail_url = urljoin(base_url, f"/network-list/v2/network-lists/{list_id}")
+        detail_resp = session.get(detail_url)
+
+        if not detail_resp.ok:
+            print(f"[WARN] Could not fetch details for list ID {list_id}: {detail_resp.status_code}")
+            continue
+
+        data = detail_resp.json()
+        name = data.get("name", "")
+        unique_id = data.get("uniqueId", "")
+
+        print(f"[DEBUG] Fetched name: {name}, ID: {unique_id}")
+
         if name_substring.lower() in name.lower():
-            print(f"[MATCH] Name: {name} → ID: {unique_id}")
+            print(f"[MATCH] {name} → {unique_id}")
             matched.append({"name": name, "id": unique_id})
             if return_first:
                 return matched[0]
 
     if not matched:
-        print(f"[INFO] No network lists found containing: '{name_substring}'")
+        print(f"[INFO] No network lists found matching '{name_substring}'")
 
     return matched[0] if return_first and matched else matched
