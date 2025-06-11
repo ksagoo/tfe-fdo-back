@@ -1,33 +1,34 @@
-def find_network_list_ids_by_substring(session, base_url, substring):
+def find_appsec_bypass_lists_by_name(session, base_url, config_id, version, substring):
     """
-    Finds network lists where the name contains the given substring (case-insensitive).
-    Prints debug output. Returns list of {name, id}.
+    Fetches all match targets, extracts unique bypass network lists where the name contains the given substring.
+    Returns list of {name, id} entries suitable for use in match target updates.
     """
     from urllib.parse import urljoin
 
-    url = urljoin(base_url, "/network-list/v2/network-lists")
-    resp = session.get(url)
-    if not resp.ok:
-        raise Exception(f"Failed to list network lists: {resp.status_code} - {resp.text}")
+    # Get all match targets
+    mt_url = urljoin(base_url, f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets")
+    mt_resp = session.get(mt_url)
 
-    data = resp.json()
-    if "networkLists" not in data:
-        raise Exception("Expected 'networkLists' key in response, got: " + json.dumps(data))
+    if not mt_resp.ok:
+        raise Exception(f"Failed to fetch match targets: {mt_resp.status_code} - {mt_resp.text}")
 
+    seen_ids = set()
     matched_lists = []
 
-    for entry in data["networkLists"]:
-        # Each entry has: name, uniqueId
-        name = entry.get("name", "")
-        unique_id = entry.get("uniqueId")
-        if substring.lower() in name.lower():
-            print(f"[MATCH] Name: {name}, ID: {unique_id}")
-            matched_lists.append({
-                "name": name,
-                "id": unique_id
-            })
+    match_targets = mt_resp.json().get("matchTargets", [])
+    for mt in match_targets:
+        for bypass_list in mt.get("bypassNetworkLists", []):
+            name = bypass_list.get("name", "")
+            bid = bypass_list.get("id")
+            if bid not in seen_ids and substring.lower() in name.lower():
+                seen_ids.add(bid)
+                print(f"[MATCH] Name: {name}, ID: {bid}")
+                matched_lists.append({
+                    "name": name,
+                    "id": bid
+                })
 
     if not matched_lists:
-        print(f"[INFO] No network lists found containing: '{substring}'")
+        print(f"[INFO] No bypass lists found containing: '{substring}'")
 
     return matched_lists
