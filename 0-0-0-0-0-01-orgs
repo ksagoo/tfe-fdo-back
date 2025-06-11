@@ -1,3 +1,14 @@
+response = session.get(url)
+
+# Output
+if response.ok:
+    lists = response.json()
+    for nl in lists.get("networkLists", []):
+        print(f"- ID: {nl['uniqueId']}, Name: {nl['name']}, Type: {nl['type']}, Shared: {nl.get('shared', False)}")
+else:
+    print(f"Error: {response.status_code} - {response.text}")
+
+
 config_id = "12345"
 version = "1"
 endpoint = f"/appsec/v1/configs/{config_id}/versions/{version}/bypass-network-lists"
