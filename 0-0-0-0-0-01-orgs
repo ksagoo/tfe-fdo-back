@@ -1,29 +1,25 @@
-from urllib.parse import urljoin
-
-def find_network_list_ids_by_name_substring_fast(session, base_url, name_substring, return_first=False):
+def find_client_list_by_name(session, base_url, name_substring, return_first=False):
     """
-    Quickly finds network lists whose name contains the given substring (case-insensitive).
-    Only uses the top-level list metadata (no detail lookups).
-    Returns a list of {name, id} dicts or just one match if return_first=True.
+    Finds AppSec Client Lists matching the given name substring (case-insensitive).
+    Returns full client list object(s) with 'name' and 'id'.
     """
-    url = urljoin(base_url, "/network-list/v2/network-lists")
+    url = urljoin(base_url, "/appsec/v1/client-lists")
     resp = session.get(url)
 
     if not resp.ok:
-        raise Exception(f"Failed to list network lists: {resp.status_code} - {resp.text}")
+        raise Exception(f"Failed to retrieve client lists: {resp.status_code} - {resp.text}")
 
-    matched = []
-
-    for nl in resp.json().get("networkLists", []):
-        name = nl.get("name", "")
-        unique_id = nl.get("uniqueId", "")
+    results = []
+    for cl in resp.json():
+        name = cl.get("name", "")
+        cl_id = cl.get("id")
         if name_substring.lower() in name.lower():
-            print(f"[MATCH] Name: {name} → ID: {unique_id}")
-            matched.append({"name": name, "id": unique_id})
+            print(f"[MATCH] {name} → ID: {cl_id}")
+            results.append({"name": name, "id": cl_id})
             if return_first:
-                return matched[0]
+                return results[0]
 
-    if not matched:
-        print(f"[INFO] No network lists found containing: '{name_substring}'")
+    if not results:
+        print(f"[INFO] No client lists matched '{name_substring}'")
+    return results[0] if return_first and results else results
 
-    return matched[0] if return_first and matched else matched
