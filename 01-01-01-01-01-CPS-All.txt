@@ -1,8 +1,7 @@
-matched_lists = find_network_list_ids_by_substring(session, base_url, "VUL")
 def find_network_list_ids_by_substring(session, base_url, substring):
     """
-    Returns all network list IDs where the name contains the given substring.
-    Prints each match for debugging.
+    Finds network lists where the name contains the given substring (case-insensitive).
+    Prints debug output. Returns list of {name, id}.
     """
     from urllib.parse import urljoin
 
@@ -11,24 +10,22 @@ def find_network_list_ids_by_substring(session, base_url, substring):
     if not resp.ok:
         raise Exception(f"Failed to list network lists: {resp.status_code} - {resp.text}")
 
+    data = resp.json()
+    if "networkLists" not in data:
+        raise Exception("Expected 'networkLists' key in response, got: " + json.dumps(data))
+
     matched_lists = []
 
-    for entry in resp.json().get("networkLists", []):
-        # Fetch full details to get name and uniqueId
-        detail_url = urljoin(base_url, f"/network-list/v2/network-lists/{entry['id']}")
-        detail_resp = session.get(detail_url)
-        if detail_resp.ok:
-            data = detail_resp.json()
-            name = data.get("name", "")
-            unique_id = data.get("uniqueId")
-            if substring.lower() in name.lower():  # case-insensitive contains
-                print(f"[MATCH] Name: {name}, ID: {unique_id}")
-                matched_lists.append({
-                    "name": name,
-                    "id": unique_id
-                })
-        else:
-            print(f"[WARN] Could not fetch details for listId: {entry['listId']}")
+    for entry in data["networkLists"]:
+        # Each entry has: name, uniqueId
+        name = entry.get("name", "")
+        unique_id = entry.get("uniqueId")
+        if substring.lower() in name.lower():
+            print(f"[MATCH] Name: {name}, ID: {unique_id}")
+            matched_lists.append({
+                "name": name,
+                "id": unique_id
+            })
 
     if not matched_lists:
         print(f"[INFO] No network lists found containing: '{substring}'")
