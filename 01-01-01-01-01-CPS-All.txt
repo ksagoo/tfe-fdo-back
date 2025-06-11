@@ -1,3 +1,35 @@
+	for target in match_targets:
+		print(f"[VALIDATE] Target Entry: {json.dumps(target, indent=2)}")
+	
+		# Ensure target has a targetId
+		if "targetId" not in target:
+			print(f"[WARN] Skipping target without 'targetId': {json.dumps(target)}")
+			continue
+	
+		# Extract and normalize the securityPolicy
+		security_policy = target.get("securityPolicy", None)
+	
+		if isinstance(security_policy, dict):
+			current_policy = security_policy.get("policyId", "").strip()
+		elif isinstance(security_policy, str):
+			current_policy = security_policy.strip()
+			print(f"[WARN] securityPolicy is a string instead of a dict.")
+		else:
+			print(f"[WARN] Skipping target due to missing or invalid securityPolicy: {security_policy}")
+			continue
+	
+		print(f"[DEBUG] Comparing: {current_policy} == {old_policy_id.strip()}")
+	
+		# Match and reassign policyId
+		if current_policy == old_policy_id.strip():
+			target["securityPolicy"]["policyId"] = new_policy_id
+			put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
+			put_resp = session.put(urljoin(base_url, put_url), json=target)
+			put_resp.raise_for_status()
+			reassigned.append(target["targetId"])
+			print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
+
+
 security_policy = target.get("securityPolicy")
 if isinstance(security_policy, dict):
     current_policy = security_policy.get("policyId", "").strip()
