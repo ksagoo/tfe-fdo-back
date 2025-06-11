@@ -1,3 +1,8 @@
+target["hostnames"] = fqdn_list
+target["securityPolicy"]["policyId"] = new_policy_id
+remove_existing_bypass_lists(target)
+
+
 def remove_existing_bypass_lists(website_target):
     """
     Removes all bypassNetworkLists entries from the given website target.
