@@ -1,3 +1,11 @@
+url = "https://hostname/network-list/v2/network-lists?search=PRE-PROD"
+
+headers = {"accept": "application/json"}
+
+response = requests.get(url, headers=headers)
+
+print(response.text)
+
 def reassign_match_targets_and_update_hostnames(session, base_url,config_id, version, temp_policy_id, new_policy_id, fqdn_list, is_prod, account, access_group):
     print("Fetching match targets for reassignment...")
     match_targets_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
