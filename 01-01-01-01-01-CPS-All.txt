@@ -1,26 +1,69 @@
-# Normalize both sides to ensure match
-normalized_current = current_policy.lower()
-normalized_old = old_policy_id.strip().lower()
+def reassign_match_targets(session, config_id, version, temp_policy_id, new_policy_id, access_group, isProd, section):
+    try:
+        url = f"https://{session.host}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
+        response = session.get(url)
+        response.raise_for_status()
+        all_targets = response.json().get("matchTargets", [])
 
-print(f"[DEBUG] Comparing normalized: {normalized_current} == {normalized_old}")
+        updated_targets = []
 
-if normalized_current == normalized_old:
-    # Patch security policy ID
-    target["securityPolicy"]["policyId"] = new_policy_id
+        for target in all_targets:
+            current_policy_id = target.get("securityPolicy", {}).get("policyId", "")
+            if current_policy_id != temp_policy_id:
+                continue
 
-    # Patch hostnames safely
-    if hostnames:
-        if "filePaths" in target and isinstance(target["filePaths"], list) and target["filePaths"]:
-            target["filePaths"][0]["hostnames"] = hostnames
-            print(f"[INFO] Updated hostnames to: {hostnames}")
+            #  Reassign policy ID
+            target["securityPolicy"]["policyId"] = new_policy_id
+
+            # Update hostnames if needed (if overrideHostnames exists)
+            if "hostnames" in target:
+                print(f"Updating hostnames for match target ID {target.get('targetId')}")
+
+            #  Update bypassNetworkLists
+            updated_bypass = []
+            for bypass in target.get("bypassNetworkLists", []):
+                name = bypass.get("name", "")
+                if name == "Security Policy Template Security Bypass List":
+                    continue  # remove template default
+                if isProd:
+                    if name == "VUL-SCAN-PRE-PROD":
+                        continue  # remove from prod
+                else:
+                    if name != "VUL-SCAN-PRE-PROD":
+                        continue  # keep only VUL-SCAN-PRE-PROD for non-prod
+                    updated_bypass.append(bypass)
+
+            #  Add SC-<AccessGroup> list
+            updated_bypass.append({"name": f"SC-{access_group}", "type": "NETWORK_LIST"})
+            
+            #  Add VUL-SCAN-<account> for Prod
+            if isProd:
+                account = section if section != "Global" else "Global"
+                updated_bypass.append({"name": f"VUL-SCAN-{account}", "type": "NETWORK_LIST"})
+
+            target["bypassNetworkLists"] = updated_bypass
+            updated_targets.append(target)
+
+        if not updated_targets:
+            print("No match targets matched the TEMP policy for reassignment.")
+            return
+
+        # PUT updated targets back
+        payload = {"matchTargets": updated_targets}
+        put_response = session.put(url, json=payload)
+        put_response.raise_for_status()
+        print(f"Successfully updated {len(updated_targets)} match target(s).")
+    except Exception as e:
+        print(f"[ERROR] Failed to reassign match targets: {e}")
+
+
+def delete_policy(session, config_id, version, policy_id):
+    try:
+        url = f"https://{session.host}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}"
+        response = session.delete(url)
+        if response.status_code == 204:
+            print(f"Successfully deleted TEMP policy {policy_id}")
         else:
-            print("[WARN] Skipping hostname update — filePaths invalid")
-
-    put_url = f"/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target['targetId']}"
-    print(f"[DEBUG] PUT URL: {put_url}")
-    print(f"[DEBUG] Final Payload:\n{json.dumps(target, indent=2)}")
-
-    put_resp = session.put(urljoin(base_url, put_url), json=target)
-    put_resp.raise_for_status()
-    reassigned.append(target["targetId"])
-    print(f"[VALIDATE] Reassigned Target: {target['targetId']}")
+            print(f"[WARN] Could not delete TEMP policy {policy_id}, status: {response.status_code}, body: {response.text}")
+    except Exception as e:
+        print(f"[ERROR] Failed to delete TEMP policy {policy_id}: {e}")
