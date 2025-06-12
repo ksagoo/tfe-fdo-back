@@ -1,3 +1,5 @@
+GET /appsec/v1/configs/116444/versions/1/security-policies/TEMP_302736/client-lists
+
 def reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id):
     summary = {
         "processed": 0,
