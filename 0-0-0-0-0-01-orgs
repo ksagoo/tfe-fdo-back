@@ -1,6 +1,5 @@
 def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section):
-    target_prefix = f"SC-{access_group}"
-    expected_bypass_name = f"{target_prefix} Security Bypass List"
+    prefix = f"SC-{access_group}"
     summary = {
         "processed": 0,
         "successful": 0,
@@ -8,27 +7,27 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         "details": []
     }
 
-    print(f"[DEBUG] Looking for existing: {expected_bypass_name}")
-    client_list_url = f"{base_url}/client-list/v3/lists?includeItems=true&includeDeprecated=true"
-    response = session.get(client_list_url)
+    print(f"[INFO] Fetching all client lists from control center...")
+    url = f"{base_url}/client-list/v3/lists?includeItems=true&includeDeprecated=true"
+    response = session.get(url)
     response.raise_for_status()
-    all_lists = response.json()
+    all_client_lists = response.json()
 
-    already_exists = any(cl["name"] == expected_bypass_name for cl in all_lists)
-
-    if already_exists:
-        print(f"[INFO] List '{expected_bypass_name}' already exists. Skipping clone.")
-        return summary
-
-    print(f"[INFO] '{expected_bypass_name}' not found. Cloning Security Policy Template lists...")
-
-    # Filter only the template lists to clone
-    template_lists = [cl for cl in all_lists if "Security Policy Template" in cl.get("name", "")]
+    print(f"[INFO] Searching for client lists containing 'Security Policy Template'")
+    template_lists = [cl for cl in all_client_lists if "Security Policy Template" in cl.get("name", "")]
 
     for cl in template_lists:
         original_name = cl.get("name", "")
         suffix = original_name.replace("Security Policy Template", "").strip()
-        new_name = f"{target_prefix} {suffix}".strip()
+        new_name = f"{prefix} {suffix}".strip()
+
+        # Check if list with new_name already exists
+        existing = [ecl for ecl in all_client_lists if ecl["name"] == new_name]
+        if existing:
+            print(f"[INFO] Skipping existing list: {new_name} (listId={existing[0]['listId']})")
+            continue
+
+        print(f"[DEBUG] Cloning list '{original_name}' => '{new_name}'")
 
         payload = {
             "name": new_name,
@@ -40,21 +39,26 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             "items": cl.get("items", [])
         }
 
-        summary["processed"] += 1
+        if section:
+            payload["section"] = section
+
         try:
-            clone_url = f"{base_url}/client-list/v3/lists"
-            res = session.post(clone_url, json=payload)
-            res.raise_for_status()
-            new_id = res.json().get("id")
-            print(f"[SUCCESS] Cloned '{original_name}' -> '{new_name}' (ID: {new_id})")
+            create_url = f"{base_url}/client-list/v3/lists"
+            create_response = session.post(create_url, json=payload)
+            create_response.raise_for_status()
+            created_id = create_response.json().get("listId")
+
+            print(f"[SUCCESS] Created: {new_name} (ID: {created_id})")
+            summary["processed"] += 1
             summary["successful"] += 1
             summary["details"].append({
-                "id": new_id,
+                "id": created_id,
                 "name": new_name,
                 "status": "success"
             })
         except Exception as e:
-            print(f"[ERROR] Failed to clone '{original_name}' as '{new_name}' -> {e}")
+            print(f"[ERROR] Failed to clone '{original_name}' as '{new_name}': {e}")
+            summary["processed"] += 1
             summary["failed"] += 1
             summary["details"].append({
                 "id": None,
