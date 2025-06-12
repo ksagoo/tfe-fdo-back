@@ -1,5 +1,3 @@
-GET /appsec/v1/configs/116444/versions/1/security-policies/TEMP_302736/client-lists
-
 def reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id):
     summary = {
         "processed": 0,
@@ -8,6 +6,7 @@ def reassign_client_lists(session, base_url, config_id, version, old_policy_id, 
         "details": []
     }
 
+    # GET all client list activations at config level
     url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/client-list-activations"
     print(f"[DEBUG] Fetching all client list activations for version: {url}")
 
@@ -16,44 +15,57 @@ def reassign_client_lists(session, base_url, config_id, version, old_policy_id, 
         response.raise_for_status()
         all_client_lists = response.json().get("clientLists", [])
     except Exception as e:
-        print(f"[ERROR] Failed to fetch client lists: {e}")
+        print(f"[ERROR] Failed to fetch client list activations: {e}")
         return summary
 
+    # Filter for client lists assigned to TEMP policy
     filtered_lists = [
         cl for cl in all_client_lists
         if cl.get("policyId") == old_policy_id
     ]
 
-    print(f"[DEBUG] Found {len(filtered_lists)} client lists assigned to TEMP policy: {old_policy_id}")
+    print(f"[DEBUG] Found {len(filtered_lists)} client lists assigned to TEMP policy ID: {old_policy_id}")
 
     if not filtered_lists:
         print("[INFO] No client lists to reassign.")
         return summary
 
-    reassignment_payload = {
-        "clientLists": [
-            {
-                "id": cl["id"],
-                "action": cl.get("action", "alert")
-            }
-            for cl in filtered_lists
-        ]
-    }
+    # Reassign each list
+    for cl in filtered_lists:
+        list_id = cl.get("id")
+        summary["processed"] += 1
 
-    summary["processed"] = len(reassignment_payload["clientLists"])
-    put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-lists"
-    print(f"[DEBUG] PUT to: {put_url}")
-    print(f"[DEBUG] Payload: {json.dumps(reassignment_payload, indent=2)}")
+        if not list_id:
+            print(f"[WARN] Client list with no ID: {cl}")
+            summary["failed"] += 1
+            summary["details"].append({
+                "id": "unknown",
+                "status": "failed",
+                "error": "Missing list ID"
+            })
+            continue
 
-    try:
-        put_response = session.put(put_url, json=reassignment_payload)
-        put_response.raise_for_status()
-        summary["successful"] = summary["processed"]
-        summary["details"] = [{"id": cl["id"], "status": "success"} for cl in reassignment_payload["clientLists"]]
-        print(f"[INFO] Successfully reassigned client lists.")
-    except Exception as e:
-        summary["failed"] = summary["processed"]
-        summary["details"].append({"status": "failed", "error": str(e)})
-        print(f"[ERROR] Failed to reassign client lists: {e}")
+        put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-list-activations/{list_id}"
+        payload = {
+            "policyId": new_policy_id
+        }
+
+        try:
+            put_response = session.put(put_url, json=payload)
+            put_response.raise_for_status()
+            summary["successful"] += 1
+            summary["details"].append({
+                "id": list_id,
+                "status": "success"
+            })
+            print(f"[INFO] Reassigned client list {list_id} to new policy.")
+        except Exception as e:
+            summary["failed"] += 1
+            summary["details"].append({
+                "id": list_id,
+                "status": "failed",
+                "error": str(e)
+            })
+            print(f"[ERROR] Failed to reassign client list {list_id}: {e}")
 
     return summary
