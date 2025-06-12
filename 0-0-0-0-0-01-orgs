@@ -1,68 +1,93 @@
-def reassign_client_lists(session, base_url, config_id, version, sc_name, new_policy_id):
-    summary = {
-        "processed": 0,
-        "successful": 0,
-        "failed": 0,
-        "details": []
-    }
+def search_client_lists_by_name(session, base_url, keyword):
+    url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
+    response = session.get(url)
+    if not response.ok:
+        raise Exception(f"[ERROR] {response.status_code}: {response.text}")
+    
+    client_lists = response.json().get("content", [])
+    keyword_lower = keyword.lower()
+    matches = []
 
-    # Step 1: Fetch all client lists globally
-    get_url = f"{base_url}/client-list/v1/lists"
-    print(f"[DEBUG] Fetching all client lists from: {get_url}")
-    try:
-        response = session.get(get_url)
-        response.raise_for_status()
-        client_lists = response.json().get("content", [])
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch client lists: {e}")
-        return summary
-
-    # Step 2: Filter only lists that belong to this config (by name prefix)
-    filtered_lists = []
     for cl in client_lists:
-        if cl.get("name", "").startswith(sc_name + " ") and "ASN Block List" not in cl.get("name", ""):
-            filtered_lists.append(cl)
+        list_id = cl.get("listId", "no id")
+        name = cl.get("name", "") or cl.get("groupName", "")
+        name_lower = name.lower()
+        if keyword_lower in name_lower:
+            matches.append((list_id, name))
 
-    print(f"[DEBUG] Found {len(filtered_lists)} client lists with prefix '{sc_name}'")
+    if not matches:
+        print(f"[WARN] No client list matches for '{keyword}'")
 
-    if not filtered_lists:
-        print("[INFO] No matching client lists to reassign.")
-        return summary
+    return matches
 
-    # Step 3: Build payload
-    reassignment_payload = {
-        "clientLists": [
-            {
-                "id": cl["listId"],
-                "action": cl.get("action", "alert")
-            }
-            for cl in filtered_lists
-        ]
-    }
 
-    summary["processed"] = len(reassignment_payload["clientLists"])
+def build_bypass_list_from_client_lists(session, base_url, access_group, account, is_prod):
+    print(f"[INFO] Building bypass list for access_group={access_group}, account={account}, is_prod={is_prod}")
+    bypass_list = []
+    matches = search_client_lists_by_name(session, base_url, "")  # all lists
 
-    put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-lists"
-    print(f"[DEBUG] Reassigning client lists to policy via: {put_url}")
-    print(f"[DEBUG] Payload:\n{json.dumps(reassignment_payload, indent=2)}")
+    def find_match(keyword):
+        for list_id, name in matches:
+            if keyword.lower() in name.lower():
+                return {"id": list_id, "name": name, "listType": "CL", "type": "IP"}
+        return None
 
-    # Step 4: Send PUT request
-    try:
-        response = session.put(put_url, json=reassignment_payload)
-        response.raise_for_status()
-        summary["successful"] = summary["processed"]
-        for cl in reassignment_payload["clientLists"]:
-            summary["details"].append({
-                "id": cl["id"],
-                "status": "success"
-            })
-        print(f"[INFO] Successfully reassigned {summary['successful']} client lists.")
-    except Exception as e:
-        summary["failed"] = summary["processed"]
-        summary["details"].append({
-            "status": "failed",
-            "error": str(e)
-        })
-        print(f"[ERROR] Failed to reassign client lists: {e}")
+    # Always add config-specific list
+    keyword = f"SC-{access_group}"
+    match = find_match(keyword)
+    if match:
+        bypass_list.append(match)
+    else:
+        print(f"[WARN] Client list not found: {keyword}")
 
-    return summary
+    # Conditional logic
+    if is_prod:
+        keyword = f"VUL-SCAN-{account if account != 'DEV' else 'APAC'}"
+    else:
+        keyword = "VUL-SCAN-PRE-PROD"
+
+    match = find_match(keyword)
+    if match:
+        bypass_list.append(match)
+    else:
+        print(f"[WARN] Client list not found: {keyword}")
+
+    # Always remove "Security Policy Template"
+    return [entry for entry in bypass_list if "Security Policy Template" not in entry["name"]]
+
+
+def clone_and_rename_client_lists(session, base_url, config_id, version, access_group):
+    print(f"[INFO] Cloning and renaming client lists from 'Security Policy Template' to 'SC-{access_group}'")
+    
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/client-lists"
+    response = session.get(url)
+    if not response.ok:
+        raise Exception(f"[ERROR] Failed to fetch client lists: {response.status_code}: {response.text}")
+    
+    original_lists = response.json().get("clientLists", [])
+    renamed_count = 0
+
+    for cl in original_lists:
+        name = cl.get("name", "")
+        if "Security Policy Template" not in name:
+            continue
+        
+        # Replace only the prefix
+        new_name = name.replace("Security Policy Template", f"SC-{access_group}")
+        payload = {
+            "name": new_name,
+            "description": cl.get("description", ""),
+            "type": cl.get("type", "IP"),
+            "list": cl.get("list", []),
+            "matchType": cl.get("matchType", "IP"),
+        }
+
+        clone_url = f"{base_url}/client-list/v1/lists"
+        clone_response = session.post(clone_url, json=payload)
+        if clone_response.ok:
+            print(f"[SUCCESS] Cloned list '{name}' as '{new_name}'")
+            renamed_count += 1
+        else:
+            print(f"[ERROR] Failed to clone list '{name}': {clone_response.status_code}: {clone_response.text}")
+
+    print(f"[INFO] Completed cloning {renamed_count} lists.")
