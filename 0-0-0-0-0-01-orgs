@@ -1,73 +1,34 @@
-def clone_and_rename_client_lists(session, base_url, config_id, version, access_group):
-    print("[INFO] Cloning and renaming client lists from Security Policy Template")
+def reassign_custom_rules(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules"
+    response = session.get(url)
+    response.raise_for_status()
+    rules = response.json().get("customRules", [])
 
-    summary = {
-        "processed": 0,
-        "successful": 0,
-        "failed": 0,
-        "details": []
-    }
+    result = { "processed": len(rules), "successful": 0, "failed": 0, "details": [] }
 
-    # Fetch all existing client lists (including deprecated and inactive)
-    url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
-    try:
-        response = session.get(url)
-        response.raise_for_status()
-        client_lists = response.json().get("content", [])
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch client lists: {e}")
-        return summary
+    for rule in rules:
+        if rule.get("policyId") != old_policy_id:
+            continue
 
-    for cl in client_lists:
+        rule_id = rule.get("id")
+        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules/{rule_id}"
+
+        # Rebuild payload with only allowed fields
+        payload = {
+            "name": rule.get("name"),
+            "description": rule.get("description", ""),
+            "tag": rule.get("tag", ""),
+            "condition": rule.get("condition", {}),
+            "ruleActions": rule.get("ruleActions", []),
+            "policyId": new_policy_id
+        }
+
         try:
-            name = cl.get("name", "")
-            staging_status = cl.get("stagingActivationStatus", "")
-            list_id = cl.get("listId", "")
-
-			if f"SC-{access_group}" in name:
-				continue
-			
-			if "Security Policy Template" not in name:
-                continue
-
-            if staging_status != "ACTIVE":
-                print(f"[WARN] Skipping list '{name}' - not ACTIVE in staging")
-                continue
-
-            # Build new name
-            new_name = name.replace("Security Policy Template", f"SC-{access_group}")
-            summary["processed"] += 1
-
-            payload = {
-                "name": new_name,
-                "type": cl.get("type", "IP"),
-                "description": f"Cloned from template list {name}",
-                "list": cl.get("list", []),
-                "notes": cl.get("notes", ""),
-                "tags": cl.get("tags", []),
-                "matchOperator": cl.get("matchOperator", "ANY")
-            }
-
-            clone_url = f"{base_url}/client-list/v1/lists"
-            response = session.post(clone_url, json=payload)
-            response.raise_for_status()
-
-            print(f"[INFO] Successfully cloned list '{name}' : '{new_name}'")
-            summary["successful"] += 1
-            summary["details"].append({
-                "id": list_id,
-                "name": new_name,
-                "status": "success"
-            })
-
+            session.put(update_url, json=payload)
+            result["successful"] += 1
+            result["details"].append({ "id": rule_id, "name": rule.get("name"), "status": "success" })
         except Exception as e:
-            print(f"[ERROR] Failed to clone list '{name}': {e}")
-            summary["failed"] += 1
-            summary["details"].append({
-                "id": cl.get("listId", "unknown"),
-                "name": name,
-                "status": "failed",
-                "error": str(e)
-            })
+            result["failed"] += 1
+            result["details"].append({ "id": rule_id, "name": rule.get("name"), "status": "failed", "error": str(e) })
 
-    return summary
+    return result
