@@ -1,3 +1,18 @@
+clone_and_rename_client_lists(session, base_url, config_id, version, access_group)
+
+def run_all(...):
+    ...
+
+    # [1] Clone config and policy
+    config_id, version, temp_policy_id, new_policy_id = clone_config_and_policy(...)
+
+    # [2] Clone and rename client lists for SC-<access_group>
+    clone_and_rename_client_lists(session, base_url, config_id, version, access_group)
+
+    # [3] Reassign protections
+    reassign_match_targets(...)
+    reassign_client_lists(...)
+
 def search_client_lists_by_name(session, base_url, keyword):
     url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
     response = session.get(url)
