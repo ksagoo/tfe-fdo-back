@@ -1,10 +1,19 @@
 def reassign_custom_rules(session, base_url, config_id, version, old_policy_id, new_policy_id):
     url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules"
-    response = session.get(url)
-    response.raise_for_status()
-    rules = response.json().get("customRules", [])
+    result = { "processed": 0, "successful": 0, "failed": 0, "details": [] }
 
-    result = { "processed": len(rules), "successful": 0, "failed": 0, "details": [] }
+    try:
+        response = session.get(url)
+        if response.status_code == 404:
+            print(f"[WARN] No custom rules found for config {config_id}, version {version}")
+            return result
+        response.raise_for_status()
+        rules = response.json().get("customRules", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch custom rules: {e}")
+        return result
+
+    result["processed"] = len(rules)
 
     for rule in rules:
         if rule.get("policyId") != old_policy_id:
@@ -13,18 +22,18 @@ def reassign_custom_rules(session, base_url, config_id, version, old_policy_id, 
         rule_id = rule.get("id")
         update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules/{rule_id}"
 
-        # Rebuild payload with only allowed fields
+        # Build only allowed payload fields
         payload = {
             "name": rule.get("name"),
-            "description": rule.get("description", ""),
-            "tag": rule.get("tag", ""),
             "condition": rule.get("condition", {}),
             "ruleActions": rule.get("ruleActions", []),
+            "tag": rule.get("tag", ""),
             "policyId": new_policy_id
         }
 
         try:
-            session.put(update_url, json=payload)
+            put_response = session.put(update_url, json=payload)
+            put_response.raise_for_status()
             result["successful"] += 1
             result["details"].append({ "id": rule_id, "name": rule.get("name"), "status": "success" })
         except Exception as e:
