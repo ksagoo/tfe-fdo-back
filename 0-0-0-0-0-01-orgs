@@ -1,108 +1,65 @@
-clone_and_rename_client_lists(session, base_url, config_id, version, access_group)
+def clone_and_rename_client_lists(session, base_url, config_id, version, access_group):
+    print(f"[INFO] Cloning client lists for config ID {config_id}, version {version}")
+    summary = {
+        "processed": 0,
+        "successful": 0,
+        "failed": 0,
+        "details": []
+    }
 
-def run_all(...):
-    ...
-
-    # [1] Clone config and policy
-    config_id, version, temp_policy_id, new_policy_id = clone_config_and_policy(...)
-
-    # [2] Clone and rename client lists for SC-<access_group>
-    clone_and_rename_client_lists(session, base_url, config_id, version, access_group)
-
-    # [3] Reassign protections
-    reassign_match_targets(...)
-    reassign_client_lists(...)
-
-def search_client_lists_by_name(session, base_url, keyword):
-    url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
-    response = session.get(url)
-    if not response.ok:
-        raise Exception(f"[ERROR] {response.status_code}: {response.text}")
-    
-    client_lists = response.json().get("content", [])
-    keyword_lower = keyword.lower()
-    matches = []
+    list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/client-lists"
+    try:
+        response = session.get(list_url)
+        response.raise_for_status()
+        client_lists = response.json().get("clientLists", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch client lists: {e}")
+        return summary
 
     for cl in client_lists:
-        list_id = cl.get("listId", "no id")
-        name = cl.get("name", "") or cl.get("groupName", "")
-        name_lower = name.lower()
-        if keyword_lower in name_lower:
-            matches.append((list_id, name))
+        cl_id = cl.get("listId")
+        cl_name = cl.get("name", "")
+        cl_type = cl.get("type")
+        cl_description = cl.get("description", "")
+        cl_items = cl.get("list", [])
 
-    if not matches:
-        print(f"[WARN] No client list matches for '{keyword}'")
-
-    return matches
-
-
-def build_bypass_list_from_client_lists(session, base_url, access_group, account, is_prod):
-    print(f"[INFO] Building bypass list for access_group={access_group}, account={account}, is_prod={is_prod}")
-    bypass_list = []
-    matches = search_client_lists_by_name(session, base_url, "")  # all lists
-
-    def find_match(keyword):
-        for list_id, name in matches:
-            if keyword.lower() in name.lower():
-                return {"id": list_id, "name": name, "listType": "CL", "type": "IP"}
-        return None
-
-    # Always add config-specific list
-    keyword = f"SC-{access_group}"
-    match = find_match(keyword)
-    if match:
-        bypass_list.append(match)
-    else:
-        print(f"[WARN] Client list not found: {keyword}")
-
-    # Conditional logic
-    if is_prod:
-        keyword = f"VUL-SCAN-{account if account != 'DEV' else 'APAC'}"
-    else:
-        keyword = "VUL-SCAN-PRE-PROD"
-
-    match = find_match(keyword)
-    if match:
-        bypass_list.append(match)
-    else:
-        print(f"[WARN] Client list not found: {keyword}")
-
-    # Always remove "Security Policy Template"
-    return [entry for entry in bypass_list if "Security Policy Template" not in entry["name"]]
-
-
-def clone_and_rename_client_lists(session, base_url, config_id, version, access_group):
-    print(f"[INFO] Cloning and renaming client lists from 'Security Policy Template' to 'SC-{access_group}'")
-    
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/client-lists"
-    response = session.get(url)
-    if not response.ok:
-        raise Exception(f"[ERROR] Failed to fetch client lists: {response.status_code}: {response.text}")
-    
-    original_lists = response.json().get("clientLists", [])
-    renamed_count = 0
-
-    for cl in original_lists:
-        name = cl.get("name", "")
-        if "Security Policy Template" not in name:
+        # Only process lists from the template config
+        if "Security Policy Template" not in cl_name:
             continue
-        
-        # Replace only the prefix
-        new_name = name.replace("Security Policy Template", f"SC-{access_group}")
+
+        summary["processed"] += 1
+
+        # New name: replace "Security Policy Template" with SC-access_group
+        new_name = cl_name.replace("Security Policy Template", f"SC-{access_group}")
         payload = {
             "name": new_name,
-            "description": cl.get("description", ""),
-            "type": cl.get("type", "IP"),
-            "list": cl.get("list", []),
-            "matchType": cl.get("matchType", "IP"),
+            "type": cl_type,
+            "description": cl_description,
+            "list": cl_items
         }
 
         clone_url = f"{base_url}/client-list/v1/lists"
-        clone_response = session.post(clone_url, json=payload)
-        if clone_response.ok:
-            print(f"[SUCCESS] Cloned list '{name}' as '{new_name}'")
-            renamed_count += 1
-        else:
-            print(f"[ERROR] Failed to clone list '{name}': {clone_response.status_code}: {clone_response.text}")
+        try:
+            clone_response = session.post(clone_url, json=payload)
+            clone_response.raise_for_status()
+            new_list_id = clone_response.json().get("listId", "unknown")
+            summary["successful"] += 1
+            summary["details"].append({
+                "id": new_list_id,
+                "name": new_name,
+                "status": "success"
+            })
+            print(f"[INFO] Cloned client list as '{new_name}' (ID: {new_list_id})")
+        except Exception as e:
+            summary["failed"] += 1
+            summary["details"].append({
+                "id": cl_id,
+                "name": new_name,
+                "status": "failed",
+                "error": str(e)
+            })
+            print(f"[ERROR] Failed to clone client list '{cl_name}': {e}")
 
-    print(f"[INFO] Completed cloning {renamed_count} lists.")
+    return summary
+
+results["clone_client_lists"] = clone_and_rename_client_lists(session, base_url, config_id, version, access_group)
