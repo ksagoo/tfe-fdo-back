@@ -1,37 +1,41 @@
 def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section):
     summary = {"processed": 0, "successful": 0, "failed": 0, "details": []}
     prefix = f"SC-{access_group}"
-    
+
     # Get all client lists
     list_url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
     response = session.get(list_url)
-    
     if not response.ok:
         print(f"[ERROR] Failed to fetch client lists: {response.status_code} {response.text}")
         return summary
 
     all_lists = response.json().get("content", [])
-    print(f"[DEBUG] Retrieved {len(all_lists)} total client lists")
+    print(f"[DEBUG] Total client lists found: {len(all_lists)}")
 
-    # Filter lists for template
-    for cl in all_lists:
+    # Step 1: Extract all template-based lists
+    template_lists = [cl for cl in all_lists if "Security Policy Template" in cl.get("name", "")]
+    print(f"[DEBUG] Template-based lists to clone: {len(template_lists)}")
+
+    # Step 2: Loop and derive suffix, check for duplicates, and clone if needed
+    for cl in template_lists:
         original_name = cl.get("name", "")
         list_id = cl.get("listId")
-        if not list_id or "Security Policy Template" not in original_name:
-            print(f"[DEBUG] Skipping list '{original_name}': does not contain 'Security Policy Template'")
+        if not list_id:
+            print(f"[WARN] Skipping list with no listId: {original_name}")
             continue
 
-        # New name generation
-        new_name = original_name.replace("Security Policy Template", prefix)
-        print(f"[DEBUG] Preparing to clone list '{original_name}' as '{new_name}'")
+        suffix = original_name.split("Security Policy Template")[-1].strip()
+        new_name = f"{prefix} {suffix}".strip()
 
-        # Check if this name already exists in Akamai
-        existing = [l for l in all_lists if l.get("name") == new_name]
-        if existing:
+        # Check if new name already exists
+        existing_names = [l.get("name") for l in all_lists]
+        if new_name in existing_names:
             print(f"[INFO] Skipping already existing list: {new_name}")
             continue
 
-        # Attempt cloning
+        print(f"[DEBUG] Cloning '{original_name}' => '{new_name}'")
+
+        # Clone the list
         clone_url = f"{base_url}/client-list/v1/lists/{list_id}/clone"
         payload = {
             "name": new_name,
@@ -44,16 +48,30 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             summary["processed"] += 1
             if clone_resp.ok:
                 result = clone_resp.json()
-                print(f"[SUCCESS] Cloned list '{original_name}' => '{new_name}'")
+                print(f"[SUCCESS] Cloned list: {new_name}")
                 summary["successful"] += 1
-                summary["details"].append({"id": result.get("listId"), "name": new_name, "status": "success"})
+                summary["details"].append({
+                    "id": result.get("listId"),
+                    "name": new_name,
+                    "status": "success"
+                })
             else:
                 print(f"[ERROR] Failed to clone list '{original_name}': {clone_resp.status_code} {clone_resp.text}")
                 summary["failed"] += 1
-                summary["details"].append({"id": list_id, "name": new_name, "status": "failed", "error": clone_resp.text})
+                summary["details"].append({
+                    "id": list_id,
+                    "name": new_name,
+                    "status": "failed",
+                    "error": clone_resp.text
+                })
         except Exception as e:
             print(f"[EXCEPTION] Error cloning list '{original_name}': {e}")
             summary["failed"] += 1
-            summary["details"].append({"id": list_id, "name": new_name, "status": "failed", "error": str(e)})
-    
+            summary["details"].append({
+                "id": list_id,
+                "name": new_name,
+                "status": "failed",
+                "error": str(e)
+            })
+
     return summary
