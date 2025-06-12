@@ -6,59 +6,66 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         "details": []
     }
 
-    print(f"[INFO] Fetching all client lists from template config ID: {config_id}")
-    url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
-    response = session.get(url)
+    original_lists_url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
+    print(f"[DEBUG] Fetching all client lists from: {original_lists_url}")
+    
+    response = session.get(original_lists_url)
     if not response.ok:
-        raise Exception(f"[ERROR] Failed to fetch client lists: {response.status_code} - {response.text}")
+        print(f"[ERROR] Failed to retrieve client lists: {response.status_code} - {response.text}")
+        return summary
 
-    client_lists = response.json().get("content", [])
-    print(f"[DEBUG] {len(client_lists)} client lists fetched")
+    all_lists = response.json().get("content", [])
+    print(f"[DEBUG] Retrieved {len(all_lists)} client lists total")
 
-    for cl in client_lists:
+    template_lists = [cl for cl in all_lists if "Security Policy Template" in cl.get("name", "")]
+    print(f"[DEBUG] Identified {len(template_lists)} client lists linked to Security Policy Template")
+
+    for cl in template_lists:
         original_name = cl.get("name", "")
-        if "Security Policy Template" not in original_name:
-            print(f"[SKIP] '{original_name}' does not contain 'Security Policy Template'")
+        if not original_name:
             continue
 
-        # Rename logic
-        new_name = original_name.replace("Security Policy Template", access_group)
-        print(f"[DEBUG] Preparing to clone: {original_name} => {new_name}")
+        # Create new name based on convention
+        new_name = original_name.replace("Security Policy Template", f"SC-{access_group}")
+        print(f"[DEBUG] New name for cloned list: {new_name}")
 
-        # Check for duplicates
-        if any(existing.get("name", "") == new_name for existing in client_lists):
-            print(f"[SKIP] Client list already exists with name: {new_name}")
+        # Skip if list with new name already exists
+        if any(existing.get("name") == new_name for existing in all_lists):
+            print(f"[INFO] Skipping already existing list: {new_name}")
             continue
 
-        clone_url = f"{base_url}/client-list/v1/lists/{cl['listId']}/clone"
         payload = {
             "name": new_name,
-            "description": cl.get("description", ""),
+            "type": cl.get("type"),
+            "listType": cl.get("listType"),
+            "description": f"Cloned from {original_name}",
             "tags": cl.get("tags", []),
-            "type": cl["type"]
+            "items": cl.get("items", []),
+            "shared": cl.get("shared", False)
         }
 
+        clone_url = f"{base_url}/client-list/v1/lists"
         try:
-            clone_resp = session.post(clone_url, json=payload)
-            clone_resp.raise_for_status()
-            new_list = clone_resp.json()
-            print(f"[SUCCESS] Cloned list '{original_name}' to '{new_list['name']}'")
+            clone_response = session.post(clone_url, json=payload)
+            clone_response.raise_for_status()
+            created = clone_response.json()
+            print(f"[INFO] Successfully cloned list '{original_name}' => '{new_name}'")
+            summary["processed"] += 1
             summary["successful"] += 1
             summary["details"].append({
-                "id": new_list["listId"],
-                "name": new_list["name"],
+                "id": created.get("id"),
+                "name": new_name,
                 "status": "success"
             })
         except Exception as e:
-            print(f"[ERROR] Failed to clone list '{original_name}': {e}")
+            print(f"[ERROR] Failed to clone list '{original_name}' to '{new_name}': {e}")
+            summary["processed"] += 1
             summary["failed"] += 1
             summary["details"].append({
-                "id": cl["listId"],
-                "name": original_name,
+                "id": cl.get("id"),
+                "name": new_name,
                 "status": "failed",
                 "error": str(e)
             })
-
-        summary["processed"] += 1
 
     return summary
