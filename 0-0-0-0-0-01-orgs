@@ -1,26 +1,14 @@
-def list_all_client_list_names(session, base_url):
-    url = urljoin(base_url, "/client-list/v1/lists?includeItems=true&includeDeprecated=true")
-    headers = {"Accept": "application/json"}
-
-    resp = session.get(url, headers=headers)
+def list_all_client_lists(session, base_url):
+    url = urljoin(base_url, "/client-list/v1/lists?includeItems=true&pageSize=100")
+    resp = session.get(url)
 
     if not resp.ok:
-        raise Exception(f"[ERROR] {resp.status_code}: {resp.text}")
+        raise Exception(f"Failed to retrieve client lists: {resp.status_code} - {resp.text}")
 
     client_lists = resp.json().get("content", [])
-
     print(f"\n[INFO] Total Client Lists Found: {len(client_lists)}\n")
 
     for cl in client_lists:
-        name = cl.get("groupName", "(no name)")
-        print(f"- {name}")
-
-# Example usage
-if __name__ == "__main__":
-    session = requests.Session()
-    session.auth = EdgeGridAuth(
-        client_token="your_token",
-        client_secret="your_secret",
-        access_token="your_access_token"
-    )
-    base_url = "https://akab-xxxx.luna.akamaiapis.net/"
+        name = cl.get("name", "<no name>")
+        list_id = cl.get("listId", "<no id>")
+        print(f"- {name} : {list_id}")
