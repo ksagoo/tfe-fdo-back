@@ -28,3 +28,53 @@ def build_bypass_list_from_client_lists(session, base_url, access_group, account
             bypass_list.append(match)
 
     return bypass_list
+
+
+
+def reassign_match_targets(session, base_url, config_id, version, temp_policy_id, new_policy_id, fqdn_list, is_prod, account, access_group):
+    print("Fetching match targets for reassignment...")
+    match_targets_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
+    response = session.get(match_targets_url)
+    response.raise_for_status()
+
+    match_targets = response.json().get("matchTargets", [])
+    website_targets = [mt for mt in match_targets if mt.get("type") == "website"]
+
+    reassigned = []
+    updated_targets = []
+
+    for target in website_targets:
+        if "targetId" not in target:
+            print(f"[WARN] Skipping target without 'targetId': {json.dumps(target)}")
+            continue
+
+        changed = False
+        website_target = target.get("websiteTargets", [{}])[0]
+        policy = website_target.get("securityPolicy", {})
+        current_policy = policy.get("policyId", "").strip() if isinstance(policy, dict) else str(policy).strip()
+
+        if current_policy.lower() != temp_policy_id.lower():
+            continue
+
+        # Update details
+        website_target["securityPolicy"] = {"policyId": new_policy_id}
+        website_target["hostnames"] = fqdn_list
+        website_target["bypassNetworkLists"] = build_bypass_list_from_client_lists(
+            session, base_url, access_group, account, is_prod
+        )
+        changed = True
+
+        if changed:
+            target_id = target["targetId"]
+            update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets/{target_id}"
+            print(f"[DEBUG] Updating target: {target_id}")
+            print(f"[DEBUG] Final Payload:\n{json.dumps(target, indent=2)}")
+
+            put_response = session.put(update_url, json=target)
+            put_response.raise_for_status()
+
+            reassigned.append(target_id)
+            print(f"[VALIDATE] Reassigned Target: {target_id}")
+
+    print(f"[RESULT] Reassigned match targets: {reassigned}")
+    return reassigned
