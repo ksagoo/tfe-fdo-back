@@ -1,4 +1,4 @@
-def reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id, is_prod, account, access_group):
+def reassign_client_lists(session, base_url, config_id, version, temp_policy_id, new_policy_id):
     summary = {
         "processed": 0,
         "successful": 0,
@@ -6,63 +6,51 @@ def reassign_client_lists(session, base_url, config_id, version, old_policy_id, 
         "details": []
     }
 
-    # Step 1: Fetch all client lists
-    url = urljoin(base_url, "/client-list/v1/lists?includeItems=true&includeDeprecated=true")
-    print(f"[DEBUG] Fetching all client lists from: {url}")
+    get_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{temp_policy_id}/client-list-activations"
+    print(f"[DEBUG] Fetching client list activations from TEMP policy: {get_url}")
 
     try:
-        response = session.get(url)
+        response = session.get(get_url)
         response.raise_for_status()
-        all_client_lists = response.json().get("content", [])
+        client_lists = response.json().get("clientLists", [])
     except Exception as e:
-        print(f"[ERROR] Failed to fetch client lists: {e}")
+        print(f"[ERROR] Failed to fetch client list activations: {e}")
         return summary
 
-    # Step 2: Filter client lists tied to TEMP policy naming convention
-    matched_lists = []
-    expected_prefix = f"SC-{access_group}".lower()
-    for cl in all_client_lists:
-        cl_name = cl.get("name", "").lower()
-        cl_id = cl.get("listId")
-        if not cl_id or expected_prefix not in cl_name:
+    if not client_lists:
+        print("[INFO] No client list activations to reassign.")
+        return summary
+
+    for cl in client_lists:
+        object_id = cl.get("id")
+        if not object_id:
             continue
-        matched_lists.append({
-            "id": cl_id,
-            "name": cl.get("name"),
-            "action": cl.get("action", "alert"),
-        })
 
-    if not matched_lists:
-        print("[INFO] No matching client lists found for reassignment.")
-        return summary
+        summary["processed"] += 1
+        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-list-activations/{object_id}"
+        payload = {
+            "policyId": new_policy_id,
+            "action": cl.get("action", "alert")
+        }
 
-    print(f"[DEBUG] Found {len(matched_lists)} matching client list(s) for reassignment to policy: {new_policy_id}")
-    for item in matched_lists:
-        print(f" - {item['name']} (id: {item['id']})")
+        print(f"[DEBUG] Reassigning client list {object_id} to new policy at {update_url}")
+        print(f"[DEBUG] Payload: {json.dumps(payload, indent=2)}")
 
-    # Step 3: Build reassignment payload
-    payload = {
-        "clientLists": [
-            {"id": cl["id"], "action": cl["action"]} for cl in matched_lists
-        ]
-    }
-
-    # Step 4: PUT to reassign them to new policy
-    put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-lists"
-    print(f"[DEBUG] Reassigning client lists using PUT: {put_url}")
-    print(f"[DEBUG] Payload:\n{json.dumps(payload, indent=2)}")
-
-    try:
-        put_response = session.put(put_url, json=payload)
-        put_response.raise_for_status()
-        summary["processed"] = len(matched_lists)
-        summary["successful"] = len(matched_lists)
-        summary["details"] = [{"id": cl["id"], "name": cl["name"], "status": "success"} for cl in matched_lists]
-        print(f"[INFO] Successfully reassigned {len(matched_lists)} client list(s).")
-    except Exception as e:
-        summary["processed"] = len(matched_lists)
-        summary["failed"] = len(matched_lists)
-        summary["details"] = [{"id": cl["id"], "name": cl["name"], "status": "failed", "error": str(e)} for cl in matched_lists]
-        print(f"[ERROR] Failed to reassign client lists: {e}")
+        try:
+            update_response = session.put(update_url, json=payload)
+            update_response.raise_for_status()
+            summary["successful"] += 1
+            summary["details"].append({
+                "id": object_id,
+                "status": "success"
+            })
+        except Exception as e:
+            summary["failed"] += 1
+            summary["details"].append({
+                "id": object_id,
+                "status": "failed",
+                "error": str(e)
+            })
+            print(f"[ERROR] Failed to reassign client list {object_id}: {e}")
 
     return summary
