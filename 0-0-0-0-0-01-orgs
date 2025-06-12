@@ -70,8 +70,6 @@ def run_all_reassignments(
 
     return results
 
-✅ Example Usage
-
 results = run_all_reassignments(
     base_url=base_url,
     session=session,
