@@ -1,32 +1,30 @@
 def build_bypass_list_from_client_lists(session, base_url, access_group, account, is_prod):
     print(f"[INFO] Building bypass list for access_group={access_group}, account={account}, is_prod={is_prod}")
     
-    bypass_list = []
-    matches = search_client_lists_by_name(session, base_url, "")  # fetch all
-
-    def find_match(keyword):
+    def find_match(keyword, matches):
         for list_id, name in matches:
             if keyword.lower() in name.lower():
-                return {"id": list_id, "type": "IP", "listType": "CL"}
-        print(f"[WARN] No client list match found for: {keyword}")
+                return {
+                    "id": list_id,
+                    "name": name,
+                    "listType": "CL",
+                    "type": "IP"
+                }
+        print(f"[WARN] No Client List match found for keyword: {keyword}")
         return None
 
-    # Always add SC-<access_group>
-    access_group_list = find_match(f"SC-{access_group}")
-    if access_group_list:
-        bypass_list.append(access_group_list)
+    matches = search_client_lists_by_name(session, base_url, "")  # Fetch all client lists
+    bypass_list = []
 
-    # Environment-specific logic
-    if is_prod:
-        if account.lower() == "dev":
-            account_list = find_match("VUL-SCAN-APAC")
-        else:
-            account_list = find_match(f"VUL-SCAN-{account}")
-        if account_list:
-            bypass_list.append(account_list)
-    else:
-        preprod_list = find_match("VUL-SCAN-PRE-PROD")
-        if preprod_list:
-            bypass_list.append(preprod_list)
+    # Remove default template bypass list, then build appropriate ones:
+    config_list = [
+        f"SC-{access_group}",  # Always include
+        "VUL-SCAN-PRE-PROD" if not is_prod else (f"VUL-SCAN-APAC" if account.upper() == "DEV" else f"VUL-SCAN-{account}")
+    ]
+
+    for keyword in config_list:
+        match = find_match(keyword, matches)
+        if match:
+            bypass_list.append(match)
 
     return bypass_list
