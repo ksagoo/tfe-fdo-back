@@ -1,4 +1,4 @@
-def reassign_client_lists(session, base_url, config_id, version, temp_policy_id, new_policy_id):
+def reassign_client_lists(session, base_url, config_id, version, sc_name, new_policy_id):
     summary = {
         "processed": 0,
         "successful": 0,
@@ -6,51 +6,63 @@ def reassign_client_lists(session, base_url, config_id, version, temp_policy_id,
         "details": []
     }
 
-    get_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{temp_policy_id}/client-list-activations"
-    print(f"[DEBUG] Fetching client list activations from TEMP policy: {get_url}")
-
+    # Step 1: Fetch all client lists globally
+    get_url = f"{base_url}/client-list/v1/lists"
+    print(f"[DEBUG] Fetching all client lists from: {get_url}")
     try:
         response = session.get(get_url)
         response.raise_for_status()
-        client_lists = response.json().get("clientLists", [])
+        client_lists = response.json().get("content", [])
     except Exception as e:
-        print(f"[ERROR] Failed to fetch client list activations: {e}")
+        print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    if not client_lists:
-        print("[INFO] No client list activations to reassign.")
-        return summary
-
+    # Step 2: Filter only lists that belong to this config (by name prefix)
+    filtered_lists = []
     for cl in client_lists:
-        object_id = cl.get("id")
-        if not object_id:
-            continue
+        if cl.get("name", "").startswith(sc_name + " ") and "ASN Block List" not in cl.get("name", ""):
+            filtered_lists.append(cl)
 
-        summary["processed"] += 1
-        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-list-activations/{object_id}"
-        payload = {
-            "policyId": new_policy_id,
-            "action": cl.get("action", "alert")
-        }
+    print(f"[DEBUG] Found {len(filtered_lists)} client lists with prefix '{sc_name}'")
 
-        print(f"[DEBUG] Reassigning client list {object_id} to new policy at {update_url}")
-        print(f"[DEBUG] Payload: {json.dumps(payload, indent=2)}")
+    if not filtered_lists:
+        print("[INFO] No matching client lists to reassign.")
+        return summary
 
-        try:
-            update_response = session.put(update_url, json=payload)
-            update_response.raise_for_status()
-            summary["successful"] += 1
+    # Step 3: Build payload
+    reassignment_payload = {
+        "clientLists": [
+            {
+                "id": cl["listId"],
+                "action": cl.get("action", "alert")
+            }
+            for cl in filtered_lists
+        ]
+    }
+
+    summary["processed"] = len(reassignment_payload["clientLists"])
+
+    put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-lists"
+    print(f"[DEBUG] Reassigning client lists to policy via: {put_url}")
+    print(f"[DEBUG] Payload:\n{json.dumps(reassignment_payload, indent=2)}")
+
+    # Step 4: Send PUT request
+    try:
+        response = session.put(put_url, json=reassignment_payload)
+        response.raise_for_status()
+        summary["successful"] = summary["processed"]
+        for cl in reassignment_payload["clientLists"]:
             summary["details"].append({
-                "id": object_id,
+                "id": cl["id"],
                 "status": "success"
             })
-        except Exception as e:
-            summary["failed"] += 1
-            summary["details"].append({
-                "id": object_id,
-                "status": "failed",
-                "error": str(e)
-            })
-            print(f"[ERROR] Failed to reassign client list {object_id}: {e}")
+        print(f"[INFO] Successfully reassigned {summary['successful']} client lists.")
+    except Exception as e:
+        summary["failed"] = summary["processed"]
+        summary["details"].append({
+            "status": "failed",
+            "error": str(e)
+        })
+        print(f"[ERROR] Failed to reassign client lists: {e}")
 
     return summary
