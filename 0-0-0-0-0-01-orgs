@@ -1,6 +1,10 @@
-reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id)
-
 def reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    summary = {
+        "processed": 0,
+        "successful": 0,
+        "failed": [],
+    }
+
     url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{old_policy_id}/client-lists"
     print(f"[DEBUG] Fetching client lists from TEMP policy: {url}")
     
@@ -10,23 +14,25 @@ def reassign_client_lists(session, base_url, config_id, version, old_policy_id, 
         client_lists = response.json().get("clientLists", [])
     except Exception as e:
         print(f"[ERROR] Failed to fetch client lists: {e}")
-        return
+        return summary
 
     if not client_lists:
         print("No client lists to reassign.")
-        return
+        return summary
 
     for cl in client_lists:
         client_list_id = cl.get("id")
         if not client_list_id:
             continue
 
+        summary["processed"] += 1
+
         update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-lists"
         payload = {
             "clientLists": [
                 {
                     "id": client_list_id,
-                    "action": cl.get("action", "alert")  # default fallback
+                    "action": cl.get("action", "alert")
                 }
             ]
         }
@@ -38,5 +44,14 @@ def reassign_client_lists(session, base_url, config_id, version, old_policy_id, 
             update_response = session.post(update_url, json=payload)
             update_response.raise_for_status()
             print(f"[INFO] Reassigned client list {client_list_id} to new policy.")
+            summary["successful"] += 1
         except Exception as e:
             print(f"[ERROR] Failed to reassign client list {client_list_id}: {e}")
+            summary["failed"].append(client_list_id)
+
+    return summary
+
+
+result = reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id)
+
+print(f"Client List Reassignment Summary: {result}")
