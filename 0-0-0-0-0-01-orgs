@@ -1,73 +1,66 @@
 def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section):
-    print(f"[INFO] Cloning client lists for config ID {config_id}, access_group={access_group}, section={section}")
-
-    # Get all existing lists
-    url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
-    headers = {"accept": "application/json"}
-    response = session.get(url, headers=headers)
-    if not response.ok:
-        raise Exception(f"[ERROR] Failed to fetch client lists: {response.status_code} {response.text}")
-    all_lists = response.json().get("content", [])
-
-    # Build new name mapping
-    template_lists = [cl for cl in all_lists if "Security Policy Template" in cl.get("name", "")]
-    existing_names = {cl.get("name") for cl in all_lists}
-
-    print(f"[DEBUG] Found {len(template_lists)} template lists to consider cloning")
-
+    target_prefix = f"SC-{access_group}"
+    expected_bypass_name = f"{target_prefix} Security Bypass List"
     summary = {
-        "processed": len(template_lists),
+        "processed": 0,
         "successful": 0,
         "failed": 0,
         "details": []
     }
 
-    for template in template_lists:
-        original_name = template.get("name", "")
-        suffix = original_name.replace("Security Policy Template", "").strip()
-        new_name = f"SC-{access_group} {suffix}".strip()
+    print(f"[DEBUG] Looking for existing: {expected_bypass_name}")
+    client_list_url = f"{base_url}/client-list/v3/lists?includeItems=true&includeDeprecated=true"
+    response = session.get(client_list_url)
+    response.raise_for_status()
+    all_lists = response.json()
 
-        if new_name in existing_names:
-            print(f"[INFO] Skipping already existing list: {new_name}")
-            continue
+    already_exists = any(cl["name"] == expected_bypass_name for cl in all_lists)
+
+    if already_exists:
+        print(f"[INFO] List '{expected_bypass_name}' already exists. Skipping clone.")
+        return summary
+
+    print(f"[INFO] '{expected_bypass_name}' not found. Cloning Security Policy Template lists...")
+
+    # Filter only the template lists to clone
+    template_lists = [cl for cl in all_lists if "Security Policy Template" in cl.get("name", "")]
+
+    for cl in template_lists:
+        original_name = cl.get("name", "")
+        suffix = original_name.replace("Security Policy Template", "").strip()
+        new_name = f"{target_prefix} {suffix}".strip()
 
         payload = {
             "name": new_name,
-            "type": template["type"],
-            "listType": template["listType"],
+            "type": cl["type"],
+            "listType": cl["listType"],
+            "contractId": cl["contractId"],
+            "groupId": cl["groupId"],
             "description": f"Cloned from {original_name}",
-            "tags": template.get("tags", []),
-            "sharingSettings": template.get("sharingSettings", {}),
+            "items": cl.get("items", [])
         }
 
+        summary["processed"] += 1
         try:
-            print(f"[INFO] Cloning list '{original_name}' => '{new_name}'")
-            create_url = f"{base_url}/client-list/v1/lists?accountSwitchKey={access_group}"
-            create_response = session.post(create_url, json=payload, headers=headers)
-            if not create_response.ok:
-                raise Exception(f"{create_response.status_code}: {create_response.text}")
-
-            list_id = create_response.json().get("listId")
-            print(f"[SUCCESS] Created client list '{new_name}' with ID {list_id}")
-
-            # Activate staging if needed
-            activation_url = f"{base_url}/client-list/v1/lists/{list_id}/activate?accountSwitchKey={access_group}"
-            activate_payload = {
-                "network": "STAGING",
-                "note": f"Auto-activated {new_name} to staging"
-            }
-            activate_response = session.post(activation_url, json=activate_payload, headers=headers)
-            if activate_response.ok:
-                print(f"[INFO] Activated list '{new_name}' in STAGING")
-            else:
-                print(f"[WARN] Failed to activate list '{new_name}' in STAGING: {activate_response.status_code}")
-
+            clone_url = f"{base_url}/client-list/v3/lists"
+            res = session.post(clone_url, json=payload)
+            res.raise_for_status()
+            new_id = res.json().get("id")
+            print(f"[SUCCESS] Cloned '{original_name}' -> '{new_name}' (ID: {new_id})")
             summary["successful"] += 1
-            summary["details"].append({"id": list_id, "name": new_name, "status": "success"})
-
-        except Exception as ex:
-            print(f"[ERROR] Failed to clone list '{original_name}' => '{new_name}': {ex}")
+            summary["details"].append({
+                "id": new_id,
+                "name": new_name,
+                "status": "success"
+            })
+        except Exception as e:
+            print(f"[ERROR] Failed to clone '{original_name}' as '{new_name}' -> {e}")
             summary["failed"] += 1
-            summary["details"].append({"name": new_name, "status": "failed", "error": str(ex)})
+            summary["details"].append({
+                "id": None,
+                "name": new_name,
+                "status": "failed",
+                "error": str(e)
+            })
 
-    return {"clone_client_lists": summary}
+    return summary
