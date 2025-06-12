@@ -1,39 +1,68 @@
-aws ec2 describe-launch-template-versions \
-  --launch-template-id <your-template-id> \
-  --versions <version> \
-  --query 'LaunchTemplateVersions[0].LaunchTemplateData.IamInstanceProfile'
-Look for:
+def reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id, is_prod, account, access_group):
+    summary = {
+        "processed": 0,
+        "successful": 0,
+        "failed": 0,
+        "details": []
+    }
 
-json
-Copy
-Edit
-{
-  "Arn": "arn:aws:iam::<account-id>:instance-profile/<profile-name>",
-  "Name": "<profile-name>"
-}
-Then use:
+    # Step 1: Fetch all client lists
+    url = urljoin(base_url, "/client-list/v1/lists?includeItems=true&includeDeprecated=true")
+    print(f"[DEBUG] Fetching all client lists from: {url}")
 
-bash
-Copy
-Edit
-aws iam get-instance-profile --instance-profile-name <profile-name>
-That will show you the IAM role name inside the profile.
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        all_client_lists = response.json().get("content", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch client lists: {e}")
+        return summary
 
-2. If Launch Template doesn't specify it
-Then the node group config (via console or eksctl) must have tried to auto-create one. In that case, check CloudFormation:
+    # Step 2: Filter client lists tied to TEMP policy naming convention
+    matched_lists = []
+    expected_prefix = f"SC-{access_group}".lower()
+    for cl in all_client_lists:
+        cl_name = cl.get("name", "").lower()
+        cl_id = cl.get("listId")
+        if not cl_id or expected_prefix not in cl_name:
+            continue
+        matched_lists.append({
+            "id": cl_id,
+            "name": cl.get("name"),
+            "action": cl.get("action", "alert"),
+        })
 
-bash
-Copy
-Edit
-aws cloudformation describe-stacks \
-  --stack-name eksctl-aws-gitlab-runner-nodegroup-cluster \
-  --query "Stacks[0].Outputs"
-Look for an output like:
+    if not matched_lists:
+        print("[INFO] No matching client lists found for reassignment.")
+        return summary
 
-json
-Copy
-Edit
-{
-  "OutputKey": "InstanceRoleARN",
-  "OutputValue": "arn:aws:iam::332192476089:role/eksctl-aws-gitlab-runner-nodegroup-NodeInstanceRole-XXXXX"
-}
+    print(f"[DEBUG] Found {len(matched_lists)} matching client list(s) for reassignment to policy: {new_policy_id}")
+    for item in matched_lists:
+        print(f" - {item['name']} (id: {item['id']})")
+
+    # Step 3: Build reassignment payload
+    payload = {
+        "clientLists": [
+            {"id": cl["id"], "action": cl["action"]} for cl in matched_lists
+        ]
+    }
+
+    # Step 4: PUT to reassign them to new policy
+    put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-lists"
+    print(f"[DEBUG] Reassigning client lists using PUT: {put_url}")
+    print(f"[DEBUG] Payload:\n{json.dumps(payload, indent=2)}")
+
+    try:
+        put_response = session.put(put_url, json=payload)
+        put_response.raise_for_status()
+        summary["processed"] = len(matched_lists)
+        summary["successful"] = len(matched_lists)
+        summary["details"] = [{"id": cl["id"], "name": cl["name"], "status": "success"} for cl in matched_lists]
+        print(f"[INFO] Successfully reassigned {len(matched_lists)} client list(s).")
+    except Exception as e:
+        summary["processed"] = len(matched_lists)
+        summary["failed"] = len(matched_lists)
+        summary["details"] = [{"id": cl["id"], "name": cl["name"], "status": "failed", "error": str(e)} for cl in matched_lists]
+        print(f"[ERROR] Failed to reassign client lists: {e}")
+
+    return summary
