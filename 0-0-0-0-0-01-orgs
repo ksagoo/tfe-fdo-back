@@ -1,84 +1,21 @@
-from pprint import pprint
 
-def run_all_reassignments(
-    base_url,
-    session,
-    config_id,
-    version,
-    old_policy_id,
-    new_policy_id,
-    fqdn_list,
-    isProd,
-    section,
-    access_group,
-    print_summary=True
-):
-    results = {}
+    summary = {
+        "processed": 0,
+        "successful": 0,
+        "failed": 0,
+        "details": []
+    }
 
-    results["match_targets"] = reassign_match_targets(
-        base_url=base_url,
-        session=session,
-        config_id=config_id,
-        version=version,
-        old_policy_id=old_policy_id,
-        new_policy_id=new_policy_id,
-        fqdn_list=fqdn_list,
-        isProd=isProd,
-        section=section,
-        access_group=access_group
-    )
+if update_response.status_code == 200:
+                summary["successful"] += 1
+                status = "success"
+            else:
+                summary["failed"] += 1
+                status = "failed"
 
-    results["client_lists"] = reassign_client_lists(
-        base_url, session, config_id, version, old_policy_id, new_policy_id
-    )
-
-    results["custom_rules"] = reassign_custom_rules(
-        base_url, session, config_id, version, old_policy_id, new_policy_id
-    )
-
-    results["rate_limits"] = reassign_rate_limits(
-        base_url, session, config_id, version, old_policy_id, new_policy_id
-    )
-
-    results["reputation_profiles"] = reassign_reputation_profiles(
-        base_url, session, config_id, version, old_policy_id, new_policy_id
-    )
-
-    results["waf_rule_overrides"] = reassign_waf_rule_overrides(
-        base_url, session, config_id, version, old_policy_id, new_policy_id
-    )
-
-    results["slow_post_protection"] = reassign_slow_post_protection(
-        base_url, session, config_id, version, old_policy_id, new_policy_id
-    )
-
-    results["akamai_bot_category_actions"] = reassign_akamai_bot_category_actions(
-        base_url, session, config_id, version, old_policy_id, new_policy_id
-    )
-
-    results["waf_group_actions"] = reassign_waf_group_actions(
-        base_url, session, config_id, version, old_policy_id, new_policy_id
-    )
-
-    if print_summary:
-        print("\n=== Onboarding Reassignment Summary ===")
-        for module, result in results.items():
-            print(f"\n🛠️ Module: {module}")
-            print(f"   Processed: {result['processed']}, Successful: {result['successful']}, Failed: {result['failed']}")
-            if result.get("details"):
-                pprint(result["details"])
-
-    return results
-
-results = run_all_reassignments(
-    base_url=base_url,
-    session=session,
-    config_id=config_id,
-    version=version,
-    old_policy_id=old_policy_id,
-    new_policy_id=new_policy_id,
-    fqdn_list=fqdn_list,
-    isProd=isProd,
-    section=section,
-    access_group=access_group
-)
+            summary["processed"] += 1
+            summary["details"].append({
+                "id": target_id,
+                "name": target.get("defaultHostname"),
+                "status": status,
+                "error": update_response.text if status == "failed" else None
