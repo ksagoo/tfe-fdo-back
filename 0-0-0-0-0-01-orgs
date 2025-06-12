@@ -6,41 +6,48 @@ def reassign_client_lists(session, base_url, config_id, version, old_policy_id, 
         "details": []
     }
 
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{old_policy_id}/client-lists"
-    print(f"[DEBUG] Fetching Client Lists from TEMP policy: {url}")
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/client-list-activations"
+    print(f"[DEBUG] Fetching all client list activations for version: {url}")
 
     try:
         response = session.get(url)
         response.raise_for_status()
-        client_lists = response.json().get("clientLists", [])
+        all_client_lists = response.json().get("clientLists", [])
     except Exception as e:
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    if not client_lists:
+    filtered_lists = [
+        cl for cl in all_client_lists
+        if cl.get("policyId") == old_policy_id
+    ]
+
+    print(f"[DEBUG] Found {len(filtered_lists)} client lists assigned to TEMP policy: {old_policy_id}")
+
+    if not filtered_lists:
         print("[INFO] No client lists to reassign.")
         return summary
 
     reassignment_payload = {
         "clientLists": [
             {
-                "id": cl.get("id"),
+                "id": cl["id"],
                 "action": cl.get("action", "alert")
             }
-            for cl in client_lists if cl.get("id")
+            for cl in filtered_lists
         ]
     }
 
     summary["processed"] = len(reassignment_payload["clientLists"])
     put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-lists"
-    print(f"[DEBUG] Reassigning {summary['processed']} client list(s) to: {put_url}")
+    print(f"[DEBUG] PUT to: {put_url}")
+    print(f"[DEBUG] Payload: {json.dumps(reassignment_payload, indent=2)}")
 
     try:
         put_response = session.put(put_url, json=reassignment_payload)
         put_response.raise_for_status()
         summary["successful"] = summary["processed"]
-        for cl in reassignment_payload["clientLists"]:
-            summary["details"].append({"id": cl["id"], "status": "success"})
+        summary["details"] = [{"id": cl["id"], "status": "success"} for cl in reassignment_payload["clientLists"]]
         print(f"[INFO] Successfully reassigned client lists.")
     except Exception as e:
         summary["failed"] = summary["processed"]
