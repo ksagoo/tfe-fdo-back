@@ -1,6 +1,4 @@
 def clone_and_rename_client_lists(session, base_url, config_id, version, access_group):
-    print("[INFO] Cloning and renaming client lists from Security Policy Template")
-
     summary = {
         "processed": 0,
         "successful": 0,
@@ -8,63 +6,62 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         "details": []
     }
 
-    # Fetch all existing client lists (including deprecated and inactive)
     url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
-    try:
-        response = session.get(url)
-        response.raise_for_status()
-        client_lists = response.json().get("content", [])
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch client lists: {e}")
+    response = session.get(url)
+    if not response.ok:
+        print(f"[ERROR] Failed to fetch client lists. {response.status_code} - {response.text}")
         return summary
 
-    for cl in client_lists:
+    all_lists = response.json().get("content", [])
+    template_lists = [cl for cl in all_lists if "Security Policy Template" in cl.get("name", "")]
+    existing_names = {cl.get("name") for cl in all_lists}
+
+    for cl in template_lists:
+        original_name = cl.get("name")
+        if not original_name:
+            continue
+
+        list_id = cl.get("listId")
+        if not list_id:
+            continue
+
+        suffix = original_name.replace("Security Policy Template", "").strip()
+        new_name = f"{access_group} {suffix}"
+
+        if new_name in existing_names:
+            print(f"[INFO] Skipping already existing list: {new_name}")
+            continue
+
+        payload = {
+            "name": new_name,
+            "description": f"Cloned from {original_name}",
+            "type": cl["type"],
+            "listItems": cl.get("listItems", []),
+            "shared": False
+        }
+
         try:
-            name = cl.get("name", "")
-            staging_status = cl.get("stagingActivationStatus", "")
-            list_id = cl.get("listId", "")
+            post_url = f"{base_url}/client-list/v1/lists"
+            post_response = session.post(post_url, json=payload)
+            post_response.raise_for_status()
 
-            if "Security Policy Template" not in name:
-                continue
-
-            if staging_status != "ACTIVE":
-                print(f"[WARN] Skipping list '{name}' - not ACTIVE in staging")
-                continue
-
-            # Build new name
-            new_name = name.replace("Security Policy Template", f"SC-{access_group}")
             summary["processed"] += 1
-
-            payload = {
-                "name": new_name,
-                "type": cl.get("type", "IP"),
-                "description": f"Cloned from template list {name}",
-                "list": cl.get("list", []),
-                "notes": cl.get("notes", ""),
-                "tags": cl.get("tags", []),
-                "matchOperator": cl.get("matchOperator", "ANY")
-            }
-
-            clone_url = f"{base_url}/client-list/v1/lists"
-            response = session.post(clone_url, json=payload)
-            response.raise_for_status()
-
-            print(f"[INFO] Successfully cloned list '{name}' → '{new_name}'")
             summary["successful"] += 1
             summary["details"].append({
                 "id": list_id,
                 "name": new_name,
                 "status": "success"
             })
-
+            print(f"[INFO] Successfully cloned list: {original_name} => {new_name}")
         except Exception as e:
-            print(f"[ERROR] Failed to clone list '{name}': {e}")
+            summary["processed"] += 1
             summary["failed"] += 1
             summary["details"].append({
-                "id": cl.get("listId", "unknown"),
-                "name": name,
+                "id": list_id,
+                "name": new_name,
                 "status": "failed",
                 "error": str(e)
             })
+            print(f"[ERROR] Failed to clone list: {original_name} => {new_name}: {e}")
 
     return summary
