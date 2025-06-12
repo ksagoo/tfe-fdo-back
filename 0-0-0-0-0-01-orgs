@@ -1,3 +1,5 @@
+url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{old_policy_id}/client-list-activations"
+
 def reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id):
     summary = {
         "processed": 0,
