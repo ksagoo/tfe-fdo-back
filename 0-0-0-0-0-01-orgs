@@ -1,22 +1,26 @@
-def search_client_lists(session, base_url, keyword):
+def list_all_client_list_names(session, base_url):
     url = urljoin(base_url, "/client-list/v1/lists?includeItems=true&includeDeprecated=true")
     headers = {"Accept": "application/json"}
+
     resp = session.get(url, headers=headers)
 
     if not resp.ok:
         raise Exception(f"[ERROR] {resp.status_code}: {resp.text}")
 
-    print(f"\n[INFO] Searching for client lists containing: '{keyword}'\n")
-    found = False
+    client_lists = resp.json().get("content", [])
 
-    for cl in resp.json().get("content", []):
-        name = cl.get("groupName", "")
-        items = cl.get("items", [])
-        for item in items:
-            description = item.get("description", "")
-            if keyword.lower() in name.lower() or keyword.lower() in description.lower():
-                found = True
-                print(f"[MATCH] {name} → {description} ({item.get('productionStatus')})")
+    print(f"\n[INFO] Total Client Lists Found: {len(client_lists)}\n")
 
-    if not found:
-        print("[INFO] No matches found.")
+    for cl in client_lists:
+        name = cl.get("groupName", "(no name)")
+        print(f"- {name}")
+
+# Example usage
+if __name__ == "__main__":
+    session = requests.Session()
+    session.auth = EdgeGridAuth(
+        client_token="your_token",
+        client_secret="your_secret",
+        access_token="your_access_token"
+    )
+    base_url = "https://akab-xxxx.luna.akamaiapis.net/"
