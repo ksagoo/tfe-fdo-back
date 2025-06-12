@@ -1,11 +1,12 @@
 def search_client_lists_by_name(session, base_url, keyword):
     url = urljoin(base_url, "/client-list/v1/lists?includeItems=true&includeDeprecated=true")
-    response = session.get(url)
+
+    response = session.get(ur)
     if not response.ok:
         raise Exception(f"[ERROR] {response.status_code}: {response.text}")
 
     client_lists = response.json().get("content", [])
-    print(f"\n[INFO] Searching for client lists containing: '{keyword}'")
+    print(f"\n[INFO] Searching for keyword: '{keyword}' (case-insensitive)")
     print(f"[INFO] Total Retrieved: {len(client_lists)}\n")
 
     keyword_lower = keyword.lower()
@@ -13,12 +14,30 @@ def search_client_lists_by_name(session, base_url, keyword):
 
     for cl in client_lists:
         list_id = cl.get("listId", "(no id)")
-        name = cl.get("groupName", "")
-        if keyword_lower in name.lower():
-            print(f"- {name} : {list_id}")
+        name = cl.get("name", "") or cl.get("groupName", "")
+        name_lower = name.lower()
+
+        # Debug output
+        print(f"[DEBUG] Checking name: '{name}'")
+
+        if keyword_lower in name_lower:
+            print(f Match: {name} : {list_id}")
             matches.append((name, list_id))
 
     if not matches:
-        print("[WARN] No matching client lists found.")
+        print("[WARN] No matches found.")
 
     return matches
+
+# Example usage
+if __name__ == "__main__":
+    session = requests.Session()
+    session.auth = EdgeGridAuth(
+        client_token="your_token",
+        client_secret="your_secret",
+        access_token="your_access_token"
+    )
+    base_url = "https://akab-xxxx.luna.akamaiapis.net/"  # Replace with your base URL
+
+    keyword = "VUL-SCAN"
+    search_client_lists_by_name(session, base_url, keyword)
