@@ -1,43 +1,32 @@
-def search_client_lists_by_name(session, base_url, keyword):
-    url = urljoin(base_url, "/client-list/v1/lists?includeItems=true&includeDeprecated=true")
+def build_bypass_list_from_client_lists(session, base_url, access_group, account, is_prod):
+    print(f"[INFO] Building bypass list for access_group={access_group}, account={account}, is_prod={is_prod}")
+    
+    bypass_list = []
+    matches = search_client_lists_by_name(session, base_url, "")  # fetch all
 
-    response = session.get(ur)
-    if not response.ok:
-        raise Exception(f"[ERROR] {response.status_code}: {response.text}")
+    def find_match(keyword):
+        for list_id, name in matches:
+            if keyword.lower() in name.lower():
+                return {"id": list_id, "type": "IP", "listType": "CL"}
+        print(f"[WARN] No client list match found for: {keyword}")
+        return None
 
-    client_lists = response.json().get("content", [])
-    print(f"\n[INFO] Searching for keyword: '{keyword}' (case-insensitive)")
-    print(f"[INFO] Total Retrieved: {len(client_lists)}\n")
+    # Always add SC-<access_group>
+    access_group_list = find_match(f"SC-{access_group}")
+    if access_group_list:
+        bypass_list.append(access_group_list)
 
-    keyword_lower = keyword.lower()
-    matches = []
+    # Environment-specific logic
+    if is_prod:
+        if account.lower() == "dev":
+            account_list = find_match("VUL-SCAN-APAC")
+        else:
+            account_list = find_match(f"VUL-SCAN-{account}")
+        if account_list:
+            bypass_list.append(account_list)
+    else:
+        preprod_list = find_match("VUL-SCAN-PRE-PROD")
+        if preprod_list:
+            bypass_list.append(preprod_list)
 
-    for cl in client_lists:
-        list_id = cl.get("listId", "(no id)")
-        name = cl.get("name", "") or cl.get("groupName", "")
-        name_lower = name.lower()
-
-        # Debug output
-        print(f"[DEBUG] Checking name: '{name}'")
-
-        if keyword_lower in name_lower:
-            print(f Match: {name} : {list_id}")
-            matches.append((name, list_id))
-
-    if not matches:
-        print("[WARN] No matches found.")
-
-    return matches
-
-# Example usage
-if __name__ == "__main__":
-    session = requests.Session()
-    session.auth = EdgeGridAuth(
-        client_token="your_token",
-        client_secret="your_secret",
-        access_token="your_access_token"
-    )
-    base_url = "https://akab-xxxx.luna.akamaiapis.net/"  # Replace with your base URL
-
-    keyword = "VUL-SCAN"
-    search_client_lists_by_name(session, base_url, keyword)
+    return bypass_list
