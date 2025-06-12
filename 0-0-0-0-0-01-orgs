@@ -1,3 +1,5 @@
+reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id)
+
 def reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id):
     url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{old_policy_id}/client-lists"
     print(f"[DEBUG] Fetching client lists from TEMP policy: {url}")
