@@ -1,57 +1,230 @@
-def reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    summary = {
-        "processed": 0,
-        "successful": 0,
-        "failed": [],
-    }
+# Module 2: Reassign Client Lists
+def reassign_client_lists(session, base_url, config_id, version, temp_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{temp_policy_id}/client-list-activations"
+    response = session.get(url)
+    response.raise_for_status()
+    client_lists = response.json().get("clientLists", [])
 
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{old_policy_id}/client-lists"
-    print(f"[DEBUG] Fetching client lists from TEMP policy: {url}")
-    
+    results = {"processed": 0, "successful": 0, "failed": 0, "details": []}
+    for clist in client_lists:
+        object_id = clist.get("id")
+        payload = clist.copy()
+        payload["policyId"] = new_policy_id
+        put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-list-activations/{object_id}"
+
+        try:
+            session.put(put_url, json=payload)
+            results["successful"] += 1
+            results["details"].append({"id": object_id, "status": "success"})
+        except Exception as e:
+            results["failed"] += 1
+            results["details"].append({"id": object_id, "status": "failed", "error": str(e)})
+        results["processed"] += 1
+
+    return results
+
+# Module 3: Reassign Custom Rules
+def reassign_custom_rules(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules"
+    response = session.get(url)
+    response.raise_for_status()
+    rules = response.json().get("customRules", [])
+
+    result = {"processed": len(rules), "successful": 0, "failed": 0, "details": []}
+
+    for rule in rules:
+        if rule.get("policyId") != old_policy_id:
+            continue
+        rule_id = rule.get("id")
+        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules/{rule_id}"
+        rule["policyId"] = new_policy_id
+        try:
+            session.put(update_url, json=rule)
+            result["successful"] += 1
+            result["details"].append({"id": rule_id, "name": rule.get("name"), "status": "success"})
+        except Exception as e:
+            result["failed"] += 1
+            result["details"].append({"id": rule_id, "name": rule.get("name"), "status": "failed", "error": str(e)})
+    return result
+
+# Module 4: Reassign Rate Limits
+def reassign_rate_limits(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
+    response = session.get(url)
+    response.raise_for_status()
+    rate_policies = response.json().get("ratePolicies", [])
+
+    result = {"processed": len(rate_policies), "successful": 0, "failed": 0, "details": []}
+
+    for policy in rate_policies:
+        if policy.get("policyId") != old_policy_id:
+            continue
+        rate_policy_id = policy.get("id")
+        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{rate_policy_id}"
+        policy["policyId"] = new_policy_id
+        try:
+            session.put(update_url, json=policy)
+            result["successful"] += 1
+            result["details"].append({"id": rate_policy_id, "name": policy.get("name"), "status": "success"})
+        except Exception as e:
+            result["failed"] += 1
+            result["details"].append({"id": rate_policy_id, "name": policy.get("name"), "status": "failed", "error": str(e)})
+    return result
+
+# Module 5: Reassign Reputation Profiles
+def reassign_reputation_profiles(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/reputation-profiles"
+    response = session.get(url)
+    response.raise_for_status()
+    profiles = response.json().get("reputationProfiles", [])
+
+    result = {"processed": len(profiles), "successful": 0, "failed": 0, "details": []}
+
+    for profile in profiles:
+        if profile.get("policyId") != old_policy_id:
+            continue
+        profile_id = profile.get("id")
+        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/reputation-profiles/{profile_id}"
+        profile["policyId"] = new_policy_id
+        try:
+            session.put(update_url, json=profile)
+            result["successful"] += 1
+            result["details"].append({"id": profile_id, "name": profile.get("name"), "status": "success"})
+        except Exception as e:
+            result["failed"] += 1
+            result["details"].append({"id": profile_id, "name": profile.get("name"), "status": "failed", "error": str(e)})
+    return result
+
+# Module 6: Reassign Slow POST Protection
+def reassign_slow_post_protection(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/slow-post"
+    response = session.get(url)
+    response.raise_for_status()
+    data = response.json()
+
+    result = {"processed": 1, "successful": 0, "failed": 0, "details": []}
+
+    if data.get("policyId") == old_policy_id:
+        data["policyId"] = new_policy_id
+        try:
+            session.put(url, json=data)
+            result["successful"] += 1
+            result["details"].append({"id": "slow-post", "status": "success"})
+        except Exception as e:
+            result["failed"] += 1
+            result["details"].append({"id": "slow-post", "status": "failed", "error": str(e)})
+    return result
+
+# Module 7: Reassign Bot Manager Settings
+def reassign_bot_manager_settings(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/bot-manager-settings"
     try:
         response = session.get(url)
         response.raise_for_status()
-        client_lists = response.json().get("clientLists", [])
+        settings = response.json().get("botManagerSettings", [])
     except Exception as e:
-        print(f"[ERROR] Failed to fetch client lists: {e}")
-        return summary
+        return {"processed": 0, "successful": 0, "failed": 0, "details": [{"status": "failed", "error": str(e)}]}
 
-    if not client_lists:
-        print("No client lists to reassign.")
-        return summary
+    reassigned = []
+    for item in settings:
+        if item.get("policyId") == old_policy_id:
+            item["policyId"] = new_policy_id
+            try:
+                put_response = session.put(url, json={"botManagerSettings": settings})
+                put_response.raise_for_status()
+                reassigned.append({"id": item.get("id", "N/A"), "status": "success"})
+            except Exception as e:
+                reassigned.append({"id": item.get("id", "N/A"), "status": "failed", "error": str(e)})
 
-    for cl in client_lists:
-        client_list_id = cl.get("id")
-        if not client_list_id:
-            continue
+    return {
+        "processed": len(settings),
+        "successful": sum(1 for r in reassigned if r["status"] == "success"),
+        "failed": sum(1 for r in reassigned if r["status"] == "failed"),
+        "details": reassigned
+    }
 
-        summary["processed"] += 1
+# Module 8: Reassign Akamai Bot Category Actions
+def reassign_akamai_bot_category_actions(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/akamai-bot-category-actions"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        actions = response.json().get("akamaiBotCategoryActions", [])
+    except Exception as e:
+        return {"processed": 0, "successful": 0, "failed": 0, "details": [{"status": "failed", "error": str(e)}]}
 
-        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/client-lists"
-        payload = {
-            "clientLists": [
-                {
-                    "id": client_list_id,
-                    "action": cl.get("action", "alert")
-                }
-            ]
-        }
+    reassigned = []
+    for item in actions:
+        if item.get("policyId") == old_policy_id:
+            item["policyId"] = new_policy_id
+            try:
+                put_response = session.put(url, json={"akamaiBotCategoryActions": actions})
+                put_response.raise_for_status()
+                reassigned.append({"id": item.get("id", "N/A"), "status": "success"})
+            except Exception as e:
+                reassigned.append({"id": item.get("id", "N/A"), "status": "failed", "error": str(e)})
 
-        print(f"[DEBUG] Reassigning client list {client_list_id} to new policy at {update_url}")
-        print(f"[DEBUG] Payload: {json.dumps(payload, indent=2)}")
+    return {
+        "processed": len(actions),
+        "successful": sum(1 for r in reassigned if r["status"] == "success"),
+        "failed": sum(1 for r in reassigned if r["status"] == "failed"),
+        "details": reassigned
+    }
 
-        try:
-            update_response = session.post(update_url, json=payload)
-            update_response.raise_for_status()
-            print(f"[INFO] Reassigned client list {client_list_id} to new policy.")
-            summary["successful"] += 1
-        except Exception as e:
-            print(f"[ERROR] Failed to reassign client list {client_list_id}: {e}")
-            summary["failed"].append(client_list_id)
+# Module 9: Reassign WAF Group Actions
+def reassign_waf_group_actions(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/waf/group-actions"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        actions = response.json().get("groupActions", [])
+    except Exception as e:
+        return {"processed": 0, "successful": 0, "failed": 0, "details": [{"status": "failed", "error": str(e)}]}
 
-    return summary
+    reassigned = []
+    for item in actions:
+        if item.get("policyId") == old_policy_id:
+            item["policyId"] = new_policy_id
+            try:
+                put_response = session.put(url, json={"groupActions": actions})
+                put_response.raise_for_status()
+                reassigned.append({"id": item.get("id", "N/A"), "status": "success"})
+            except Exception as e:
+                reassigned.append({"id": item.get("id", "N/A"), "status": "failed", "error": str(e)})
 
+    return {
+        "processed": len(actions),
+        "successful": sum(1 for r in reassigned if r["status"] == "success"),
+        "failed": sum(1 for r in reassigned if r["status"] == "failed"),
+        "details": reassigned
+    }
 
-result = reassign_client_lists(session, base_url, config_id, version, old_policy_id, new_policy_id)
+# Module 10: Reassign WAF Rule Exceptions
+def reassign_waf_rule_exceptions(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/waf/rules/exceptions"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        exceptions = response.json().get("ruleExceptions", [])
+    except Exception as e:
+        return {"processed": 0, "successful": 0, "failed": 0, "details": [{"status": "failed", "error": str(e)}]}
 
-print(f"Client List Reassignment Summary: {result}")
+    reassigned = []
+    for item in exceptions:
+        if item.get("policyId") == old_policy_id:
+            item["policyId"] = new_policy_id
+            try:
+                put_response = session.put(url, json={"ruleExceptions": exceptions})
+                put_response.raise_for_status()
+                reassigned.append({"id": item.get("id", "N/A"), "status": "success"})
+            except Exception as e:
+                reassigned.append({"id": item.get("id", "N/A"), "status": "failed", "error": str(e)})
+
+    return {
+        "processed": len(exceptions),
+        "successful": sum(1 for r in reassigned if r["status"] == "success"),
+        "failed": sum(1 for r in reassigned if r["status"] == "failed"),
+        "details": reassigned
+    }
+
+	
