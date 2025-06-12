@@ -1,77 +1,75 @@
-def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section):
-    summary = {"processed": 0, "successful": 0, "failed": 0, "details": []}
-    prefix = f"SC-{access_group}"
-
-    # Get all client lists
-    list_url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
-    response = session.get(list_url)
+def clone_and_rename_client_lists(session, base_url, config_id, version, access_group):
+    """
+    Clones all client lists containing 'Security Policy Template' in the name
+    and renames them with 'SC-<access_group>' replacing the prefix.
+    """
+    url = f"{base_url}/client-list/v1/lists?includeItems=true&includeDeprecated=true"
+    response = session.get(url)
     if not response.ok:
-        print(f"[ERROR] Failed to fetch client lists: {response.status_code} {response.text}")
-        return summary
+        raise Exception(f"[ERROR] Failed to fetch client lists: {response.status_code} - {response.text}")
 
     all_lists = response.json().get("content", [])
-    print(f"[DEBUG] Total client lists found: {len(all_lists)}")
-
-    # Step 1: Extract all template-based lists
     template_lists = [cl for cl in all_lists if "Security Policy Template" in cl.get("name", "")]
-    print(f"[DEBUG] Template-based lists to clone: {len(template_lists)}")
+    existing_lists = {cl["name"]: cl["listId"] for cl in all_lists}  # map for quick lookups
 
-    # Step 2: Loop and derive suffix, check for duplicates, and clone if needed
+    print(f"[INFO] Found {len(template_lists)} template lists to clone.")
+
+    results = {
+        "processed": len(template_lists),
+        "successful": 0,
+        "failed": 0,
+        "details": []
+    }
+
     for cl in template_lists:
-        original_name = cl.get("name", "")
-        list_id = cl.get("listId")
-        if not list_id:
-            print(f"[WARN] Skipping list with no listId: {original_name}")
+        original_name = cl["name"]
+        suffix = original_name.replace("Security Policy Template", "").strip()
+        new_name = f"SC-{access_group} {suffix}".strip()
+
+        if new_name in existing_lists:
+            print(f"[INFO] Skipping already existing list: {new_name} (listId={existing_lists[new_name]})")
             continue
 
-        suffix = original_name.split("Security Policy Template")[-1].strip()
-        new_name = f"{prefix} {suffix}".strip()
-
-        # Check if new name already exists
-        existing_names = [l.get("name") for l in all_lists]
-        if new_name in existing_names:
-            print(f"[INFO] Skipping already existing list: {new_name}")
-            continue
-
-        print(f"[DEBUG] Cloning '{original_name}' => '{new_name}'")
-
-        # Clone the list
-        clone_url = f"{base_url}/client-list/v1/lists/{list_id}/clone"
         payload = {
             "name": new_name,
-            "description": f"Cloned from {original_name}",
-            "accessGroup": access_group
+            "type": cl["type"],
+            "description": f"Cloned from '{original_name}' for onboarding automation.",
+            "list": cl.get("list", [])
         }
 
+        clone_url = f"{base_url}/client-list/v1/lists"
         try:
-            clone_resp = session.post(clone_url, json=payload)
-            summary["processed"] += 1
-            if clone_resp.ok:
-                result = clone_resp.json()
-                print(f"[SUCCESS] Cloned list: {new_name}")
-                summary["successful"] += 1
-                summary["details"].append({
-                    "id": result.get("listId"),
+            clone_response = session.post(clone_url, json=payload)
+            if clone_response.ok:
+                data = clone_response.json()
+                print(f"[SUCCESS] Cloned '{original_name}' -> '{new_name}' (listId={data['listId']})")
+                results["successful"] += 1
+                results["details"].append({
+                    "id": data["listId"],
                     "name": new_name,
                     "status": "success"
                 })
+
+                # Attempt activation in staging
+                if data.get("stagingStatus") != "ACTIVE":
+                    act_url = f"{base_url}/client-list/v1/lists/{data['listId']}/activate"
+                    act_payload = { "network": "staging" }
+                    act_response = session.post(act_url, json=act_payload)
+                    if act_response.ok:
+                        print(f"[INFO] Activated list '{new_name}' in staging.")
+                    else:
+                        print(f"[WARN] Failed to activate '{new_name}' in staging: {act_response.status_code} - {act_response.text}")
             else:
-                print(f"[ERROR] Failed to clone list '{original_name}': {clone_resp.status_code} {clone_resp.text}")
-                summary["failed"] += 1
-                summary["details"].append({
-                    "id": list_id,
-                    "name": new_name,
-                    "status": "failed",
-                    "error": clone_resp.text
-                })
+                raise Exception(clone_response.text)
+
         except Exception as e:
-            print(f"[EXCEPTION] Error cloning list '{original_name}': {e}")
-            summary["failed"] += 1
-            summary["details"].append({
-                "id": list_id,
-                "name": new_name,
+            print(f"[ERROR] Failed to clone list '{original_name}': {str(e)}")
+            results["failed"] += 1
+            results["details"].append({
+                "name": original_name,
+                "new_name": new_name,
                 "status": "failed",
                 "error": str(e)
             })
 
-    return summary
+    return results
