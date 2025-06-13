@@ -1,15 +1,82 @@
-replaced_any = False
-new_list = []
-for orig_id in netlist:
-    new_id = template_to_clone_id_map.get(orig_id)
-    if new_id:
-        print(f"[INFO] Replaced {section_key}.{key} ID {orig_id} → {new_id}")
-        new_list.append(new_id)
-        replaced_any = True
-    else:
-        new_list.append(orig_id)
+def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, template_to_clone_id_map):
+    """
+    Reassigns IP, GEO, ASN and block exception lists in the ip-geo-firewall section of a policy
+    using the provided template-to-clone ID map.
+    """
+    print("[INFO] RUNNING: reassign_ip_geo_asn_lists")
 
-if replaced_any:
-    section[key]["networkList"] = new_list
-    data[section_key] = section
-    updated = True
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall"
+
+    summary = {
+        "processed": 1,
+        "successful": 0,
+        "failed": 0,
+        "details": []
+    }
+
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        data = response.json()
+
+        updated = False
+
+        # Section keys and the possible keys under them that hold networkLists
+        controls = {
+            "geoControls": ["networkList"],
+            "ipControls": ["allowedIPNetworkLists", "blockedIPNetworkLists"],
+            "blockExceptions": ["networkList"]
+        }
+
+        for section_key, list_keys in controls.items():
+            section = data.get(section_key, {})
+
+            for key in list_keys:
+                # Some keys may be nested (e.g., blockExceptions["networkList"])
+                list_block = section.get(key, {})
+
+                if not isinstance(list_block, dict) or "networkList" not in list_block:
+                    print(f"[DEBUG] Skipping {section_key}.{key} (not a dict or no networkList key)")
+                    continue
+
+                original_ids = list_block.get("networkList", [])
+                if not original_ids:
+                    continue
+
+                new_ids = []
+                replaced_any = False
+
+                for orig_id in original_ids:
+                    new_id = template_to_clone_id_map.get(orig_id)
+                    if new_id:
+                        print(f"[INFO] Replaced {section_key}.{key} ID {orig_id} → {new_id}")
+                        new_ids.append(new_id)
+                        replaced_any = True
+                    else:
+                        new_ids.append(orig_id)
+
+                if replaced_any:
+                    list_block["networkList"] = new_ids
+                    section[key] = list_block
+                    data[section_key] = section
+                    updated = True
+
+        if updated:
+            put_response = session.put(url, json=data)
+            put_response.raise_for_status()
+            summary["successful"] += 1
+            summary["details"].append({"id": policy_id, "status": "success"})
+        else:
+            summary["details"].append({
+                "id": policy_id,
+                "status": "skipped",
+                "reason": "no matching template list IDs found"
+            })
+            print("[INFO] No matching template list IDs found, skipping reassignment.")
+
+    except Exception as e:
+        summary["failed"] += 1
+        summary["details"].append({"status": "failed", "error": str(e)})
+        print(f"[ERROR] Failed to reassign IP/GEO/ASN lists: {e}")
+
+    return summary
