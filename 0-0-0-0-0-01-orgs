@@ -1,43 +1,34 @@
 def build_cloned_list_id_map(session, base_url, access_group_prefix):
+    """
+    Builds a map of template listId → cloned listId for IP/GEO/ASN/Exceptions client lists.
+    """
     url = f"{base_url}/client-list/v1/lists"
     response = session.get(url)
     response.raise_for_status()
 
-    lists = response.json().get("listItems", [])
-    name_to_id = {lst["name"]: lst["uniqueId"] for lst in lists if "name" in lst and "uniqueId" in lst}
+    lists = response.json().get("content", [])
+    name_to_id = {lst["name"]: lst["listId"] for lst in lists if "name" in lst and "listId" in lst}
 
-    # These must match EXACTLY what the API is returning (copy from debug print if needed)
-    template_names = {
-        "Security Policy Template IP Block List": None,
-        "Security Policy Template Geo Block List": None,
-        "Security Policy Template IP Block List Exceptions": None
-    }
-
-    clone_names = {
-        f"SC-{access_group_prefix} IP Block List": None,
-        f"SC-{access_group_prefix} Geo Block List": None,
-        f"SC-{access_group_prefix} IP Block List Exceptions": None
-    }
-
-    print("\n[INFO] Matching hardcoded names from fetched client list:")
-    for name, uid in name_to_id.items():
-        if name in template_names:
-            template_names[name] = uid
-            print(f"[FOUND TEMPLATE] {name} : {uid}")
-        if name in clone_names:
-            clone_names[name] = uid
-            print(f"[FOUND CLONE]    {name} : {uid}")
-
-    # Build ID map
     id_map = {}
-    for template_name, template_id in template_names.items():
-        suffix = template_name.replace("Security Policy Template", "").strip()
-        clone_name = f"SC-{access_group_prefix} {suffix}"
-        clone_id = clone_names.get(clone_name)
-        if template_id and clone_id:
-            id_map[template_id] = clone_id
-            print(f"[MAPPED] {template_name} : {clone_name}")
-        else:
-            print(f"[SKIPPED] Could not find both IDs for: {template_name} : {clone_name}")
+
+    # Extract all template lists
+    for template_name, template_id in name_to_id.items():
+        if template_name.startswith("Security Policy Template"):
+            suffix = template_name.replace("Security Policy Template", "").strip()
+            expected_clone_name = f"SC-{access_group_prefix} {suffix}"
+
+            # Try to find the matching clone
+            for clone_name, clone_id in name_to_id.items():
+                if clone_name.strip().lower() == expected_clone_name.strip().lower():
+                    id_map[template_id] = clone_id
+                    print(f"[MAPPED] {template_name} → {clone_name}")
+                    break
+            else:
+                print(f"[WARN] Clone not found for: {template_name} (expected: {expected_clone_name})")
+
+    if not id_map:
+        print("[WARN] No template-to-clone client list mappings were created.")
+    else:
+        print(f"[INFO] Mapped {len(id_map)} client list(s) from template to clone.")
 
     return id_map
