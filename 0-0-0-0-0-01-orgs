@@ -1,7 +1,7 @@
 def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, template_to_clone_id_map):
     """
-    Reassigns IP, GEO, ASN and block exception lists in the ip-geo-firewall section of a policy
-    using the provided template-to-clone ID map.
+    Reassigns IP, GEO, ASN and exception lists in the ip-geo-firewall section
+    of the security policy using mapped clone list IDs.
     """
     print("[INFO] RUNNING: reassign_ip_geo_asn_lists")
 
@@ -21,25 +21,34 @@ def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, 
 
         updated = False
 
-        # Section keys and the possible keys under them that hold networkLists
+        # Section and keys to scan for client list IDs
         controls = {
-            "geoControls": ["networkList"],
-            "ipControls": ["allowedIPNetworkLists", "blockedIPNetworkLists"],
-            "blockExceptions": ["networkList"]
+            "geoControls": ["networkList"],  # flat list
+            "ipControls": ["allowedIPNetworkLists", "blockedIPNetworkLists"],  # nested
+            "blockExceptions": ["networkList"]  # nested
         }
 
         for section_key, list_keys in controls.items():
             section = data.get(section_key, {})
-
             for key in list_keys:
-                # Some keys may be nested (e.g., blockExceptions["networkList"])
-                list_block = section.get(key, {})
+                list_block = section.get(key)
 
-                if not isinstance(list_block, dict) or "networkList" not in list_block:
-                    print(f"[DEBUG] Skipping {section_key}.{key} (not a dict or no networkList key)")
+                # Case 1: nested dict with "networkList" key (ipControls, blockExceptions)
+                if isinstance(list_block, dict) and "networkList" in list_block:
+                    original_ids = list_block.get("networkList", [])
+                    list_container = list_block
+                    is_nested = True
+
+                # Case 2: flat list (geoControls.networkList)
+                elif isinstance(list_block, list):
+                    original_ids = list_block
+                    list_container = section
+                    is_nested = False
+
+                else:
+                    print(f"[DEBUG] Skipping {section_key}.{key} (not list or expected dict structure)")
                     continue
 
-                original_ids = list_block.get("networkList", [])
                 if not original_ids:
                     continue
 
@@ -56,8 +65,12 @@ def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, 
                         new_ids.append(orig_id)
 
                 if replaced_any:
-                    list_block["networkList"] = new_ids
-                    section[key] = list_block
+                    if is_nested:
+                        list_container["networkList"] = new_ids
+                        section[key] = list_container
+                    else:
+                        section[key] = new_ids
+
                     data[section_key] = section
                     updated = True
 
