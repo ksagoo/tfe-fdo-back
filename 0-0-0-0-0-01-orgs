@@ -1,83 +1,18 @@
-https://techdocs.akamai.com/application-security/reference/put-policy-ip-geo-firewall
-
 def build_cloned_list_id_map(session, base_url, access_group_prefix):
-    """
-    Returns a dict that maps known template client list IDs to their cloned equivalents.
-    """
-    url = f"{base_url}/appsec/v1/client-list"
+    url = f"{base_url}/client-list/v1/lists"
     response = session.get(url)
     response.raise_for_status()
 
-    lists = response.json().get("clientLists", [])
+    lists = response.json().get("listItems", [])
     id_map = {}
 
-    # Build {name → id}
-    name_to_id = {lst["name"]: lst["id"] for lst in lists if "name" in lst and "id" in lst}
+    name_to_id = {lst["name"]: lst["uniqueId"] for lst in lists if "name" in lst and "uniqueId" in lst}
 
     for name, template_id in name_to_id.items():
         if name.startswith("Security Policy Template"):
-            suffix = name.replace("Security Policy Template ", "")
+            suffix = name.replace("Security Policy Template ", "").strip()
             clone_name = f"SC-{access_group_prefix} {suffix}"
             if clone_name in name_to_id:
                 id_map[template_id] = name_to_id[clone_name]
 
-    print(f"[INFO] id_map: {id_map}")
     return id_map
-
-def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, template_to_clone_id_map):
-    print("[INFO] RUNNING: reassign_ip_geo_asn_lists")
-
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall"
-    summary = {
-        "processed": 1,
-        "successful": 0,
-        "failed": 0,
-        "details": []
-    }
-
-    try:
-        response = session.get(url)
-        response.raise_for_status()
-        data = response.json()
-        updated = False
-
-        # Process each block type
-        for section_key in ["ipControls", "geoControls", "asnControls", "blockExceptions"]:
-            control = data.get(section_key, {})
-            original_list = control.get("blockedClientList") or control.get("exceptedClientList")
-
-            if not original_list:
-                continue
-
-            new_list = []
-            for item in original_list:
-                orig_id = item.get("id")
-                if orig_id in template_to_clone_id_map:
-                    new_id = template_to_clone_id_map[orig_id]
-                    new_list.append({"id": new_id})
-                    updated = True
-                    print(f"[INFO] Replaced {section_key} list {orig_id} with {new_id}")
-                else:
-                    new_list.append(item)
-
-            # Update the correct key
-            if "blockedClientList" in control:
-                control["blockedClientList"] = new_list
-            elif "exceptedClientList" in control:
-                control["exceptedClientList"] = new_list
-
-            data[section_key] = control
-
-        if updated:
-            put_resp = session.put(url, json=data)
-            put_resp.raise_for_status()
-            summary["successful"] = 1
-            summary["details"].append({"status": "success", "updated": True})
-        else:
-            summary["details"].append({"status": "skipped", "reason": "no matching template list IDs found"})
-
-    except Exception as e:
-        summary["failed"] = 1
-        summary["details"].append({"status": "failed", "error": str(e)})
-
-    return summary
