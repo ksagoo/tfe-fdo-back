@@ -1,3 +1,5 @@
+https://techdocs.akamai.com/application-security/reference/put-policy-ip-geo-firewall
+
 def build_cloned_list_id_map(session, base_url, access_group_prefix):
     """
     Returns a dict that maps known template client list IDs to their cloned equivalents.
