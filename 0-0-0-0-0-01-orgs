@@ -1,38 +1,73 @@
-def reassign_low_post_count_rules(config_id, version, old_policy_id, new_policy_id, headers, base_url):
-    print(f"[INFO] Reassigning low post count rules from policy {old_policy_id} to {new_policy_id}...")
+def reassign_custom_rules(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    print("[INFO] RUNNING: reassign_custom_rules")
+
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{old_policy_id}/custom-rules"
+    summary = {
+        "processed": 0,
+        "successful": 0,
+        "failed": 0,
+        "details": []
+    }
 
     try:
-        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{old_policy_id}/custom-rules/low-post-count-rules"
-        response = requests.get(url, headers=headers)
+        response = session.get(url)
         response.raise_for_status()
+        data = response.json()
+        rules = data.get("customRules", [])
 
-        rules = response.json().get("rules", [])
         if not rules:
-            print(f"[INFO] No low post count rules found in policy {old_policy_id}, skipping.")
-            return {'policy_id': old_policy_id, 'status': 'skipped - no rules found'}
+            print(f"[INFO] No custom rules found for policy {old_policy_id}, skipping reassignment.")
+            return summary
 
-        success_count = 0
         for rule in rules:
+            summary["processed"] += 1
             rule_data = {k: v for k, v in rule.items() if k != "id"}
-            post_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/custom-rules/low-post-count-rules"
-            post_resp = requests.post(post_url, headers=headers, json=rule_data)
 
-            if post_resp.status_code == 201:
-                print(f"[INFO] Reassigned low post count rule to policy {new_policy_id}")
-                success_count += 1
-            else:
-                print(f"[WARNING] Failed to reassign rule — {post_resp.status_code}: {post_resp.text}")
-
-        return {'policy_id': old_policy_id, 'status': f'success - {success_count} rule(s) reassigned'}
+            post_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/custom-rules"
+            try:
+                post_resp = session.post(post_url, json=rule_data)
+                if post_resp.status_code == 201:
+                    summary["successful"] += 1
+                    summary["details"].append({
+                        "id": rule.get("id", "unknown"),
+                        "name": rule.get("name", "unnamed"),
+                        "status": "success"
+                    })
+                else:
+                    summary["failed"] += 1
+                    summary["details"].append({
+                        "id": rule.get("id", "unknown"),
+                        "name": rule.get("name", "unnamed"),
+                        "status": "failed",
+                        "error": post_resp.text
+                    })
+            except Exception as post_ex:
+                summary["failed"] += 1
+                summary["details"].append({
+                    "id": rule.get("id", "unknown"),
+                    "name": rule.get("name", "unnamed"),
+                    "status": "failed",
+                    "error": str(post_ex)
+                })
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            print(f"[INFO] Low post count rules not found for policy {old_policy_id}, skipping reassignment.")
-            return {'policy_id': old_policy_id, 'status': 'skipped - not found (404)'}
+            print(f"[INFO] Custom rules not found for policy {old_policy_id}, skipping reassignment.")
         else:
-            print(f"[ERROR] HTTP error during low post count rule reassignment: {str(e)}")
-            return {'policy_id': old_policy_id, 'status': f'error - {str(e)}'}
-
+            print(f"[ERROR] HTTP error while fetching custom rules: {str(e)}")
+            summary["failed"] += 1
+            summary["details"].append({
+                "id": "fetch",
+                "status": "failed",
+                "error": str(e)
+            })
     except Exception as ex:
-        print(f"[ERROR] Unexpected error during low post count rule reassignment: {str(ex)}")
-        return {'policy_id': old_policy_id, 'status': f'error - {str(ex)}'}
+        print(f"[ERROR] Unexpected error during custom rule reassignment: {str(ex)}")
+        summary["failed"] += 1
+        summary["details"].append({
+            "id": "fetch",
+            "status": "failed",
+            "error": str(ex)
+        })
+
+    return summary
