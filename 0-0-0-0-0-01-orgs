@@ -19,7 +19,7 @@ def build_cloned_list_id_map(session, base_url, access_group_prefix):
             if clone_name in name_to_id:
                 id_map[template_id] = name_to_id[clone_name]
 
-    print("[INFO] id_map: {id_map}")
+    print(f"[INFO] id_map: {id_map}")
     return id_map
 
 def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, template_to_clone_id_map):
