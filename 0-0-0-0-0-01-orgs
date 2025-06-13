@@ -1,15 +1,48 @@
+def reassign_custom_rules(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules"
+    response = session.get(url)
+    response.raise_for_status()
+    rules = response.json().get("customRules", [])
+
+    if not rules:
+        print(f"[INFO] No custom rules found for config {config_id}, version {version}")
+        return {"processed": 0, "successful": 0, "failed": 0, "details": []}
+
+    result = {"processed": len(rules), "successful": 0, "failed": 0, "details": []}
+
+    for rule in rules:
+        if rule.get("policyId") != old_policy_id:
+            continue
+
+        rule_id = rule.get("id")
+        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules/{rule_id}"
+        rule["policyId"] = new_policy_id
+
+        payload = {
+            "name": rule.get("name", ""),
+            "description": rule.get("description", ""),
+            "conditions": rule.get("conditions", []),
+            "ruleActions": rule.get("ruleActions", []),
+            "policyId": new_policy_id
+        }
+
+        try:
+            session.put(update_url, json=payload)
+            result["successful"] += 1
+            result["details"].append({"id": rule_id, "name": rule.get("name"), "status": "success"})
+        except Exception as e:
+            result["failed"] += 1
+            result["details"].append({"id": rule_id, "name": rule.get("name"), "status": "failed", "error": str(e)})
+
+    return result
+
 def reassign_rate_limits(session, base_url, config_id, version, old_policy_id, new_policy_id):
     url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
     response = session.get(url)
     response.raise_for_status()
     rate_policies = response.json().get("ratePolicies", [])
 
-    result = {
-        "processed": len(rate_policies),
-        "successful": 0,
-        "failed": 0,
-        "details": []
-    }
+    result = {"processed": len(rate_policies), "successful": 0, "failed": 0, "details": []}
 
     for policy in rate_policies:
         if policy.get("policyId") != old_policy_id:
@@ -22,18 +55,35 @@ def reassign_rate_limits(session, base_url, config_id, version, old_policy_id, n
         try:
             session.put(update_url, json=policy)
             result["successful"] += 1
-            result["details"].append({
-                "id": rate_policy_id,
-                "name": policy.get("name", ""),
-                "status": "success"
-            })
+            result["details"].append({"id": rate_policy_id, "name": policy.get("name"), "status": "success"})
         except Exception as e:
             result["failed"] += 1
-            result["details"].append({
-                "id": rate_policy_id,
-                "name": policy.get("name", ""),
-                "status": "failed",
-                "error": str(e)
-            })
+            result["details"].append({"id": rate_policy_id, "name": policy.get("name"), "status": "failed", "error": str(e)})
+
+    return result
+
+def reassign_reputation_profiles(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/reputation-profiles"
+    response = session.get(url)
+    response.raise_for_status()
+    profiles = response.json().get("reputationProfiles", [])
+
+    result = {"processed": len(profiles), "successful": 0, "failed": 0, "details": []}
+
+    for profile in profiles:
+        if profile.get("policyId") != old_policy_id:
+            continue
+
+        profile_id = profile.get("id")
+        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/reputation-profiles/{profile_id}"
+        profile["policyId"] = new_policy_id
+
+        try:
+            session.put(update_url, json=profile)
+            result["successful"] += 1
+            result["details"].append({"id": profile_id, "name": profile.get("name"), "status": "success"})
+        except Exception as e:
+            result["failed"] += 1
+            result["details"].append({"id": profile_id, "name": profile.get("name"), "status": "failed", "error": str(e)})
 
     return result
