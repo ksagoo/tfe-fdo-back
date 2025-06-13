@@ -1,7 +1,15 @@
-def reassign_waf_overrides(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    print("[INFO] RUNNING: reassign_waf_overrides")
+def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, cloned_list_map):
+    """
+    cloned_list_map = {
+        "Security Policy Template IP Block List": "SC-WPB-APAC-IN-CyberWASPTesting IP Block List",
+        "Security Policy Template Geo Block List": "SC-WPB-APAC-IN-CyberWASPTesting Geo Block List",
+        "Security Policy Template ASN Block List": "SC-WPB-APAC-IN-CyberWASPTesting ASN Block List"
+    }
+    """
 
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/waf/overrides"
+    print("[INFO] RUNNING: reassign_ip_geo_asn_lists")
+
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall"
     summary = {
         "processed": 0,
         "successful": 0,
@@ -12,45 +20,82 @@ def reassign_waf_overrides(session, base_url, config_id, version, old_policy_id,
     try:
         response = session.get(url)
         response.raise_for_status()
-        overrides = response.json().get("overrides", [])
+        data = response.json()
 
-        if not overrides:
-            print(f"[INFO] No WAF overrides found for policy {old_policy_id}, skipping.")
-            return summary
+        updated = False
 
-        reassigned = []
-        for override in overrides:
-            summary["processed"] += 1
-            if override.get("policyId") == old_policy_id:
-                override["policyId"] = new_policy_id
-                reassigned.append(override)
+        def replace_lists(list_type, current_lists):
+            updated_list_ids = []
+            for entry in current_lists:
+                list_name = entry.get("name")
+                if list_name in cloned_list_map:
+                    updated_list_ids.append({"id": cloned_list_map[list_name], "name": list_name})
+                else:
+                    updated_list_ids.append(entry)
+            return updated_list_ids
 
-        if reassigned:
-            put_resp = session.put(url, json={"overrides": reassigned})
+        if data.get("ipControls", {}).get("blockedClientList"):
+            data["ipControls"]["blockedClientList"] = replace_lists("ip", data["ipControls"]["blockedClientList"])
+            updated = True
+
+        if data.get("geoControls", {}).get("blockedClientList"):
+            data["geoControls"]["blockedClientList"] = replace_lists("geo", data["geoControls"]["blockedClientList"])
+            updated = True
+
+        if data.get("asnControls", {}).get("blockedClientList"):
+            data["asnControls"]["blockedClientList"] = replace_lists("asn", data["asnControls"]["blockedClientList"])
+            updated = True
+
+        summary["processed"] = 1
+
+        if updated:
+            put_resp = session.put(url, json=data)
             put_resp.raise_for_status()
-            summary["successful"] = len(reassigned)
-            summary["details"].append({
-                "id": "waf_overrides",
-                "status": "success",
-                "count": len(reassigned)
-            })
+            summary["successful"] = 1
+            summary["details"].append({"status": "success", "action": "reassigned client lists"})
+        else:
+            summary["details"].append({"status": "skipped", "reason": "no template client lists to replace"})
 
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            print(f"[INFO] No WAF overrides found (404), skipping reassignment.")
-        else:
-            summary["failed"] += 1
-            summary["details"].append({
-                "id": "waf_overrides",
-                "status": "failed",
-                "error": str(e)
-            })
+        summary["failed"] += 1
+        summary["details"].append({"status": "failed", "error": str(e)})
     except Exception as ex:
         summary["failed"] += 1
-        summary["details"].append({
-            "id": "waf_overrides",
-            "status": "failed",
-            "error": str(ex)
-        })
+        summary["details"].append({"status": "failed", "error": str(ex)})
 
     return summary
+
+def build_cloned_list_map(session, base_url, access_group_prefix):
+    """
+    Builds a map of template list names to cloned list IDs.
+    Example return:
+    {
+        "Security Policy Template IP Block List": "cloned-ip-list-id",
+        "Security Policy Template Geo Block List": "cloned-geo-list-id",
+        ...
+    }
+    """
+    print("[INFO] Fetching all client lists to build template → clone mapping...")
+
+    url = f"{base_url}/appsec/v1/client-list"
+    response = session.get(url)
+    response.raise_for_status()
+
+    lists = response.json().get("clientLists", [])
+    cloned_list_map = {}
+
+    for client_list in lists:
+        name = client_list.get("name", "")
+        list_id = client_list.get("id")
+
+        # Look for cloned versions that start with SC-<access_group> and match template suffix
+        if name.startswith(f"SC-{access_group_prefix}") and list_id:
+            # Extract the suffix: "SC-WPB-APAC-IN-CyberWASPTesting IP Block List" → "IP Block List"
+            suffix = name.replace(f"SC-{access_group_prefix} ", "")
+            # Reconstruct the original template name
+            template_name = f"Security Policy Template {suffix}"
+            cloned_list_map[template_name] = list_id
+
+    print(f"[INFO] Mapped {len(cloned_list_map)} client list(s) from templates to cloned versions.")
+    return cloned_list_map
+
