@@ -1,89 +1,38 @@
-def reassign_custom_rules(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules"
-    response = session.get(url)
-    response.raise_for_status()
-    rules = response.json().get("customRules", [])
+def reassign_low_post_count_rules(config_id, version, old_policy_id, new_policy_id, headers, base_url):
+    print(f"[INFO] Reassigning low post count rules from policy {old_policy_id} to {new_policy_id}...")
 
-    if not rules:
-        print(f"[INFO] No custom rules found for config {config_id}, version {version}")
-        return {"processed": 0, "successful": 0, "failed": 0, "details": []}
+    try:
+        url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{old_policy_id}/custom-rules/low-post-count-rules"
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
 
-    result = {"processed": len(rules), "successful": 0, "failed": 0, "details": []}
+        rules = response.json().get("rules", [])
+        if not rules:
+            print(f"[INFO] No low post count rules found in policy {old_policy_id}, skipping.")
+            return {'policy_id': old_policy_id, 'status': 'skipped - no rules found'}
 
-    for rule in rules:
-        if rule.get("policyId") != old_policy_id:
-            continue
+        success_count = 0
+        for rule in rules:
+            rule_data = {k: v for k, v in rule.items() if k != "id"}
+            post_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/custom-rules/low-post-count-rules"
+            post_resp = requests.post(post_url, headers=headers, json=rule_data)
 
-        rule_id = rule.get("id")
-        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/custom-rules/{rule_id}"
-        rule["policyId"] = new_policy_id
+            if post_resp.status_code == 201:
+                print(f"[INFO] Reassigned low post count rule to policy {new_policy_id}")
+                success_count += 1
+            else:
+                print(f"[WARNING] Failed to reassign rule — {post_resp.status_code}: {post_resp.text}")
 
-        payload = {
-            "name": rule.get("name", ""),
-            "description": rule.get("description", ""),
-            "conditions": rule.get("conditions", []),
-            "ruleActions": rule.get("ruleActions", []),
-            "policyId": new_policy_id
-        }
+        return {'policy_id': old_policy_id, 'status': f'success - {success_count} rule(s) reassigned'}
 
-        try:
-            session.put(update_url, json=payload)
-            result["successful"] += 1
-            result["details"].append({"id": rule_id, "name": rule.get("name"), "status": "success"})
-        except Exception as e:
-            result["failed"] += 1
-            result["details"].append({"id": rule_id, "name": rule.get("name"), "status": "failed", "error": str(e)})
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            print(f"[INFO] Low post count rules not found for policy {old_policy_id}, skipping reassignment.")
+            return {'policy_id': old_policy_id, 'status': 'skipped - not found (404)'}
+        else:
+            print(f"[ERROR] HTTP error during low post count rule reassignment: {str(e)}")
+            return {'policy_id': old_policy_id, 'status': f'error - {str(e)}'}
 
-    return result
-
-def reassign_rate_limits(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
-    response = session.get(url)
-    response.raise_for_status()
-    rate_policies = response.json().get("ratePolicies", [])
-
-    result = {"processed": len(rate_policies), "successful": 0, "failed": 0, "details": []}
-
-    for policy in rate_policies:
-        if policy.get("policyId") != old_policy_id:
-            continue
-
-        rate_policy_id = policy.get("id")
-        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{rate_policy_id}"
-        policy["policyId"] = new_policy_id
-
-        try:
-            session.put(update_url, json=policy)
-            result["successful"] += 1
-            result["details"].append({"id": rate_policy_id, "name": policy.get("name"), "status": "success"})
-        except Exception as e:
-            result["failed"] += 1
-            result["details"].append({"id": rate_policy_id, "name": policy.get("name"), "status": "failed", "error": str(e)})
-
-    return result
-
-def reassign_reputation_profiles(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/reputation-profiles"
-    response = session.get(url)
-    response.raise_for_status()
-    profiles = response.json().get("reputationProfiles", [])
-
-    result = {"processed": len(profiles), "successful": 0, "failed": 0, "details": []}
-
-    for profile in profiles:
-        if profile.get("policyId") != old_policy_id:
-            continue
-
-        profile_id = profile.get("id")
-        update_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/reputation-profiles/{profile_id}"
-        profile["policyId"] = new_policy_id
-
-        try:
-            session.put(update_url, json=profile)
-            result["successful"] += 1
-            result["details"].append({"id": profile_id, "name": profile.get("name"), "status": "success"})
-        except Exception as e:
-            result["failed"] += 1
-            result["details"].append({"id": profile_id, "name": profile.get("name"), "status": "failed", "error": str(e)})
-
-    return result
+    except Exception as ex:
+        print(f"[ERROR] Unexpected error during low post count rule reassignment: {str(ex)}")
+        return {'policy_id': old_policy_id, 'status': f'error - {str(ex)}'}
