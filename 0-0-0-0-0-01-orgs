@@ -1,7 +1,7 @@
-def reassign_custom_rules(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    print("[INFO] RUNNING: reassign_custom_rules")
+def reassign_slow_post_protection(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    print("[INFO] RUNNING: reassign_slow_post_protection")
 
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{old_policy_id}/custom-rules"
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/slow-post"
     summary = {
         "processed": 0,
         "successful": 0,
@@ -13,57 +13,43 @@ def reassign_custom_rules(session, base_url, config_id, version, old_policy_id, 
         response = session.get(url)
         response.raise_for_status()
         data = response.json()
-        rules = data.get("customRules", [])
 
-        if not rules:
-            print(f"[INFO] No custom rules found for policy {old_policy_id}, skipping reassignment.")
-            return summary
+        # If the slow post rule belongs to the old policy, reassign it
+        if data.get("policyId") == old_policy_id:
+            data["policyId"] = new_policy_id
+            summary["processed"] = 1
 
-        for rule in rules:
-            summary["processed"] += 1
-            rule_data = {k: v for k, v in rule.items() if k != "id"}
-
-            post_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{new_policy_id}/custom-rules"
             try:
-                post_resp = session.post(post_url, json=rule_data)
-                if post_resp.status_code == 201:
-                    summary["successful"] += 1
-                    summary["details"].append({
-                        "id": rule.get("id", "unknown"),
-                        "name": rule.get("name", "unnamed"),
-                        "status": "success"
-                    })
-                else:
-                    summary["failed"] += 1
-                    summary["details"].append({
-                        "id": rule.get("id", "unknown"),
-                        "name": rule.get("name", "unnamed"),
-                        "status": "failed",
-                        "error": post_resp.text
-                    })
-            except Exception as post_ex:
-                summary["failed"] += 1
+                session.put(url, json=data)
+                summary["successful"] = 1
                 summary["details"].append({
-                    "id": rule.get("id", "unknown"),
-                    "name": rule.get("name", "unnamed"),
+                    "id": "slow-post",
+                    "status": "success"
+                })
+            except Exception as e:
+                summary["failed"] = 1
+                summary["details"].append({
+                    "id": "slow-post",
                     "status": "failed",
-                    "error": str(post_ex)
+                    "error": str(e)
                 })
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            print(f"[INFO] Custom rules not found for policy {old_policy_id}, skipping reassignment.")
+            print(f"[INFO] No slow POST rule found for policy {old_policy_id}, skipping reassignment.")
+            # Return empty summary — still a successful skip
+            return summary
         else:
-            print(f"[ERROR] HTTP error while fetching custom rules: {str(e)}")
-            summary["failed"] += 1
+            print(f"[ERROR] HTTP error while fetching slow POST rule: {str(e)}")
+            summary["failed"] = 1
             summary["details"].append({
                 "id": "fetch",
                 "status": "failed",
                 "error": str(e)
             })
     except Exception as ex:
-        print(f"[ERROR] Unexpected error during custom rule reassignment: {str(ex)}")
-        summary["failed"] += 1
+        print(f"[ERROR] Unexpected error during slow POST reassignment: {str(ex)}")
+        summary["failed"] = 1
         summary["details"].append({
             "id": "fetch",
             "status": "failed",
