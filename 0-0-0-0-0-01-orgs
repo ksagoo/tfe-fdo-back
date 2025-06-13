@@ -6,31 +6,26 @@ def build_cloned_list_id_map(session, base_url, access_group_prefix):
     lists = response.json().get("listItems", [])
     id_map = {}
 
+    # Convert into name → ID dict
     name_to_id = {lst["name"]: lst["uniqueId"] for lst in lists if "name" in lst and "uniqueId" in lst}
 
-    print("\n[DEBUG] All client list names found:")
-    for name in name_to_id:
-        print(f" - {name}")
+    # Known mappings
+    required_mappings = {
+        "Security Policy Template IP Block List": f"SC-{access_group_prefix} IP Block List",
+        "Security Policy Template Geo Block List": f"SC-{access_group_prefix} Geo Block List",
+        "Security Policy Template IP Block List Exceptions": f"SC-{access_group_prefix} IP Block List Exceptions"
+    }
 
-    for template_name, template_id in name_to_id.items():
-        if template_name.startswith("Security Policy Template"):
-            suffix = template_name.replace("Security Policy Template", "").strip()
-            expected_clone = f"SC-{access_group_prefix} {suffix}"
+    print("\n[INFO] Attempting to map known templates to expected clones...")
 
-            print(f"[DEBUG] Template: '{template_name}'")
-            print(f"[DEBUG] Expecting clone name: '{expected_clone}'")
+    for template_name, clone_name in required_mappings.items():
+        template_id = name_to_id.get(template_name)
+        clone_id = name_to_id.get(clone_name)
 
-            matched = False
-            for clone_name, clone_id in name_to_id.items():
-                print(f"  ⮑ Checking against clone: '{clone_name}'")
-                if clone_name.strip().lower() == expected_clone.strip().lower():
-                    id_map[template_id] = clone_id
-                    print(f"[MATCHED] '{template_name}' → '{clone_name}'")
-                    matched = True
-                    break
-            if not matched:
-                print(f"[MISS] No match for template '{template_name}'")
+        if template_id and clone_id:
+            id_map[template_id] = clone_id
+            print(f"[MATCHED] {template_name} → {clone_name}")
+        else:
+            print(f"[WARN] Could not find both IDs for: {template_name} → {clone_name}")
 
-    if not id_map:
-        print("[WARN] No matches found from templates to cloned client list names.")
     return id_map
