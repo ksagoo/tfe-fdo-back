@@ -1,33 +1,79 @@
-def run_all_reassignments(session, base_url, config_id, version, old_policy_id, new_policy_id, access_group_prefix):
-    all_results = {}
+[03:34, 13/06/2025] Kuldeep: def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, cloned_list_id_map):
+    """
+    cloned_list_id_map = {
+        "template_list_id_1": "cloned_list_id_1",
+        "template_list_id_2": "cloned_list_id_2",
+        ...
+    }
+    """
 
-    # 1. Build client list map from templates to cloned IDs
+    print("[INFO] RUNNING: reassign_ip_geo_asn_lists")
+
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall"
+    summary = {
+        "processed": 1,
+        "successful": 0,
+        "failed": 0,
+        "details": []
+    }
+
     try:
-        cloned_list_map = build_cloned_list_map(session, base_url, access_group_prefix)
+        response = session.get(url)
+        response.raise_for_status()
+        data = response.json()
+        updated = False
+
+        def update_list(control_key):
+            current_lists = data.get(control_key, {}).get("blockedClientList", [])
+            new_lists = []
+            for entry in current_lists:
+                list_id = entry.get("id")
+                if list_id in cloned_list_id_map:
+                    new_lists.append({"id": cloned_list_id_map[list_id]})
+                    print(f"[INFO] Replaced {control_key} list {list_id} with {cloned_list_id_map[list_id]}")
+                    nonlocal updated
+                    updated = True
+                else:
+                    new_lists.append(entry)
+            if control_key in data and new_lists:
+                data[control_key]["blockedClientList"] = new_lists
+
+        update_list("ipControls")
+        update_list("geoControls")
+        update_list("asnControls")
+
+        if updated:
+            put_resp = session.put(url, json=data)
+            put_resp.raise_for_status()
+            summary["successful"] = 1
+            summary["details"].append({"status": "success", "action": "updated IP/GEO/ASN lists"})
+        else:
+            summary["details"].append({"status": "skipped", "reason": "no matching template list IDs found"})
+
     except Exception as e:
-        print(f"[ERROR] Failed to build cloned client list map: {str(e)}")
-        cloned_list_map = {}
+        summary["failed"] = 1
+        summary["details"].append({"status": "failed", "error": str(e)})
 
-    # 2. Run all reassignment modules
-    all_results["clone_client_lists"] = clone_and_rename_client_lists(session, base_url, access_group_prefix)
-    all_results["match_targets"] = reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id)
-    all_results["custom_rules"] = reassign_custom_rules(session, base_url, config_id, version, old_policy_id, new_policy_id)
-    all_results["rate_limits"] = reassign_rate_limit_rules(session, base_url, config_id, version, old_policy_id, new_policy_id)
-    all_results["reputation_profiles"] = reassign_reputation_profiles(session, base_url, config_id, version, old_policy_id, new_policy_id)
-    all_results["slow_post_protection"] = reassign_slow_post_protection(session, base_url, config_id, version, old_policy_id, new_policy_id)
-    all_results["akamai_bot_category_actions"] = reassign_akamai_bot_category_actions(session, base_url, config_id, version, old_policy_id, new_policy_id)
-    all_results["waf_group_actions"] = reassign_waf_group_actions(session, base_url, config_id, version, old_policy_id, new_policy_id)
-    all_results["waf_rule_exceptions"] = reassign_waf_rule_exceptions(session, base_url, config_id, version, old_policy_id, new_policy_id)
-    all_results["waf_overrides"] = reassign_waf_overrides(session, base_url, config_id, version, old_policy_id, new_policy_id)
-    all_results["ip_geo_asn_lists"] = reassign_ip_geo_asn_lists(session, base_url, config_id, version, new_policy_id, cloned_list_map)
+    return summary
+[03:34, 13/06/2025] Kuldeep: def build_cloned_list_id_map(session, base_url, access_group_prefix):
+    url = f"{base_url}/appsec/v1/client-list"
+    response = session.get(url)
+    response.raise_for_status()
 
-    # 3. Print final summary
-    print("\n=== Onboarding Reassignment Summary ===")
-    for module, result in all_results.items():
-        print(f"\nModule: {module}")
-        print(f"Processed: {result['processed']}, Successful: {result['successful']}, Failed: {result['failed']}")
-        if result.get("details"):
-            for d in result["details"]:
-                print(f"  - {d}")
+    lists = response.json().get("clientLists", [])
+    template_to_clone = {}
 
-    return all_results
+    for client_list in lists:
+        name = client_list.get("name")
+        list_id = client_list.get("id")
+
+        # Find template name
+        if name.startswith("Security Policy Template") and list_id:
+            suffix = name.replace("Security Policy Template ", "").strip()
+            expected_clone_name = f"SC-{access_group_prefix} {suffix}"
+            # Look for clone with this suffix
+            for candidate in lists:
+                if candidate.get("name") == expected_clone_name:
+                    template_to_clone[list_id] = candidate.get("id")
+
+    return template_to_clone
