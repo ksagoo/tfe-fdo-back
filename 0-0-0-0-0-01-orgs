@@ -1,101 +1,33 @@
-def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, cloned_list_map):
-    """
-    cloned_list_map = {
-        "Security Policy Template IP Block List": "SC-WPB-APAC-IN-CyberWASPTesting IP Block List",
-        "Security Policy Template Geo Block List": "SC-WPB-APAC-IN-CyberWASPTesting Geo Block List",
-        "Security Policy Template ASN Block List": "SC-WPB-APAC-IN-CyberWASPTesting ASN Block List"
-    }
-    """
+def run_all_reassignments(session, base_url, config_id, version, old_policy_id, new_policy_id, access_group_prefix):
+    all_results = {}
 
-    print("[INFO] RUNNING: reassign_ip_geo_asn_lists")
-
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall"
-    summary = {
-        "processed": 0,
-        "successful": 0,
-        "failed": 0,
-        "details": []
-    }
-
+    # 1. Build client list map from templates to cloned IDs
     try:
-        response = session.get(url)
-        response.raise_for_status()
-        data = response.json()
+        cloned_list_map = build_cloned_list_map(session, base_url, access_group_prefix)
+    except Exception as e:
+        print(f"[ERROR] Failed to build cloned client list map: {str(e)}")
+        cloned_list_map = {}
 
-        updated = False
+    # 2. Run all reassignment modules
+    all_results["clone_client_lists"] = clone_and_rename_client_lists(session, base_url, access_group_prefix)
+    all_results["match_targets"] = reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id)
+    all_results["custom_rules"] = reassign_custom_rules(session, base_url, config_id, version, old_policy_id, new_policy_id)
+    all_results["rate_limits"] = reassign_rate_limit_rules(session, base_url, config_id, version, old_policy_id, new_policy_id)
+    all_results["reputation_profiles"] = reassign_reputation_profiles(session, base_url, config_id, version, old_policy_id, new_policy_id)
+    all_results["slow_post_protection"] = reassign_slow_post_protection(session, base_url, config_id, version, old_policy_id, new_policy_id)
+    all_results["akamai_bot_category_actions"] = reassign_akamai_bot_category_actions(session, base_url, config_id, version, old_policy_id, new_policy_id)
+    all_results["waf_group_actions"] = reassign_waf_group_actions(session, base_url, config_id, version, old_policy_id, new_policy_id)
+    all_results["waf_rule_exceptions"] = reassign_waf_rule_exceptions(session, base_url, config_id, version, old_policy_id, new_policy_id)
+    all_results["waf_overrides"] = reassign_waf_overrides(session, base_url, config_id, version, old_policy_id, new_policy_id)
+    all_results["ip_geo_asn_lists"] = reassign_ip_geo_asn_lists(session, base_url, config_id, version, new_policy_id, cloned_list_map)
 
-        def replace_lists(list_type, current_lists):
-            updated_list_ids = []
-            for entry in current_lists:
-                list_name = entry.get("name")
-                if list_name in cloned_list_map:
-                    updated_list_ids.append({"id": cloned_list_map[list_name], "name": list_name})
-                else:
-                    updated_list_ids.append(entry)
-            return updated_list_ids
+    # 3. Print final summary
+    print("\n=== Onboarding Reassignment Summary ===")
+    for module, result in all_results.items():
+        print(f"\nModule: {module}")
+        print(f"Processed: {result['processed']}, Successful: {result['successful']}, Failed: {result['failed']}")
+        if result.get("details"):
+            for d in result["details"]:
+                print(f"  - {d}")
 
-        if data.get("ipControls", {}).get("blockedClientList"):
-            data["ipControls"]["blockedClientList"] = replace_lists("ip", data["ipControls"]["blockedClientList"])
-            updated = True
-
-        if data.get("geoControls", {}).get("blockedClientList"):
-            data["geoControls"]["blockedClientList"] = replace_lists("geo", data["geoControls"]["blockedClientList"])
-            updated = True
-
-        if data.get("asnControls", {}).get("blockedClientList"):
-            data["asnControls"]["blockedClientList"] = replace_lists("asn", data["asnControls"]["blockedClientList"])
-            updated = True
-
-        summary["processed"] = 1
-
-        if updated:
-            put_resp = session.put(url, json=data)
-            put_resp.raise_for_status()
-            summary["successful"] = 1
-            summary["details"].append({"status": "success", "action": "reassigned client lists"})
-        else:
-            summary["details"].append({"status": "skipped", "reason": "no template client lists to replace"})
-
-    except requests.exceptions.HTTPError as e:
-        summary["failed"] += 1
-        summary["details"].append({"status": "failed", "error": str(e)})
-    except Exception as ex:
-        summary["failed"] += 1
-        summary["details"].append({"status": "failed", "error": str(ex)})
-
-    return summary
-
-def build_cloned_list_map(session, base_url, access_group_prefix):
-    """
-    Builds a map of template list names to cloned list IDs.
-    Example return:
-    {
-        "Security Policy Template IP Block List": "cloned-ip-list-id",
-        "Security Policy Template Geo Block List": "cloned-geo-list-id",
-        ...
-    }
-    """
-    print("[INFO] Fetching all client lists to build template → clone mapping...")
-
-    url = f"{base_url}/appsec/v1/client-list"
-    response = session.get(url)
-    response.raise_for_status()
-
-    lists = response.json().get("clientLists", [])
-    cloned_list_map = {}
-
-    for client_list in lists:
-        name = client_list.get("name", "")
-        list_id = client_list.get("id")
-
-        # Look for cloned versions that start with SC-<access_group> and match template suffix
-        if name.startswith(f"SC-{access_group_prefix}") and list_id:
-            # Extract the suffix: "SC-WPB-APAC-IN-CyberWASPTesting IP Block List" → "IP Block List"
-            suffix = name.replace(f"SC-{access_group_prefix} ", "")
-            # Reconstruct the original template name
-            template_name = f"Security Policy Template {suffix}"
-            cloned_list_map[template_name] = list_id
-
-    print(f"[INFO] Mapped {len(cloned_list_map)} client list(s) from templates to cloned versions.")
-    return cloned_list_map
-
+    return all_results
