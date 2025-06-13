@@ -1,7 +1,7 @@
-[02:53, 13/06/2025] Kuldeep: def reassign_akamai_bot_category_actions(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    print("[INFO] RUNNING: reassign_akamai_bot_category_actions")
+def reassign_waf_rule_exceptions(session, base_url, config_id, version, old_policy_id, new_policy_id):
+    print("[INFO] RUNNING: reassign_waf_rule_exceptions")
 
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/akamai-bot-category-actions"
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/waf/rules/exceptions"
     summary = {
         "processed": 0,
         "successful": 0,
@@ -12,71 +12,45 @@
     try:
         response = session.get(url)
         response.raise_for_status()
-        actions = response.json().get("actions", [])
+        exceptions = response.json().get("ruleExceptions", [])
 
-        for action in actions:
+        if not exceptions:
+            print(f"[INFO] No WAF rule exceptions found for policy {old_policy_id}, skipping.")
+            return summary
+
+        reassigned = []
+        for rule in exceptions:
             summary["processed"] += 1
-            action["policyId"] = new_policy_id
-            try:
-                put_resp = session.put(url, json={"actions": actions})
-                put_resp.raise_for_status()
-                summary["successful"] += 1
-                summary["details"].append({"id": "bot_category_actions", "status": "success"})
-                break  # all at once
-            except Exception as e:
-                summary["failed"] += 1
-                summary["details"].append({"id": "bot_category_actions", "status": "failed", "error": str(e)})
-                break
+            if rule.get("policyId") == old_policy_id:
+                rule["policyId"] = new_policy_id
+                reassigned.append(rule)
+
+        if reassigned:
+            put_resp = session.put(url, json={"ruleExceptions": reassigned})
+            put_resp.raise_for_status()
+            summary["successful"] = len(reassigned)
+            summary["details"].append({
+                "id": "waf_rule_exceptions",
+                "status": "success",
+                "count": len(reassigned)
+            })
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            print(f"[INFO] No Akamai bot category actions found for policy {old_policy_id}, skipping.")
+            print(f"[INFO] No WAF rule exceptions found (404), skipping reassignment.")
         else:
             summary["failed"] += 1
-            summary["details"].append({"id": "bot_category_actions", "status": "failed", "error": str(e)})
+            summary["details"].append({
+                "id": "waf_rule_exceptions",
+                "status": "failed",
+                "error": str(e)
+            })
     except Exception as ex:
         summary["failed"] += 1
-        summary["details"].append({"id": "bot_category_actions", "status": "failed", "error": str(ex)})
-
-    return summary
-[02:53, 13/06/2025] Kuldeep: def reassign_waf_group_actions(session, base_url, config_id, version, old_policy_id, new_policy_id):
-    print("[INFO] RUNNING: reassign_waf_group_actions")
-
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/waf/group-actions"
-    summary = {
-        "processed": 0,
-        "successful": 0,
-        "failed": 0,
-        "details": []
-    }
-
-    try:
-        response = session.get(url)
-        response.raise_for_status()
-        group_actions = response.json().get("groupActions", [])
-
-        for group in group_actions:
-            summary["processed"] += 1
-            group["policyId"] = new_policy_id
-            try:
-                put_resp = session.put(url, json={"groupActions": group_actions})
-                put_resp.raise_for_status()
-                summary["successful"] += 1
-                summary["details"].append({"id": "waf_group_actions", "status": "success"})
-                break  # sent all at once
-            except Exception as e:
-                summary["failed"] += 1
-                summary["details"].append({"id": "waf_group_actions", "status": "failed", "error": str(e)})
-                break
-
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            print(f"[INFO] No WAF group actions found for policy {old_policy_id}, skipping.")
-        else:
-            summary["failed"] += 1
-            summary["details"].append({"id": "waf_group_actions", "status": "failed", "error": str(e)})
-    except Exception as ex:
-        summary["failed"] += 1
-        summary["details"].append({"id": "waf_group_actions", "status": "failed", "error": str(ex)})
+        summary["details"].append({
+            "id": "waf_rule_exceptions",
+            "status": "failed",
+            "error": str(ex)
+        })
 
     return summary
