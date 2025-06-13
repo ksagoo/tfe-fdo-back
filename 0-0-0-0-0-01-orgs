@@ -1,21 +1,69 @@
-for section_key in ["geoControls", "ipControls", "blockExceptions"]:
-    control = data.get(section_key, {})
-    for list_key in ["networkList", "allowedIPNetworkLists", "blockedIPNetworkLists"]:
-        if list_key in control:
-            original_list = control[list_key].get("networkList", [])
-            if not original_list:
-                continue
+def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, template_to_clone_id_map):
+    """
+    Reassigns IP, GEO, ASN and block exception lists in the ip-geo-firewall section of a policy
+    using the provided template-to-clone ID map.
+    """
+    print("[INFO] RUNNING: reassign_ip_geo_asn_lists")
 
-            new_list = []
-            updated = False
-            for orig_id in original_list:
-                new_id = template_to_clone_id_map.get(orig_id)
-                if new_id:
-                    print(f"[INFO] Replaced {section_key}.{list_key} ID {orig_id} → {new_id}")
-                    new_list.append(new_id)
-                    updated = True
-                else:
-                    new_list.append(orig_id)
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall"
 
-            if updated:
-                control[list_key]["networkList"] = new_list
+    summary = {
+        "processed": 1,
+        "successful": 0,
+        "failed": 0,
+        "details": []
+    }
+
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        data = response.json()
+
+        updated = False
+
+        # Section keys and where to find networkList arrays
+        controls = {
+            "geoControls": ["networkList"],
+            "ipControls": ["allowedIPNetworkLists", "blockedIPNetworkLists"],
+            "blockExceptions": ["networkList"]
+        }
+
+        for section_key, list_keys in controls.items():
+            section = data.get(section_key, {})
+            for key in list_keys:
+                if key not in section:
+                    continue
+
+                netlist = section[key].get("networkList", [])
+                if not netlist:
+                    continue
+
+                new_list = []
+                for orig_id in netlist:
+                    new_id = template_to_clone_id_map.get(orig_id)
+                    if new_id:
+                        print(f"[INFO] Replaced {section_key}.{key} ID {orig_id} → {new_id}")
+                        new_list.append(new_id)
+                        updated = True
+                    else:
+                        new_list.append(orig_id)
+
+                # Update the list back
+                section[key]["networkList"] = new_list
+                data[section_key] = section  # ensure reassigned in top-level JSON
+
+        if updated:
+            put_response = session.put(url, json=data)
+            put_response.raise_for_status()
+            summary["successful"] += 1
+            summary["details"].append({"id": policy_id, "status": "success"})
+        else:
+            summary["details"].append({"id": policy_id, "status": "skipped", "reason": "no matching template list IDs found"})
+            print("[INFO] No matching template list IDs found, skipping reassignment.")
+
+    except Exception as e:
+        summary["failed"] += 1
+        summary["details"].append({"status": "failed", "error": str(e)})
+        print(f"[ERROR] Failed to reassign IP/GEO/ASN lists: {e}")
+
+    return summary
