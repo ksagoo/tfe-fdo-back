@@ -1,3 +1,6 @@
+url = "https://hostname/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/behavioral-ddos"
+
+
 def reassign_dos_protection_rate_policies(session, base_url, config_id, version, access_group, template_policy_name_prefix="Security Policy Template"):
 
     print("[INFO] RUNNING: reassign_dos_protection_rate_policies")
