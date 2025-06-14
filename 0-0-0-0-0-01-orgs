@@ -1,99 +1,80 @@
-def reassign_ip_geo_asn_lists(session, base_url, config_id, version, policy_id, template_to_clone_id_map):
-    print("[INFO] RUNNING: reassign_ip_geo_asn_lists")
+def reassign_dos_protection_rate_policies(session, base_url, config_id, version, access_group, template_policy_name_prefix="Security Policy Template"):
 
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{policy_id}/ip-geo-firewall"
-    response = session.get(url)
-    response.raise_for_status()
-    data = response.json()
+    print("[INFO] RUNNING: reassign_dos_protection_rate_policies")
+
+    list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/dos-rates"
+    clone_url = f"{base_url}/appsec/v1/rate-policies/clone"
+    policy_url_template = f"{base_url}/appsec/v1/rate-policies/{{policy_id}}"
 
     summary = {
-        "processed": 1,
+        "processed": 0,
         "successful": 0,
         "failed": 0,
         "details": []
     }
 
-    updated = False
+    try:
+        response = session.get(list_url)
+        response.raise_for_status()
+        policies = response.json().get("ratePolicies", [])
+        updated_policies = []
 
-    controls = {
-        "geoControls": ["blockedIPNetworkLists"],
-        "ipControls": ["allowedIPNetworkLists", "blockedIPNetworkLists"],
-        "blockExceptions": ["networkList"],
-        "asnControls": ["networkList"]
-    }
+        for policy in policies:
+            orig_name = policy["name"]
+            policy_id = policy["id"]
 
-    for section_key, list_keys in controls.items():
-        section = data.get(section_key, {})
-        for key in list_keys:
-            list_block = section.get(key)
+            if not orig_name.startswith(template_policy_name_prefix):
+                updated_policies.append(policy_id)  # Keep existing non-template policy
+                continue
 
-            # Case 1: list of dicts (geoControls)
-            if isinstance(list_block, list) and all(isinstance(entry, dict) and "networkList" in entry for entry in list_block):
-                updated_entries = []
-                replaced_any = False
-                for entry in list_block:
-                    orig_ids = entry.get("networkList", [])
-                    new_ids = []
-                    for orig_id in orig_ids:
-                        new_id = template_to_clone_id_map.get(orig_id, orig_id)
-                        if new_id != orig_id:
-                            print(f"[INFO] Replaced {section_key}.{key} ID {orig_id} → {new_id}")
-                            replaced_any = True
-                        new_ids.append(new_id)
-                    updated_entries.append({"networkList": new_ids})
-                if replaced_any:
-                    section[key] = updated_entries
-                    data[section_key] = section
-                    updated = True
+            suffix = orig_name.replace(template_policy_name_prefix, "").strip()
+            clone_name = f"SC-{access_group}-{suffix}"
 
-            # Case 2: dict with 'networkList' (ipControls, blockExceptions)
-            elif isinstance(list_block, dict) and "networkList" in list_block:
-                orig_ids = list_block.get("networkList", [])
-                new_ids = []
-                replaced_any = False
-                for orig_id in orig_ids:
-                    new_id = template_to_clone_id_map.get(orig_id, orig_id)
-                    if new_id != orig_id:
-                        print(f"[INFO] Replaced {section_key}.{key} ID {orig_id} → {new_id}")
-                        replaced_any = True
-                    new_ids.append(new_id)
-                if replaced_any:
-                    list_block["networkList"] = new_ids
-                    section[key] = list_block
-                    data[section_key] = section
-                    updated = True
+            # Check if already cloned
+            existing = next((p for p in policies if p["name"] == clone_name), None)
+            if existing:
+                print(f"[INFO] Clone already exists: {clone_name}")
+                updated_policies.append(existing["id"])
+                continue
 
-            # Case 3: flat list (asnControls)
-            elif isinstance(list_block, list):
-                new_ids = []
-                replaced_any = False
-                for orig_id in list_block:
-                    new_id = template_to_clone_id_map.get(orig_id, orig_id)
-                    if new_id != orig_id:
-                        print(f"[INFO] Replaced {section_key}.{key} ID {orig_id} → {new_id}")
-                        replaced_any = True
-                    new_ids.append(new_id)
-                if replaced_any:
-                    section[key] = new_ids
-                    data[section_key] = section
-                    updated = True
+            # Clone the rate policy
+            payload = {
+                "cloneFromRatePolicyId": policy_id,
+                "name": clone_name,
+                "description": f"Cloned from {orig_name}",
+                "matchType": policy["matchType"]
+            }
 
-            else:
-                print(f"[DEBUG] Skipping {section_key}.{key} (not list or expected dict structure)")
+            try:
+                clone_resp = session.post(clone_url, json=payload)
+                clone_resp.raise_for_status()
+                cloned_policy_id = clone_resp.json().get("id")
+                print(f"[INFO] Cloned '{orig_name}' → '{clone_name}' [ID: {cloned_policy_id}]")
 
-    if updated:
-        put_resp = session.put(url, json=data)
+                # Optional: activate cloned policy in STAGING
+                activate_url = policy_url_template.format(policy_id=cloned_policy_id) + "/activate"
+                session.post(activate_url, json={"network": "STAGING"})
+
+                updated_policies.append(cloned_policy_id)
+                summary["successful"] += 1
+                summary["details"].append({"template": orig_name, "clone": clone_name, "status": "success"})
+
+            except Exception as clone_err:
+                print(f"[ERROR] Failed to clone {orig_name}: {clone_err}")
+                updated_policies.append(policy_id)  # Fallback to original
+                summary["failed"] += 1
+                summary["details"].append({"template": orig_name, "status": "failed", "error": str(clone_err)})
+
+        # Replace rate policy assignments in config
+        put_resp = session.put(list_url, json={"ratePolicies": updated_policies})
         put_resp.raise_for_status()
-        summary["successful"] = 1
-        summary["details"].append({
-            "id": policy_id,
-            "status": "success"
-        })
-    else:
-        summary["details"].append({
-            "id": policy_id,
-            "status": "skipped",
-            "reason": "no matching template list IDs found or no changes required"
-        })
+        summary["processed"] = len(policies)
+
+    except Exception as e:
+        print(f"[ERROR] Failed to reassign DoS policies: {e}")
+        summary["failed"] += 1
+        summary["details"].append({"status": "failed", "error": str(e)})
 
     return summary
+
+reassign_dos_protection_rate_policies(session, base_url, config_id, version, access_group)
