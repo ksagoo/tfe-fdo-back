@@ -1,5 +1,6 @@
 def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section=None):
     print(f"[INFO] Cloning and renaming client lists from Security Policy Template")
+
     summary = {
         "processed": 0,
         "successful": 0,
@@ -7,7 +8,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         "results": []
     }
 
-    # Fetch all existing client lists
+    # Fetch all client lists (including deprecated and inactive)
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
     try:
         response = session.get(url)
@@ -17,12 +18,11 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    # Track existing list names that are still undeletable (i.e., still in use)
+    # Track existing list names where DELETE is not available (i.e. still in use)
     existing_names = set()
     for cl in client_lists:
         name = cl.get("name", "")
-        delete_available = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
-        if not delete_available:
+        if not cl.get("availableActions", {}).get("DELETE", {}).get("available", True):
             existing_names.add(name)
 
     for cl in client_lists:
@@ -32,24 +32,25 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             list_type = cl.get("listType")
             list_format = cl.get("type")
 
-            # Skip anything not a template
-            if "Security Policy Template" not in name:
+            # Skip anything not an original template
+            if not name.startswith("Security Policy Template"):
                 continue
 
+            # Build new name
             suffix = name.replace("Security Policy Template", "").strip()
             new_name = f"SC-{access_group}-{suffix}"
 
-            # Skip if the new name exists and is undeletable
+            # Skip if already exists and not marked deletable
             if new_name in existing_names:
                 print(f"[INFO] Skipping existing undeletable list: {new_name}")
                 continue
 
-            # Only clone if source list is deletable (i.e., no longer actively in use)
-            delete_available = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
-            if not delete_available:
-                print(f"[WARN] Skipping list '{name}' – still ACTIVE and DELETE not available")
+            # Skip templates still in use (not deletable)
+            if not cl.get("availableActions", {}).get("DELETE", {}).get("available", False):
+                print(f"[WARN] Skipping template list '{name}' — still ACTIVE and DELETE not available")
                 continue
 
+            # Prepare clone payload
             payload = {
                 "name": new_name,
                 "type": list_format,
@@ -69,7 +70,6 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             clone_resp.raise_for_status()
 
             print(f"[SUCCESS] Cloned '{name}' -> '{new_name}'")
-
             summary["processed"] += 1
             summary["successful"] += 1
             summary["results"].append({
@@ -85,7 +85,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             summary["failed"] += 1
             summary["results"].append({
                 "status": "failed",
-                "source": cl.get("name", ""),
+                "source": name,
                 "error": str(e)
             })
 
