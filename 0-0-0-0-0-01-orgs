@@ -1,8 +1,3 @@
-
-if name.startswith(f"SC-{access_group}"):
-    print(f"[DEBUG] Already cloned list '{name}', skipping.")
-    continue
-
 def clone_and_rename_client_lists(session, base_url, config_id, version, section, access_group):
     print(f"[INFO] Cloning and renaming client lists from Security Policy Template")
     summary = {
@@ -11,8 +6,6 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
         "failed": 0,
         "results": []
     }
-
-    bypass_list = []
 
     # Fetch all existing client lists
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
@@ -27,25 +20,34 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
     for cl in client_lists:
         try:
             name = cl.get("name", "")
-            staging_status = cl.get("stagingActivationStatus", "")
             list_id = cl.get("listId")
+            list_type = cl.get("type")
+            list_subtype = cl.get("listType")
+            available_actions = cl.get("availableActions", {})
+            delete_available = available_actions.get("DELETE", {}).get("available", False)
 
-            # Only clone if it's a Security Policy Template list and not already renamed
-            if "Security Policy Template" not in name or f"SC-{access_group}" in name:
+            # Skip if not a template list
+            if "Security Policy Template" not in name:
                 continue
 
-            if staging_status == "ACTIVE":
-                print(f"[WARN] Skipping list '{name}' - not INACTIVE in staging")
+            # Skip if already cloned for this access group
+            if f"SC-{access_group}" in name:
                 continue
 
-            # Generate new list name
+            # If delete is NOT available, we assume list is still in use and should be skipped
+            if not delete_available:
+                print(f"[WARN] Skipping list '{name}' - DELETE not available (possibly still in use)")
+                continue
+
+            # Build new name
             suffix = name.replace("Security Policy Template ", "").strip()
             new_name = f"SC-{access_group}-{suffix}"
 
+            # Build clone payload
             payload = {
                 "name": new_name,
-                "type": cl["type"],
-                "listType": cl["listType"],
+                "type": list_type,
+                "listType": list_subtype,
                 "description": f"Cloned from template list '{name}'",
                 "tags": [],
                 "cloneFromList": {
@@ -56,6 +58,9 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
             clone_url = f"{base_url}/client-list/v1/lists"
             if section:
                 clone_url += f"?section={section}"
+
+            print(f"[DEBUG] Cloning '{name}' -> '{new_name}'")
+            print(f"[DEBUG] Payload: {json.dumps(payload, indent=2)}")
 
             clone_resp = session.post(clone_url, json=payload)
             clone_resp.raise_for_status()
