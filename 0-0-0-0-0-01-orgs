@@ -1,1 +1,85 @@
+def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section=None):
+    print(f"[INFO] Cloning and renaming client lists from Security Policy Template")
+    summary = {
+        "processed": 0,
+        "successful": 0,
+        "failed": 0,
+        "results": []
+    }
 
+    # Fetch all existing client lists
+    url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        client_lists = response.json().get("content", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch client lists: {e}")
+        return summary
+
+    # Build set of already-existing names that should be skipped (not deletable = still in use)
+    existing_names = set()
+    for cl in client_lists:
+        name = cl.get("name", "")
+        is_deletable = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
+        if not is_deletable:
+            existing_names.add(name)
+
+    for cl in client_lists:
+        try:
+            name = cl.get("name", "")
+            list_id = cl.get("listId")
+            list_type = cl.get("listType")
+            list_format = cl.get("type")
+
+            # Only clone if it's a template list
+            if "Security Policy Template" not in name:
+                continue
+
+            suffix = name.replace("Security Policy Template", "").strip()
+            new_name = f"SC-{access_group}-{suffix}"
+
+            if new_name in existing_names:
+                print(f"[INFO] Skipping existing undeletable list: {new_name}")
+                continue
+
+            payload = {
+                "name": new_name,
+                "type": list_format,
+                "listType": list_type,
+                "description": f"Cloned from template list '{name}'",
+                "tags": [],
+                "cloneFromList": {
+                    "listId": list_id
+                }
+            }
+
+            clone_url = f"{base_url}/client-list/v1/lists"
+            if section:
+                clone_url += f"?section={section}"
+
+            clone_resp = session.post(clone_url, json=payload)
+            clone_resp.raise_for_status()
+
+            print(f"[SUCCESS] Cloned '{name}' -> '{new_name}'")
+
+            summary["processed"] += 1
+            summary["successful"] += 1
+            summary["results"].append({
+                "status": "success",
+                "source": name,
+                "target": new_name,
+                "listId": clone_resp.json().get("listId")
+            })
+
+        except Exception as e:
+            print(f"[ERROR] Failed to clone list '{name}': {e}")
+            summary["processed"] += 1
+            summary["failed"] += 1
+            summary["results"].append({
+                "status": "failed",
+                "source": name,
+                "error": str(e)
+            })
+
+    return summary
