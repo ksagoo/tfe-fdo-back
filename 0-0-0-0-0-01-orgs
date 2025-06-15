@@ -1,6 +1,6 @@
+
 def clone_and_rename_client_lists(session, base_url, config_id, version, section, access_group):
     print(f"[INFO] Cloning and renaming client lists from Security Policy Template")
-
     summary = {
         "processed": 0,
         "successful": 0,
@@ -8,47 +8,45 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
         "results": []
     }
 
-    # Fetch all client lists (including deprecated, inactive, and hidden ones)
+    # Fetch all existing client lists
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
     try:
         response = session.get(url)
         response.raise_for_status()
         client_lists = response.json().get("content", [])
-        print(f"[DEBUG] Total client lists returned: {len(client_lists)}")
     except Exception as e:
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    existing_names = {cl.get("name", "") for cl in client_lists}
+    # Only consider undeleted names as existing
+    existing_names = {
+        cl.get("name", "")
+        for cl in client_lists
+        if not cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
+    }
 
     for cl in client_lists:
         try:
             name = cl.get("name", "")
-            list_id = cl.get("listId", "")
-            delete_available = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
+            list_id = cl.get("listId")
+            list_type = cl.get("listType")
+            list_format = cl.get("type")
 
-            if not name.startswith("Security Policy Template "):
+            # Only template lists
+            if "Security Policy Template" not in name:
                 continue
 
             suffix = name.replace("Security Policy Template ", "").strip()
             new_name = f"SC-{access_group}-{suffix}"
 
-            # Skip if renamed version already exists
             if new_name in existing_names:
-                print(f"[INFO] Already exists: {new_name}, skipping.")
+                print(f"[INFO] Skipping existing undeleted list: {new_name}")
                 continue
-
-            # Skip if template is not deletable (still actively in use)
-            if not delete_available:
-                print(f"[WARN] Skipping list '{name}' — still ACTIVE and DELETE not available")
-                continue
-
-            print(f"[INFO] Cloning list: {name} -> {new_name}")
 
             payload = {
                 "name": new_name,
-                "type": cl["type"],
-                "listType": cl["listType"],
+                "type": list_format,
+                "listType": list_type,
                 "description": f"Cloned from template list '{name}'",
                 "tags": [],
                 "cloneFromList": {
@@ -60,14 +58,10 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
             if section:
                 clone_url += f"?section={section}"
 
-            print(f"[DEBUG] Payload: {json.dumps(payload, indent=2)}")
             clone_resp = session.post(clone_url, json=payload)
             clone_resp.raise_for_status()
 
-            clone_data = clone_resp.json()
-            new_list_id = clone_data.get("listId")
-
-            print(f"[SUCCESS] Cloned '{name}' to '{new_name}' with new listId: {new_list_id}")
+            print(f"[SUCCESS] Cloned '{name}' → '{new_name}'")
 
             summary["processed"] += 1
             summary["successful"] += 1
@@ -75,7 +69,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
                 "status": "success",
                 "source": name,
                 "target": new_name,
-                "listId": new_list_id
+                "listId": clone_resp.json().get("listId")
             })
 
         except Exception as e:
@@ -84,7 +78,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
             summary["failed"] += 1
             summary["results"].append({
                 "status": "failed",
-                "source": cl.get("name", ""),
+                "source": name,
                 "error": str(e)
             })
 
