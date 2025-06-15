@@ -17,12 +17,12 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    # Build set of already-existing names that should be skipped (not deletable = still in use)
+    # Track existing list names that are still undeletable (i.e., still in use)
     existing_names = set()
     for cl in client_lists:
         name = cl.get("name", "")
-        is_deletable = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
-        if not is_deletable:
+        delete_available = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
+        if not delete_available:
             existing_names.add(name)
 
     for cl in client_lists:
@@ -32,15 +32,22 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             list_type = cl.get("listType")
             list_format = cl.get("type")
 
-            # Only clone if it's a template list
+            # Skip anything not a template
             if "Security Policy Template" not in name:
                 continue
 
             suffix = name.replace("Security Policy Template", "").strip()
             new_name = f"SC-{access_group}-{suffix}"
 
+            # Skip if the new name exists and is undeletable
             if new_name in existing_names:
                 print(f"[INFO] Skipping existing undeletable list: {new_name}")
+                continue
+
+            # Only clone if source list is deletable (i.e., no longer actively in use)
+            delete_available = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
+            if not delete_available:
+                print(f"[WARN] Skipping list '{name}' – still ACTIVE and DELETE not available")
                 continue
 
             payload = {
@@ -78,7 +85,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             summary["failed"] += 1
             summary["results"].append({
                 "status": "failed",
-                "source": name,
+                "source": cl.get("name", ""),
                 "error": str(e)
             })
 
