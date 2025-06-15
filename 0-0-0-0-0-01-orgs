@@ -1,57 +1,79 @@
-def reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id, fqdn_list, is_prod, section, access_group):
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
-    response = session.get(url)
-    response.raise_for_status()
-    match_targets = response.json().get("matchTargets", [])
-
+def clone_and_rename_client_lists(session, base_url, config_id, version, section, access_group):
+    print(f"[INFO] Cloning and renaming client lists from Security Policy Template")
     summary = {
         "processed": 0,
         "successful": 0,
         "failed": 0,
-        "details": []
+        "results": []
     }
 
-    for mt in match_targets:
-        if mt.get("securityPolicy", {}).get("policyId") != old_policy_id:
-            continue
+    bypass_list = []
 
-        match_target_id = mt["id"]
-        hostname_list = mt.get("hostnames", [])
-        file_paths = mt.get("filePaths", [])
-        match_criteria = mt.get("matchCriteria", {})
-        network_lists = mt.get("bypassNetworkLists", [])
+    # Fetch all existing client lists
+    url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        client_lists = response.json().get("content", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch client lists: {e}")
+        return summary
 
-        updated_payload = {
-            "securityPolicy": {
-                "policyId": new_policy_id
-            },
-            "hostnames": hostname_list,
-            "filePaths": file_paths,
-            "matchCriteria": match_criteria,
-            "bypassNetworkLists": network_lists
-        }
-
+    for cl in client_lists:
         try:
-            patch_url = f"{url}/{match_target_id}"
-            patch_response = session.put(patch_url, json=updated_payload)
-            patch_response.raise_for_status()
+            name = cl.get("name", "")
+            staging_status = cl.get("stagingActivationStatus", "")
+            list_id = cl.get("listId")
+
+            # Only clone if it's a Security Policy Template list and not already renamed
+            if "Security Policy Template" not in name or f"SC-{access_group}" in name:
+                continue
+
+            if staging_status == "ACTIVE":
+                print(f"[WARN] Skipping list '{name}' - not INACTIVE in staging")
+                continue
+
+            # Generate new list name
+            suffix = name.replace("Security Policy Template ", "").strip()
+            new_name = f"SC-{access_group}-{suffix}"
+
+            payload = {
+                "name": new_name,
+                "type": cl["type"],
+                "listType": cl["listType"],
+                "description": f"Cloned from template list '{name}'",
+                "tags": [],
+                "cloneFromList": {
+                    "listId": list_id
+                }
+            }
+
+            clone_url = f"{base_url}/client-list/v1/lists"
+            if section:
+                clone_url += f"?section={section}"
+
+            clone_resp = session.post(clone_url, json=payload)
+            clone_resp.raise_for_status()
+
+            print(f"[SUCCESS] Successfully cloned list '{name}' -> '{new_name}'")
+
             summary["processed"] += 1
             summary["successful"] += 1
-            summary["details"].append({
-                "id": match_target_id,
-                "name": hostname_list,
-                "status": "success"
+            summary["results"].append({
+                "status": "success",
+                "source": name,
+                "target": new_name,
+                "listId": clone_resp.json().get("listId")
             })
-            print(f"[INFO] Reassigned match target {match_target_id} to policy {new_policy_id}")
+
         except Exception as e:
+            print(f"[ERROR] Failed to clone list '{name}': {e}")
             summary["processed"] += 1
             summary["failed"] += 1
-            summary["details"].append({
-                "id": match_target_id,
-                "name": hostname_list,
+            summary["results"].append({
                 "status": "failed",
+                "source": name,
                 "error": str(e)
             })
-            print(f"[ERROR] Failed to reassign match target {match_target_id}: {e}")
 
     return summary
