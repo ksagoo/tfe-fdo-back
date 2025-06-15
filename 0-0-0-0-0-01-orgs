@@ -1,17 +1,8 @@
-url = "https://hostname/appsec/v1/configs/configId/versions/versionNumber/security-policies/policyId/behavioral-ddos"
-url = "https://hostname/appsec/v1/configs/configId/versions/versionNumber/behavioral-ddos"
-url = "https://hostname/appsec/v1/configs/configId/versions/versionNumber/behavioral-ddos/profileId"
-
-
-
-
-def reassign_dos_protection_rate_policies(session, base_url, config_id, version, access_group, template_policy_name_prefix="Security Policy Template"):
-
-    print("[INFO] RUNNING: reassign_dos_protection_rate_policies")
-
-    list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/dos-rates"
-    clone_url = f"{base_url}/appsec/v1/rate-policies/clone"
-    policy_url_template = f"{base_url}/appsec/v1/rate-policies/{{policy_id}}"
+def reassign_match_targets(session, base_url, config_id, version, old_policy_id, new_policy_id, fqdn_list, is_prod, section, access_group):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
+    response = session.get(url)
+    response.raise_for_status()
+    match_targets = response.json().get("matchTargets", [])
 
     summary = {
         "processed": 0,
@@ -20,68 +11,47 @@ def reassign_dos_protection_rate_policies(session, base_url, config_id, version,
         "details": []
     }
 
-    try:
-        response = session.get(list_url)
-        response.raise_for_status()
-        policies = response.json().get("ratePolicies", [])
-        updated_policies = []
+    for mt in match_targets:
+        if mt.get("securityPolicy", {}).get("policyId") != old_policy_id:
+            continue
 
-        for policy in policies:
-            orig_name = policy["name"]
-            policy_id = policy["id"]
+        match_target_id = mt["id"]
+        hostname_list = mt.get("hostnames", [])
+        file_paths = mt.get("filePaths", [])
+        match_criteria = mt.get("matchCriteria", {})
+        network_lists = mt.get("bypassNetworkLists", [])
 
-            if not orig_name.startswith(template_policy_name_prefix):
-                updated_policies.append(policy_id)  # Keep existing non-template policy
-                continue
+        updated_payload = {
+            "securityPolicy": {
+                "policyId": new_policy_id
+            },
+            "hostnames": hostname_list,
+            "filePaths": file_paths,
+            "matchCriteria": match_criteria,
+            "bypassNetworkLists": network_lists
+        }
 
-            suffix = orig_name.replace(template_policy_name_prefix, "").strip()
-            clone_name = f"SC-{access_group}-{suffix}"
-
-            # Check if already cloned
-            existing = next((p for p in policies if p["name"] == clone_name), None)
-            if existing:
-                print(f"[INFO] Clone already exists: {clone_name}")
-                updated_policies.append(existing["id"])
-                continue
-
-            # Clone the rate policy
-            payload = {
-                "cloneFromRatePolicyId": policy_id,
-                "name": clone_name,
-                "description": f"Cloned from {orig_name}",
-                "matchType": policy["matchType"]
-            }
-
-            try:
-                clone_resp = session.post(clone_url, json=payload)
-                clone_resp.raise_for_status()
-                cloned_policy_id = clone_resp.json().get("id")
-                print(f"[INFO] Cloned '{orig_name}' → '{clone_name}' [ID: {cloned_policy_id}]")
-
-                # Optional: activate cloned policy in STAGING
-                activate_url = policy_url_template.format(policy_id=cloned_policy_id) + "/activate"
-                session.post(activate_url, json={"network": "STAGING"})
-
-                updated_policies.append(cloned_policy_id)
-                summary["successful"] += 1
-                summary["details"].append({"template": orig_name, "clone": clone_name, "status": "success"})
-
-            except Exception as clone_err:
-                print(f"[ERROR] Failed to clone {orig_name}: {clone_err}")
-                updated_policies.append(policy_id)  # Fallback to original
-                summary["failed"] += 1
-                summary["details"].append({"template": orig_name, "status": "failed", "error": str(clone_err)})
-
-        # Replace rate policy assignments in config
-        put_resp = session.put(list_url, json={"ratePolicies": updated_policies})
-        put_resp.raise_for_status()
-        summary["processed"] = len(policies)
-
-    except Exception as e:
-        print(f"[ERROR] Failed to reassign DoS policies: {e}")
-        summary["failed"] += 1
-        summary["details"].append({"status": "failed", "error": str(e)})
+        try:
+            patch_url = f"{url}/{match_target_id}"
+            patch_response = session.put(patch_url, json=updated_payload)
+            patch_response.raise_for_status()
+            summary["processed"] += 1
+            summary["successful"] += 1
+            summary["details"].append({
+                "id": match_target_id,
+                "name": hostname_list,
+                "status": "success"
+            })
+            print(f"[INFO] Reassigned match target {match_target_id} to policy {new_policy_id}")
+        except Exception as e:
+            summary["processed"] += 1
+            summary["failed"] += 1
+            summary["details"].append({
+                "id": match_target_id,
+                "name": hostname_list,
+                "status": "failed",
+                "error": str(e)
+            })
+            print(f"[ERROR] Failed to reassign match target {match_target_id}: {e}")
 
     return summary
-
-reassign_dos_protection_rate_policies(session, base_url, config_id, version, access_group)
