@@ -1,7 +1,6 @@
 def clone_and_rename_client_lists(session, base_url, config_id, version, section, access_group):
-    import json
-
     print(f"[INFO] Cloning and renaming client lists from Security Policy Template")
+
     summary = {
         "processed": 0,
         "successful": 0,
@@ -9,37 +8,42 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
         "results": []
     }
 
-    # Fetch all existing client lists
+    # Fetch all client lists (including deprecated, inactive, and hidden ones)
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
     try:
         response = session.get(url)
         response.raise_for_status()
         client_lists = response.json().get("content", [])
+        print(f"[DEBUG] Total client lists returned: {len(client_lists)}")
     except Exception as e:
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
+    existing_names = {cl.get("name", "") for cl in client_lists}
+
     for cl in client_lists:
         try:
             name = cl.get("name", "")
-            staging_status = cl.get("stagingActivationStatus", "")
-            list_id = cl.get("listId")
+            list_id = cl.get("listId", "")
             delete_available = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
 
-            # Skip if already cloned
-            if f"SC-{access_group}" in name:
+            if not name.startswith("Security Policy Template "):
                 continue
 
-            if "Security Policy Template" not in name:
-                continue
-
-            # Skip if list is still in use (i.e., active and not deletable)
-            if staging_status == "ACTIVE" and not delete_available:
-                print(f"[WARN] Skipping list '{name}' - still ACTIVE and DELETE not available")
-                continue
-
-            suffix = name.replace("Security Policy Template", "").strip()
+            suffix = name.replace("Security Policy Template ", "").strip()
             new_name = f"SC-{access_group}-{suffix}"
+
+            # Skip if renamed version already exists
+            if new_name in existing_names:
+                print(f"[INFO] Already exists: {new_name}, skipping.")
+                continue
+
+            # Skip if template is not deletable (still actively in use)
+            if not delete_available:
+                print(f"[WARN] Skipping list '{name}' — still ACTIVE and DELETE not available")
+                continue
+
+            print(f"[INFO] Cloning list: {name} -> {new_name}")
 
             payload = {
                 "name": new_name,
@@ -52,17 +56,18 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
                 }
             }
 
-            print(f"[DEBUG] Payload to clone list '{name}':\n{json.dumps(payload, indent=2)}")
-
             clone_url = f"{base_url}/client-list/v1/lists"
             if section:
                 clone_url += f"?section={section}"
 
+            print(f"[DEBUG] Payload: {json.dumps(payload, indent=2)}")
             clone_resp = session.post(clone_url, json=payload)
             clone_resp.raise_for_status()
 
-            new_id = clone_resp.json().get("listId")
-            print(f"[SUCCESS] Cloned '{name}' -> '{new_name}'")
+            clone_data = clone_resp.json()
+            new_list_id = clone_data.get("listId")
+
+            print(f"[SUCCESS] Cloned '{name}' to '{new_name}' with new listId: {new_list_id}")
 
             summary["processed"] += 1
             summary["successful"] += 1
@@ -70,7 +75,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
                 "status": "success",
                 "source": name,
                 "target": new_name,
-                "listId": new_id
+                "listId": new_list_id
             })
 
         except Exception as e:
@@ -79,7 +84,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, section
             summary["failed"] += 1
             summary["results"].append({
                 "status": "failed",
-                "source": name,
+                "source": cl.get("name", ""),
                 "error": str(e)
             })
 
