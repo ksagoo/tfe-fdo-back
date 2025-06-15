@@ -1,3 +1,8 @@
+
+if name.startswith(f"SC-{access_group}"):
+    print(f"[DEBUG] Already cloned list '{name}', skipping.")
+    continue
+
 def clone_and_rename_client_lists(session, base_url, config_id, version, section, access_group):
     print(f"[INFO] Cloning and renaming client lists from Security Policy Template")
     summary = {
