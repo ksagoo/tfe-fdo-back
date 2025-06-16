@@ -1,27 +1,28 @@
-# Check if config already exists
 existing_config_id = get_config_id(session, base_url, config_name)
 
 if existing_config_id:
     print(f"[INFO] Found existing config: {config_name} (ID: {existing_config_id})")
 
-    # Check if the current policy (Prod or NonProd) already exists
     existing_policy_id = policy_exists(session, base_url, existing_config_id, policy_name)
 
     if existing_policy_id:
-        print(f"[ABORT] Config '{config_name}' and Policy '{policy_name}' already exist. Exiting onboarding.")
+        print(f"[ABORT] Policy '{policy_name}' already exists under config '{config_name}'. Exiting.")
+        sys.exit(1)
+
+    if is_prod:
+        nonprod_policy_name = f"PL-{access_group}-NonProd"
+        nonprod_policy_id = policy_exists(session, base_url, existing_config_id, nonprod_policy_name)
+
+        if not nonprod_policy_id:
+            print(f"[ABORT] Cannot create Prod policy because NonProd policy '{nonprod_policy_name}' does not exist.")
+            sys.exit(1)
+        else:
+            print(f"[INFO] NonProd policy '{nonprod_policy_name}' exists (ID: {nonprod_policy_id}). Proceeding with Prod onboarding.")
+    else:
+        print(f"[INFO] Proceeding with NonProd onboarding — policy '{policy_name}' not yet present.")
+else:
+    if is_prod:
+        print(f"[ABORT] Cannot create Prod policy before creating NonProd. Config '{config_name}' does not exist yet.")
         sys.exit(1)
     else:
-        if is_prod:
-            # Check if NonProd policy exists before allowing Prod onboarding
-            nonprod_policy_name = f"PL-{access_group}-NonProd"
-            nonprod_policy_id = policy_exists(session, base_url, existing_config_id, nonprod_policy_name)
-
-            if not nonprod_policy_id:
-                print(f"[ABORT] Cannot create Prod policy '{policy_name}' because NonProd policy '{nonprod_policy_name}' does not exist.")
-                sys.exit(1)
-            else:
-                print(f"[INFO] NonProd policy '{nonprod_policy_name}' exists (ID: {nonprod_policy_id}). Proceeding with Prod onboarding.")
-        else:
-            print(f"[INFO] Proceeding with NonProd onboarding — policy '{policy_name}' not found.")
-else:
-    print(f"[INFO] No existing config found for '{config_name}'. Proceeding to create new config and policies.")
+        print(f"[INFO] No existing config found. Proceeding to create config and NonProd policy.")
