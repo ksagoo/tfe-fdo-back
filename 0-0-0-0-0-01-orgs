@@ -2,7 +2,9 @@
 existing_config_id = get_config_id(session, base_url, config_name)
 
 if existing_config_id:
-    # Check if intended policy already exists
+    print(f"[INFO] Found existing config: {config_name} (ID: {existing_config_id})")
+
+    # Check if the current policy (Prod or NonProd) already exists
     existing_policy_id = policy_exists(session, base_url, existing_config_id, policy_name)
 
     if existing_policy_id:
@@ -10,15 +12,16 @@ if existing_config_id:
         sys.exit(1)
     else:
         if is_prod:
-            # Ensure NonProd policy already exists before allowing Prod onboarding
+            # Check if NonProd policy exists before allowing Prod onboarding
             nonprod_policy_name = f"PL-{access_group}-NonProd"
             nonprod_policy_id = policy_exists(session, base_url, existing_config_id, nonprod_policy_name)
+
             if not nonprod_policy_id:
-                print(f"[ABORT] Cannot onboard Prod policy '{policy_name}' because NonProd policy '{nonprod_policy_name}' does not exist in config '{config_name}'.")
+                print(f"[ABORT] Cannot create Prod policy '{policy_name}' because NonProd policy '{nonprod_policy_name}' does not exist.")
                 sys.exit(1)
             else:
-                print(f"[INFO] Config '{config_name}' exists, and NonProd policy '{nonprod_policy_name}' is present. Proceeding with Prod onboarding.")
+                print(f"[INFO] NonProd policy '{nonprod_policy_name}' exists (ID: {nonprod_policy_id}). Proceeding with Prod onboarding.")
         else:
-            print(f"[INFO] Config '{config_name}' exists, but NonProd policy '{policy_name}' does not yet exist. Proceeding with NonProd onboarding.")
+            print(f"[INFO] Proceeding with NonProd onboarding — policy '{policy_name}' not found.")
 else:
-    print(f"[INFO] Config '{config_name}' does not exist. Proceeding to create new config and policies.")
+    print(f"[INFO] No existing config found for '{config_name}'. Proceeding to create new config and policies.")
