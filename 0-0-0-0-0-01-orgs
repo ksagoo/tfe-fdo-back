@@ -1,12 +1,12 @@
-def simulate_clone_client_lists(session, base_url, config_id, version, access_group, section):
-    print(f"[INFO] Simulating cloning of client lists from Security Policy Template...")
+
+def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section):
+    print(f"[INFO] Cloning client lists from Security Policy Template...")
     summary = {
         "processed": 0,
         "successful": 0,
         "failed": 0,
-        "skipped_active": [],
         "skipped_existing": [],
-        "to_clone": []
+        "results": []
     }
 
     try:
@@ -33,24 +33,54 @@ def simulate_clone_client_lists(session, base_url, config_id, version, access_gr
         suffix = name.replace("Security Policy Template", "").strip()
         new_name = f"SC-{access_group}-{suffix}"
 
-        # Look up existing lists matching target name
         matching_targets = existing_lists_by_name.get(new_name, [])
         still_in_use = any(not t.get("availableActions", {}).get("DELETE", {}).get("available", False)
                            for t in matching_targets)
 
         if still_in_use:
-            print(f"[DEBUG] Target list '{new_name}' already exists and is in use, skipping.")
+            print(f"[SKIP] Target list '{new_name}' already exists and is in use, skipping.")
             summary["skipped_existing"].append(new_name)
             continue
 
-        print(f"[INFO] Would clone: '{name}' => '{new_name}'")
-        summary["to_clone"].append({
-            "source": name,
-            "target": new_name,
-            "cloneFromList": cl.get("listId")
-        })
+        payload = {
+            "name": new_name,
+            "type": cl.get("type"),
+            "listType": cl.get("listType"),
+            "description": f"Cloned from template list '{name}'",
+            "tags": [],
+            "cloneFromList": {
+                "listId": cl.get("listId")
+            }
+        }
+
+        clone_url = f"{base_url}/client-list/v1/lists"
+        if section:
+            clone_url += f"?section={section}"
+
+        try:
+            response = session.post(clone_url, json=payload)
+            response.raise_for_status()
+            created_id = response.json().get("listId")
+            print(f"[SUCCESS] Cloned: '{name}' => '{new_name}' (listId: {created_id})")
+            summary["successful"] += 1
+            summary["results"].append({
+                "status": "success",
+                "source": name,
+                "target": new_name,
+                "listId": created_id
+            })
+        except Exception as e:
+            print(f"[ERROR] Failed to clone '{name}' to '{new_name}': {e}")
+            summary["failed"] += 1
+            summary["results"].append({
+                "status": "failed",
+                "source": name,
+                "target": new_name,
+                "error": str(e)
+            })
+
         summary["processed"] += 1
 
-    print("\n[DEBUG] Clone Summary:")
+    print("\n[SUMMARY]")
     print(json.dumps(summary, indent=2))
     return summary
