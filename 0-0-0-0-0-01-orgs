@@ -1,5 +1,5 @@
-def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section=None):
-    print(f"[INFO] Cloning and renaming client lists from Security Policy Template (DEBUG MODE, NO POST)")
+def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section):
+    print(f"[INFO] Cloning and renaming client lists from Security Policy Template (DEBUG ONLY)")
     summary = {
         "processed": 0,
         "successful": 0,
@@ -7,7 +7,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         "results": []
     }
 
-    # Step 1: Fetch all client lists
+    # Fetch all client lists including deleted/inactive ones
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
     try:
         response = session.get(url)
@@ -17,49 +17,48 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    # Step 2: Map of existing SC-<access_group> list names -> DELETE availability
-    existing_target_lists = {}
+    # Build a map of client list names and whether they are deletable
+    existing_lists = {}
     for cl in client_lists:
-        name = cl.get("name", "")
-        is_deletable = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
-        if name.startswith(f"SC-{access_group}"):
-            existing_target_lists[name] = is_deletable
+        cl_name = cl.get("name", "")
+        deletable = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
+        existing_lists[cl_name] = deletable
 
-    # Step 3: Identify which template lists to clone
+    # Iterate through all client lists to find template lists
     for cl in client_lists:
         try:
             name = cl.get("name", "")
             list_id = cl.get("listId")
             list_type = cl.get("listType")
-            cl_type = cl.get("type")
+            list_format = cl.get("type")
 
             if not name.startswith("Security Policy Template"):
                 continue
 
-            suffix = name.replace("Security Policy Template", "").strip()
+            suffix = name.replace("Security Policy Template", "").strip(" -:")
             new_name = f"SC-{access_group}-{suffix}"
 
-            if new_name in existing_target_lists and not existing_target_lists[new_name]:
-                print(f"[DEBUG] Skipping '{new_name}' - already exists and not deletable")
+            existing_state = existing_lists.get(new_name)
+
+            if existing_state is False:
+                print(f"[SKIP] Existing list '{new_name}' found and still in use (not deletable)")
                 continue
 
-            print(f"[DRYRUN] Would clone '{name}' -> '{new_name}'")
-
+            # Debug: would attempt to clone
+            print(f"[DRYRUN] Would clone '{name}' to '{new_name}' using list ID: {list_id}")
             summary["processed"] += 1
-            summary["successful"] += 1
             summary["results"].append({
-                "status": "dryrun",
                 "source": name,
                 "target": new_name,
-                "listId": list_id
+                "status": "dryrun"
             })
 
         except Exception as e:
-            print(f"[ERROR] Failed to evaluate list '{name}': {e}")
+            print(f"[ERROR] Failed during dryrun processing of list '{name}': {e}")
             summary["processed"] += 1
             summary["failed"] += 1
             summary["results"].append({
-                "status": "failed",
+                "status": "error",
                 "source": name,
                 "error": str(e)
             })
