@@ -1,81 +1,92 @@
-def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section):
-    print("\n[INFO] Cloning and renaming client lists from Security Policy Template...\n")
+def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section=None):
+    print(f"[INFO] Cloning and renaming client lists from Security Policy Template")
 
     summary = {
-        "created": [],
-        "skipped": [],
-        "errors": []
+        "processed": 0,
+        "successful": 0,
+        "failed": 0,
+        "results": []
     }
 
-    # Fetch all client lists (including deprecated)
-    url = f"{base_url}/client-list/v1/lists?includeDeleted=true&includeDeprecated=true"
-    response = session.get(url)
-    if response.status_code != 200:
-        print(f"[ERROR] Failed to fetch client lists: {response.status_code}")
+    # Fetch all client lists (including deprecated and inactive)
+    url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        client_lists = response.json().get("content", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    client_lists = response.json().get("content", [])
-    existing_name_to_delete_flag = {
-        cl["name"]: cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
-        for cl in client_lists
-    }
-    existing_names = set(cl["name"] for cl in client_lists)
+    # Track existing list names where DELETE is not available (i.e. still in use)
+    existing_names = set()
+    for cl in client_lists:
+        name = cl.get("name", "")
+        if not cl.get("availableActions", {}).get("DELETE", {}).get("available", True):
+            existing_names.add(name)
 
     for cl in client_lists:
         try:
-            cl_name = cl["name"]
-            cl_id = cl.get("uniqueId")
-            staging_status = cl.get("stagingActivationStatus", "")
+            name = cl.get("name", "")
+            list_id = cl.get("listId")
+            list_type = cl.get("listType")
+            list_format = cl.get("type")
 
-            # Skip if 'Security Policy Template' not in name
-            if "Security Policy Template" not in cl_name:
+            # Skip anything not an original template
+            if not name.startswith("Security Policy Template"):
                 continue
 
-            # Only clone ACTIVE lists
-            if staging_status != "ACTIVE":
-                print(f"[WARN] Skipping list '{cl_name}' — not ACTIVE in staging")
-                continue
-
-            # Build target SC name
-            suffix = cl_name.replace("Security Policy Template", "").strip()
+            # Build new name
+            suffix = name.replace("Security Policy Template", "").strip()
             new_name = f"SC-{access_group}-{suffix}"
 
-            # Check if equivalent SC list already exists
+            # Skip if already exists and not marked deletable
             if new_name in existing_names:
-                if not existing_name_to_delete_flag.get(new_name, False):
-                    print(f"[INFO] Skipping clone: list '{new_name}' already exists and is active")
-                    summary["skipped"].append(new_name)
-                    continue
-                else:
-                    print(f"[INFO] Re-cloning '{new_name}' — existing version is flagged for deletion")
+                print(f"[INFO] Skipping existing undeletable list: {new_name}")
+                continue
 
-            # Build clone payload
+            # Skip templates still in use (not deletable)
+            if not cl.get("availableActions", {}).get("DELETE", {}).get("available", False):
+                print(f"[WARN] Skipping template list '{name}' — still ACTIVE and DELETE not available")
+                continue
+
+            # Prepare clone payload
             payload = {
                 "name": new_name,
-                "type": cl["type"],
-                "description": f"Cloned from template list '{cl_name}'",
-                "tags": cl.get("tags", []),
-                "notes": cl.get("notes", ""),
-                "list": cl.get("list", []),
-                "matchOperator": cl.get("matchOperator", "ANY")
+                "type": list_format,
+                "listType": list_type,
+                "description": f"Cloned from template list '{name}'",
+                "tags": [],
+                "cloneFromList": {
+                    "listId": list_id
+                }
             }
 
-            clone_url = f"{base_url}/client-list/v1/list/{cl_id}/list"
+            clone_url = f"{base_url}/client-list/v1/lists"
             if section:
                 clone_url += f"?section={section}"
 
             clone_resp = session.post(clone_url, json=payload)
-            if clone_resp.status_code == 201:
-                print(f"[INFO] Successfully cloned list '{new_name}'")
-                summary["created"].append(new_name)
-            else:
-                print(f"[ERROR] Failed to clone '{new_name}': {clone_resp.status_code} — {clone_resp.text}")
-                summary["errors"].append(new_name)
+            clone_resp.raise_for_status()
+
+            print(f"[SUCCESS] Cloned '{name}' -> '{new_name}'")
+            summary["processed"] += 1
+            summary["successful"] += 1
+            summary["results"].append({
+                "status": "success",
+                "source": name,
+                "target": new_name,
+                "listId": clone_resp.json().get("listId")
+            })
 
         except Exception as e:
-            print(f"[ERROR] Exception while processing list '{cl.get('name', 'unknown')}': {e}")
-            summary["errors"].append(cl.get("name", "unknown"))
+            print(f"[ERROR] Failed to clone list '{name}': {e}")
+            summary["processed"] += 1
+            summary["failed"] += 1
+            summary["results"].append({
+                "status": "failed",
+                "source": name,
+                "error": str(e)
+            })
 
-    print("\n==== Client List Cloning Summary ====")
-    print(f"Created: {len(summary['created'])}, Skipped: {len(summary['skipped'])}, Errors: {len(summary['errors'])}")
     return summary
