@@ -1,21 +1,7 @@
-import json
-
-def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section, dry_run=True):
-    print(f"[INFO] {'[DRY RUN] ' if dry_run else ''}Cloning client lists from Security Policy Template...")
-
-    summary = {
-        "processed": 0,
-        "successful": 0,
-        "failed": 0,
-        "skipped_existing": [],
-        "results": []
-    }
-
-    def normalize(name):
-        return name.strip().lower()
+def list_active_client_lists(session, base_url, section=None):
+    print("[INFO] Fetching active (non-deletable) client lists...")
 
     try:
-        # Ensure section is passed into the GET request to include lists in correct scope
         url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
         if section:
             url += f"&section={section}"
@@ -23,96 +9,14 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         resp = session.get(url)
         resp.raise_for_status()
         client_lists = resp.json().get("content", [])
-        print(f"[INFO] Retrieved {len(client_lists)} client lists from API.")
+        print(f"[INFO] Retrieved {len(client_lists)} total client lists.")
     except Exception as e:
         print(f"[ERROR] Failed to fetch client lists: {e}")
-        return summary
+        return
 
-    # Debug: show all existing SC- lists found
-    print("\n[DEBUG] Existing SC-* lists returned by API:")
+    print("\n[ACTIVE CLIENT LISTS] (DELETE.available == false)")
     for cl in client_lists:
-        name = cl.get("name", "")
-        if name.startswith("SC-"):
-            delete_flag = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
-            print(f"  - {name} | DELETE.available: {delete_flag}")
+        delete_available = cl.get("availableActions", {}).get("DELETE", {}).get("available", True)
+        if not delete_available:
+            print(f"- {cl.get('name', '')} | listId: {cl.get('listId')} | DELETE.available: false")
 
-    # Process only Security Policy Template lists
-    for cl in client_lists:
-        original_name = cl.get("name", "")
-        if not original_name.startswith("Security Policy Template"):
-            continue
-
-        suffix = original_name.replace("Security Policy Template", "").strip()
-        new_name = f"SC-{access_group}-{suffix}"
-        norm_new_name = normalize(new_name)
-
-        # Find all lists with this target name
-        matching = [x for x in client_lists if normalize(x.get("name", "")) == norm_new_name]
-        print(f"\n[DEBUG] Found {len(matching)} lists matching '{new_name}'")
-
-        still_in_use = False
-        for match in matching:
-            delete_available = match.get("availableActions", {}).get("DELETE", {}).get("available", False)
-            print(f"[DEBUG]   - listId: {match.get('listId')}, DELETE.available: {delete_available}")
-            if not delete_available:
-                still_in_use = True
-                break
-
-        if still_in_use:
-            print(f"[SKIP] '{new_name}' already exists and is in use (not deletable). Skipping.")
-            summary["skipped_existing"].append(new_name)
-            continue
-
-        # Build the payload for cloning
-        payload = {
-            "name": new_name,
-            "type": cl.get("type"),
-            "listType": cl.get("listType"),
-            "description": f"Cloned from template list '{original_name}'",
-            "tags": [],
-            "cloneFromList": {
-                "listId": cl.get("listId")
-            }
-        }
-
-        if dry_run:
-            print(f"[DRY RUN] Would clone: '{original_name}' => '{new_name}'")
-            summary["successful"] += 1
-            summary["results"].append({
-                "status": "dry-run",
-                "source": original_name,
-                "target": new_name
-            })
-        else:
-            # POST to clone the list
-            clone_url = f"{base_url}/client-list/v1/lists"
-            if section:
-                clone_url += f"?section={section}"
-
-            try:
-                response = session.post(clone_url, json=payload)
-                response.raise_for_status()
-                created_id = response.json().get("listId")
-                print(f"[SUCCESS] Cloned: '{original_name}' => '{new_name}' (listId: {created_id})")
-                summary["successful"] += 1
-                summary["results"].append({
-                    "status": "success",
-                    "source": original_name,
-                    "target": new_name,
-                    "listId": created_id
-                })
-            except Exception as e:
-                print(f"[ERROR] Failed to clone '{original_name}' to '{new_name}': {e}")
-                summary["failed"] += 1
-                summary["results"].append({
-                    "status": "failed",
-                    "source": original_name,
-                    "target": new_name,
-                    "error": str(e)
-                })
-
-        summary["processed"] += 1
-
-    print("\n[SUMMARY]")
-    print(json.dumps(summary, indent=2))
-    return summary
