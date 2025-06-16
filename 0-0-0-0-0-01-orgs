@@ -1,1 +1,65 @@
 
+def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section):
+    print(f"[INFO] Cloning and renaming client lists from Security Policy Template (DEBUG ONLY)")
+    summary = {
+        "processed": 0,
+        "successful": 0,
+        "failed": 0,
+        "results": []
+    }
+
+    # Fetch all client lists
+    url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        client_lists = response.json().get("content", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch client lists: {e}")
+        return summary
+
+    # Build a map of existing lists (name -> deletable state)
+    existing_lists = {}
+    for cl in client_lists:
+        cl_name = cl.get("name", "")
+        is_deletable = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
+        existing_lists[cl_name] = is_deletable
+
+    # Process only 'Security Policy Template' lists
+    for cl in client_lists:
+        try:
+            name = cl.get("name", "")
+            if not name.startswith("Security Policy Template"):
+                continue
+
+            suffix = name.replace("Security Policy Template", "").strip(" -:")
+            new_name = f"SC-{access_group}-{suffix}"
+
+            if new_name in existing_lists:
+                if existing_lists[new_name] is False:
+                    print(f"[SKIP] List '{new_name}' already exists and is not deletable (still in use)")
+                    continue
+                else:
+                    print(f"[INFO] List '{new_name}' exists but is deletable — will be recreated")
+
+            # Otherwise, we assume it's new or deletable → log intent to clone
+            print(f"[DRYRUN] Would clone '{name}' to '{new_name}' using list ID {cl.get('listId')}")
+
+            summary["processed"] += 1
+            summary["results"].append({
+                "source": name,
+                "target": new_name,
+                "status": "dryrun"
+            })
+
+        except Exception as e:
+            print(f"[ERROR] Failed during dryrun for '{name}': {e}")
+            summary["processed"] += 1
+            summary["failed"] += 1
+            summary["results"].append({
+                "source": name,
+                "status": "error",
+                "error": str(e)
+            })
+
+    return summary
