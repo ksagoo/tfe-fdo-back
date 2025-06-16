@@ -1,91 +1,59 @@
-def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section=None):
-    print("[INFO] Cloning and renaming client lists from Security Policy Template")
+def simulate_clone_client_lists(session, base_url, config_id, version, access_group, section=None):
+    print("[INFO] Simulating client list cloning from Security Policy Template lists")
+
     summary = {
         "processed": 0,
         "successful": 0,
         "failed": 0,
         "skipped_existing": [],
-        "results": []
+        "skipped_active": [],
+        "to_clone": []
     }
 
-    # Step 1: Fetch all existing client lists (including deprecated & deletable)
+    # Fetch all client lists once
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
     try:
         response = session.get(url)
         response.raise_for_status()
-        client_lists = response.json().get("content", [])
+        all_lists = response.json().get("content", [])
     except Exception as e:
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    # Step 2: Collect all client lists by name (to check duplicates and deletability)
-    client_lists_by_name = {}
-    for cl in client_lists:
+    for cl in all_lists:
         name = cl.get("name", "")
-        client_lists_by_name.setdefault(name, []).append(cl)
+        staging_status = cl.get("stagingActivationStatus", "")
+        if not name.startswith("Security Policy Template"):
+            continue
 
-    # Step 3: Filter for template lists
-    for cl in client_lists:
-        try:
-            template_name = cl.get("name", "")
-            list_id = cl.get("listId")
-            list_type = cl.get("listType")
-            list_format = cl.get("type")
+        suffix = name.replace("Security Policy Template", "").strip()
+        target_name = f"SC-{access_group}-{suffix}"
 
-            if "Security Policy Template" not in template_name:
-                continue
+        # Step 1: check if any undeletable list exists for the target
+        undeletable = next(
+            (entry for entry in all_lists
+             if entry.get("name") == target_name and
+                not entry.get("availableActions", {}).get("DELETE", {}).get("available", True)),
+            None
+        )
+        if undeletable:
+            print(f"[INFO] Target list '{target_name}' exists and is not deletable (listId: {undeletable['listId']}). Skipping.")
+            summary["skipped_existing"].append(target_name)
+            continue
 
-            # Build suffix and new name
-            suffix = template_name.replace("Security Policy Template", "").strip()
-            new_name = f"SC-{access_group}-{suffix}"
+        if staging_status == "ACTIVE":
+            print(f"[WARN] Template list '{name}' is still ACTIVE in staging, skipping.")
+            summary["skipped_active"].append(name)
+            continue
 
-            # Check if any non-deletable version of the new_name exists
-            matches = client_lists_by_name.get(new_name, [])
-            if any(not entry.get("availableActions", {}).get("DELETE", {}).get("available", True) for entry in matches):
-                print(f"[INFO] Skipping '{new_name}' — non-deletable version already exists")
-                summary["skipped_existing"].append(new_name)
-                continue
+        print(f"[INFO] Would clone: Security Policy Template '{name}' -> '{target_name}'")
+        summary["to_clone"].append(target_name)
+        summary["processed"] += 1
 
-            # Clone payload
-            payload = {
-                "name": new_name,
-                "type": list_format,
-                "listType": list_type,
-                "description": f"Cloned from template list '{template_name}'",
-                "tags": [],
-                "cloneFromList": {
-                    "listId": list_id
-                }
-            }
+    print("\n[DEBUG] Clone Summary:")
+    print(f"Processed: {summary['processed']}")
+    print(f"Skipped active: {summary['skipped_active']}")
+    print(f"Skipped existing (undeletable): {summary['skipped_existing']}")
+    print(f"To clone => {summary['to_clone']}")
 
-            clone_url = f"{base_url}/client-list/v1/lists"
-            if section:
-                clone_url += f"?section={section}"
-
-            resp = session.post(clone_url, json=payload)
-            resp.raise_for_status()
-
-            new_id = resp.json().get("listId")
-            print(f"[SUCCESS] Cloned '{template_name}' -> '{new_name}' (listId: {new_id})")
-            summary["processed"] += 1
-            summary["successful"] += 1
-            summary["results"].append({
-                "status": "success",
-                "source": template_name,
-                "target": new_name,
-                "listId": new_id
-            })
-
-        except Exception as e:
-            print(f"[ERROR] Failed to clone list '{template_name}': {e}")
-            summary["processed"] += 1
-            summary["failed"] += 1
-            summary["results"].append({
-                "status": "failed",
-                "source": template_name,
-                "target": new_name,
-                "error": str(e)
-            })
-
-    print("[INFO] Client list cloning complete")
     return summary
