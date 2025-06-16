@@ -1,5 +1,8 @@
+import json
+
 def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section, dry_run=True):
     print(f"[INFO] {'[DRY RUN] ' if dry_run else ''}Cloning client lists from Security Policy Template...")
+
     summary = {
         "processed": 0,
         "successful": 0,
@@ -12,14 +15,28 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         return name.strip().lower()
 
     try:
+        # Ensure section is passed into the GET request to include lists in correct scope
         url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
+        if section:
+            url += f"&section={section}"
+
         resp = session.get(url)
         resp.raise_for_status()
         client_lists = resp.json().get("content", [])
+        print(f"[INFO] Retrieved {len(client_lists)} client lists from API.")
     except Exception as e:
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
+    # Debug: show all existing SC- lists found
+    print("\n[DEBUG] Existing SC-* lists returned by API:")
+    for cl in client_lists:
+        name = cl.get("name", "")
+        if name.startswith("SC-"):
+            delete_flag = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
+            print(f"  - {name} | DELETE.available: {delete_flag}")
+
+    # Process only Security Policy Template lists
     for cl in client_lists:
         original_name = cl.get("name", "")
         if not original_name.startswith("Security Policy Template"):
@@ -29,9 +46,9 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         new_name = f"SC-{access_group}-{suffix}"
         norm_new_name = normalize(new_name)
 
-        # Look for any existing list with this name
+        # Find all lists with this target name
         matching = [x for x in client_lists if normalize(x.get("name", "")) == norm_new_name]
-        print(f"[DEBUG] Found {len(matching)} existing lists matching '{new_name}'")
+        print(f"\n[DEBUG] Found {len(matching)} lists matching '{new_name}'")
 
         still_in_use = False
         for match in matching:
@@ -42,11 +59,11 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
                 break
 
         if still_in_use:
-            print(f"[SKIP] A list named '{new_name}' is already active and not deletable. Skipping.")
+            print(f"[SKIP] '{new_name}' already exists and is in use (not deletable). Skipping.")
             summary["skipped_existing"].append(new_name)
             continue
 
-        # Simulate or execute clone
+        # Build the payload for cloning
         payload = {
             "name": new_name,
             "type": cl.get("type"),
@@ -67,6 +84,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
                 "target": new_name
             })
         else:
+            # POST to clone the list
             clone_url = f"{base_url}/client-list/v1/lists"
             if section:
                 clone_url += f"?section={section}"
