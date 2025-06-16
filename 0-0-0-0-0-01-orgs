@@ -7,7 +7,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         "results": []
     }
 
-    # Fetch all client lists including deleted/inactive ones
+    # Fetch all client lists
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
     try:
         response = session.get(url)
@@ -17,35 +17,33 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    # Build a map of client list names and whether they are deletable
+    # Build a map of existing lists (name -> deletable state)
     existing_lists = {}
     for cl in client_lists:
         cl_name = cl.get("name", "")
-        deletable = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
-        existing_lists[cl_name] = deletable
+        is_deletable = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
+        existing_lists[cl_name] = is_deletable
 
-    # Iterate through all client lists to find template lists
+    # Process only 'Security Policy Template' lists
     for cl in client_lists:
         try:
             name = cl.get("name", "")
-            list_id = cl.get("listId")
-            list_type = cl.get("listType")
-            list_format = cl.get("type")
-
             if not name.startswith("Security Policy Template"):
                 continue
 
             suffix = name.replace("Security Policy Template", "").strip(" -:")
             new_name = f"SC-{access_group}-{suffix}"
 
-            existing_state = existing_lists.get(new_name)
+            if new_name in existing_lists:
+                if existing_lists[new_name] is False:
+                    print(f"[SKIP] List '{new_name}' already exists and is not deletable (still in use)")
+                    continue
+                else:
+                    print(f"[INFO] List '{new_name}' exists but is deletable — will be recreated")
 
-            if existing_state is False:
-                print(f"[SKIP] Existing list '{new_name}' found and still in use (not deletable)")
-                continue
+            # Otherwise, we assume it's new or deletable → log intent to clone
+            print(f"[DRYRUN] Would clone '{name}' to '{new_name}' using list ID {cl.get('listId')}")
 
-            # Debug: would attempt to clone
-            print(f"[DRYRUN] Would clone '{name}' to '{new_name}' using list ID: {list_id}")
             summary["processed"] += 1
             summary["results"].append({
                 "source": name,
@@ -54,12 +52,12 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             })
 
         except Exception as e:
-            print(f"[ERROR] Failed during dryrun processing of list '{name}': {e}")
+            print(f"[ERROR] Failed during dryrun for '{name}': {e}")
             summary["processed"] += 1
             summary["failed"] += 1
             summary["results"].append({
-                "status": "error",
                 "source": name,
+                "status": "error",
                 "error": str(e)
             })
 
