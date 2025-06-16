@@ -1,5 +1,14 @@
-name_to_id = {
-    lst["name"]: lst["listId"]
-    for lst in lists
-    if "name" in lst and "listId" in lst and lst.get("deprecated", False) is False
-}
+# Check if config already exists
+existing_config_id = get_config_id(session, base_url, config_name)
+
+if existing_config_id:
+    # Check if the intended policy already exists within that config
+    existing_policy_id = policy_exists(session, base_url, existing_config_id, policy_name)
+
+    if existing_policy_id:
+        print(f"[ABORT] Config '{config_name}' and Policy '{policy_name}' already exist. Exiting onboarding.")
+        sys.exit(1)
+    else:
+        print(f"[INFO] Config '{config_name}' exists but Policy '{policy_name}' does not. Continuing onboarding.")
+else:
+    print(f"[INFO] Config '{config_name}' does not exist. Continuing onboarding and will create new config.")
