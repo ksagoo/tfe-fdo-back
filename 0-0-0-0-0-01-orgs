@@ -1,13 +1,12 @@
-def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section):
-    print(f"[INFO] DRY RUN: Cloning and renaming client lists from Security Policy Template")
+def simulate_clone_and_rename_client_lists_debug(session, base_url, config_id, version, access_group, section=None):
+    print(f"[DEBUG] Simulating clone and rename of client lists for access group: {access_group}")
     summary = {
         "processed": 0,
-        "successful": 0,
-        "failed": 0,
-        "results": []
+        "to_clone": [],
+        "skipped_active": [],
+        "skipped_existing": []
     }
 
-    # Fetch all client lists
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
     try:
         response = session.get(url)
@@ -17,47 +16,42 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    # Build a dict of existing lists {name: full_json}
-    existing_lists = {cl.get("name", ""): cl for cl in client_lists}
+    # Group all client lists by name for full visibility of duplicates
+    existing_lists_by_name = {}
+    for cl in client_lists:
+        name = cl.get("name", "")
+        existing_lists_by_name.setdefault(name, []).append(cl)
 
     for cl in client_lists:
         try:
             name = cl.get("name", "")
-            if not name.startswith("Security Policy Template"):
-                continue
+            list_id = cl.get("listId")
+            if "Security Policy Template" not in name:
+                continue  # only template source lists
 
-            suffix = name.replace("Security Policy Template", "").strip(" -:")
+            suffix = name.replace("Security Policy Template", "").strip()
             new_name = f"SC-{access_group}-{suffix}"
 
-            if new_name in existing_lists:
-                existing_cl = existing_lists[new_name]
-                delete_flag = existing_cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
-                
-                print(f"[DEBUG] Existing target list found: {new_name}")
-                print(json.dumps(existing_cl, indent=2))  # full JSON for inspection
+            matches = existing_lists_by_name.get(new_name, [])
+            if any(not m.get("availableActions", {}).get("DELETE", {}).get("available", True) for m in matches):
+                print(f"[DEBUG] Skipping '{new_name}' — at least one active (non-deletable) instance exists")
+                for m in matches:
+                    print(f"    [EXISTING] listId: {m.get('listId')} | DELETE available: {m.get('availableActions', {}).get('DELETE', {}).get('available')}")
+                summary["skipped_existing"].append(new_name)
+                continue
 
-                if not delete_flag:
-                    print(f"[SKIP] List '{new_name}' already exists and is not deletable")
-                    continue
-                else:
-                    print(f"[INFO] List '{new_name}' exists but is deletable — will re-clone")
-
-            print(f"[DRYRUN] Would clone '{name}' to '{new_name}' using listId={cl.get('listId')}")
+            print(f"[INFO] Would clone: '{name}' -> '{new_name}' using listId: {list_id}")
+            if matches:
+                print(f"    [NOTE] Existing inactive entries found for {new_name}, but all are deletable, safe to re-clone.")
+                for m in matches:
+                    print(f"        listId: {m.get('listId')} | DELETE available: {m.get('availableActions', {}).get('DELETE', {}).get('available')}")
+            summary["to_clone"].append(new_name)
             summary["processed"] += 1
-            summary["results"].append({
-                "source": name,
-                "target": new_name,
-                "status": "dryrun"
-            })
 
         except Exception as e:
-            print(f"[ERROR] Failed during dryrun for '{name}': {e}")
-            summary["processed"] += 1
-            summary["failed"] += 1
-            summary["results"].append({
-                "source": name,
-                "status": "error",
-                "error": str(e)
-            })
+            print(f"[ERROR] Unexpected error processing list '{name}': {e}")
 
+    from pprint import pprint
+    print("\n[DEBUG] Clone Summary:")
+    pprint(summary)
     return summary
