@@ -1,4 +1,5 @@
-# Avoid double-prefixed names
-if original_name.startswith(f"SC-{access_group}"):
-    print(f"[SKIP] Already prefixed list: {original_name}")
-    continue
+name_to_id = {
+    lst["name"]: lst["listId"]
+    for lst in lists
+    if "name" in lst and "listId" in lst and lst.get("deprecated", False) is False
+}
