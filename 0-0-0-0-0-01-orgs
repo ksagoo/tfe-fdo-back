@@ -53,4 +53,5 @@ def simulate_clone_client_lists(session, base_url, config_id, version, access_gr
 
     print("\n[DEBUG] Clone Summary:")
     print(json.dumps(summary, indent=2))
+
     return summary
