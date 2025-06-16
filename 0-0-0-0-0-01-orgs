@@ -2,13 +2,23 @@
 existing_config_id = get_config_id(session, base_url, config_name)
 
 if existing_config_id:
-    # Check if the intended policy already exists within that config
+    # Check if intended policy already exists
     existing_policy_id = policy_exists(session, base_url, existing_config_id, policy_name)
 
     if existing_policy_id:
         print(f"[ABORT] Config '{config_name}' and Policy '{policy_name}' already exist. Exiting onboarding.")
         sys.exit(1)
     else:
-        print(f"[INFO] Config '{config_name}' exists but Policy '{policy_name}' does not. Continuing onboarding.")
+        if is_prod:
+            # Ensure NonProd policy already exists before allowing Prod onboarding
+            nonprod_policy_name = f"PL-{access_group}-NonProd"
+            nonprod_policy_id = policy_exists(session, base_url, existing_config_id, nonprod_policy_name)
+            if not nonprod_policy_id:
+                print(f"[ABORT] Cannot onboard Prod policy '{policy_name}' because NonProd policy '{nonprod_policy_name}' does not exist in config '{config_name}'.")
+                sys.exit(1)
+            else:
+                print(f"[INFO] Config '{config_name}' exists, and NonProd policy '{nonprod_policy_name}' is present. Proceeding with Prod onboarding.")
+        else:
+            print(f"[INFO] Config '{config_name}' exists, but NonProd policy '{policy_name}' does not yet exist. Proceeding with NonProd onboarding.")
 else:
-    print(f"[INFO] Config '{config_name}' does not exist. Continuing onboarding and will create new config.")
+    print(f"[INFO] Config '{config_name}' does not exist. Proceeding to create new config and policies.")
