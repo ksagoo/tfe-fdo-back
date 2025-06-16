@@ -1,16 +1,13 @@
 def simulate_clone_client_lists(session, base_url, config_id, version, access_group, section=None):
-    print("[INFO] Simulating client list cloning from Security Policy Template lists")
-
+    print("[INFO] Simulating client list cloning from Security Policy Template")
     summary = {
         "processed": 0,
-        "successful": 0,
-        "failed": 0,
-        "skipped_existing": [],
+        "to_clone": [],
         "skipped_active": [],
-        "to_clone": []
+        "skipped_existing": []
     }
 
-    # Fetch all client lists once
+    # Fetch all client lists
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
     try:
         response = session.get(url)
@@ -20,40 +17,29 @@ def simulate_clone_client_lists(session, base_url, config_id, version, access_gr
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    for cl in all_lists:
-        name = cl.get("name", "")
-        staging_status = cl.get("stagingActivationStatus", "")
-        if not name.startswith("Security Policy Template"):
+    for template_list in all_lists:
+        name = template_list.get("name", "")
+        list_id = template_list.get("listId")
+        if "Security Policy Template" not in name:
             continue
 
         suffix = name.replace("Security Policy Template", "").strip()
         target_name = f"SC-{access_group}-{suffix}"
 
-        # Step 1: check if any undeletable list exists for the target
-        undeletable = next(
-            (entry for entry in all_lists
-             if entry.get("name") == target_name and
-                not entry.get("availableActions", {}).get("DELETE", {}).get("available", True)),
-            None
-        )
-        if undeletable:
-            print(f"[INFO] Target list '{target_name}' exists and is not deletable (listId: {undeletable['listId']}). Skipping.")
+        # Check if any list with the target name is not deletable
+        matching_targets = [
+            cl for cl in all_lists if cl.get("name") == target_name
+        ]
+
+        if any(not cl.get("availableActions", {}).get("DELETE", {}).get("available", False) for cl in matching_targets):
+            print(f"[SKIP] Target list '{target_name}' already exists and is in use (not deletable). Skipping.")
             summary["skipped_existing"].append(target_name)
             continue
 
-        if staging_status == "ACTIVE":
-            print(f"[WARN] Template list '{name}' is still ACTIVE in staging, skipping.")
-            summary["skipped_active"].append(name)
-            continue
-
-        print(f"[INFO] Would clone: Security Policy Template '{name}' -> '{target_name}'")
-        summary["to_clone"].append(target_name)
+        print(f"[INFO] Would clone '{name}' => '{target_name}' using listId: {list_id}")
         summary["processed"] += 1
+        summary["to_clone"].append(target_name)
 
     print("\n[DEBUG] Clone Summary:")
-    print(f"Processed: {summary['processed']}")
-    print(f"Skipped active: {summary['skipped_active']}")
-    print(f"Skipped existing (undeletable): {summary['skipped_existing']}")
-    print(f"To clone => {summary['to_clone']}")
-
+    print(json.dumps(summary, indent=2))
     return summary
