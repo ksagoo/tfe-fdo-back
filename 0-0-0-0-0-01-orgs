@@ -1,5 +1,5 @@
 def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section=None):
-    print(f"[INFO] Cloning and renaming client lists from Security Policy Template")
+    print(f"[INFO] Cloning and renaming client lists from Security Policy Template (DEBUG MODE, NO POST)")
     summary = {
         "processed": 0,
         "successful": 0,
@@ -7,7 +7,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         "results": []
     }
 
-    # Fetch all client lists
+    # Step 1: Fetch all client lists
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
     try:
         response = session.get(url)
@@ -17,62 +17,45 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         print(f"[ERROR] Failed to fetch client lists: {e}")
         return summary
 
-    # Build lookup of all existing list names and their DELETE availability
-    existing_names = {}
+    # Step 2: Map of existing SC-<access_group> list names -> DELETE availability
+    existing_target_lists = {}
     for cl in client_lists:
         name = cl.get("name", "")
-        delete_available = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
-        existing_names[name] = delete_available
+        is_deletable = cl.get("availableActions", {}).get("DELETE", {}).get("available", False)
+        if name.startswith(f"SC-{access_group}"):
+            existing_target_lists[name] = is_deletable
 
+    # Step 3: Identify which template lists to clone
     for cl in client_lists:
         try:
             name = cl.get("name", "")
-            if not name.startswith("Security Policy Template"):
-                continue
-
             list_id = cl.get("listId")
             list_type = cl.get("listType")
-            list_format = cl.get("type")
+            cl_type = cl.get("type")
+
+            if not name.startswith("Security Policy Template"):
+                continue
 
             suffix = name.replace("Security Policy Template", "").strip()
             new_name = f"SC-{access_group}-{suffix}"
 
-            # Skip cloning if list exists and is not deletable
-            if new_name in existing_names and not existing_names[new_name]:
-                print(f"[INFO] Skipping existing non-deletable list: {new_name}")
+            if new_name in existing_target_lists and not existing_target_lists[new_name]:
+                print(f"[DEBUG] Skipping '{new_name}' - already exists and not deletable")
                 continue
 
-            print(f"[DRYRUN] Would clone '{name}' to '{new_name}'")
-
-            # Uncomment this block to go live
-            # payload = {
-            #     "name": new_name,
-            #     "type": list_format,
-            #     "listType": list_type,
-            #     "description": f"Cloned from template list {name}",
-            #     "tags": [],
-            #     "cloneFromList": {
-            #         "listId": list_id
-            #     }
-            # }
-            # clone_url = f"{base_url}/client-list/v1/lists"
-            # if section:
-            #     clone_url += f"?section={section}"
-            # clone_resp = session.post(clone_url, json=payload)
-            # clone_resp.raise_for_status()
-            # print(f"[SUCCESS] Cloned '{name}' -> '{new_name}'")
+            print(f"[DRYRUN] Would clone '{name}' -> '{new_name}'")
 
             summary["processed"] += 1
             summary["successful"] += 1
             summary["results"].append({
-                "status": "dryrun-success",
+                "status": "dryrun",
                 "source": name,
                 "target": new_name,
                 "listId": list_id
             })
 
         except Exception as e:
-            print(f"[ERROR] Failed to process list '{name}': {e}")
+            print(f"[ERROR] Failed to evaluate list '{name}': {e}")
             summary["processed"] += 1
             summary["failed"] += 1
             summary["results"].append({
