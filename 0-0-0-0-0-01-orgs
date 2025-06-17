@@ -8,7 +8,7 @@ def clone_match_targets_for_prod(session, base_url, config_id, version, section,
     try:
         get_resp = session.get(get_url)
         get_resp.raise_for_status()
-        match_targets = get_resp.json().get("matchTargets", [])
+        match_targets = get_resp.json().get("matchTargets", {}).get("websiteTargets", [])
     except Exception as e:
         print(f"[ERROR] Failed to fetch match targets from NonProd policy: {e}")
         return []
@@ -16,26 +16,26 @@ def clone_match_targets_for_prod(session, base_url, config_id, version, section,
     cloned_targets = []
 
     for target in match_targets:
-        try:
-            # Skip if policyId does not match the nonprod one
-            current_policy = target.get("securityPolicy", {}).get("policyId")
-            if current_policy != nonprod_policy_id:
-                continue
+        if not isinstance(target, dict):
+            print(f"[WARN] Skipping invalid match target (expected dict): {target}")
+            continue
 
-            # Build the new match target
+        try:
             clone_target = {
-                "type": target.get("type", "website"),
                 "defaultAction": target.get("defaultAction"),
-                "isNegativeFileExtensionMatch": target.get("isNegativeFileExtensionMatch", False),
-                "isNegativePathMatch": target.get("isNegativePathMatch", False),
-                "sequence": 2,
-                "useFastMatch": target.get("useFastMatch", False),
-                "filePaths": target.get("filePaths", ["/*"]),
+                "isNegativeFileExtensionMatch": target.get("isNegativeFileExtensionMatch"),
+                "isNegativePathMatch": target.get("isNegativePathMatch"),
+                "sequence": 2,  # Always set sequence to 2 for Prod
+                "type": target.get("type"),
+                "useFastMatch": target.get("useFastMatch"),
+                "filePaths": target.get("filePaths", []),
                 "hostnames": fqdn_list,
-                "securityPolicy": {"policyId": prod_policy_id},
+                "securityPolicy": {
+                    "policyId": prod_policy_id
+                },
                 "bypassNetworkLists": build_bypass_list_from_client_lists(
-                    session, base_url, access_group, account=None, is_prod=True
-                ),
+                    session, base_url, access_group, section, is_prod=True
+                )
             }
 
             post_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
@@ -44,7 +44,6 @@ def clone_match_targets_for_prod(session, base_url, config_id, version, section,
 
             post_resp = session.post(post_url, json=clone_target)
             post_resp.raise_for_status()
-
             print(f"[SUCCESS] Cloned match target to Prod policy for hostnames: {fqdn_list}")
             cloned_targets.append(clone_target)
 
