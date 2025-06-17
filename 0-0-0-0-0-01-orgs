@@ -1,138 +1,70 @@
-def onboard_prod_policy(session, base_url, config_id, version, access_group, fqdn_list, section):
-    print("[INFO] Starting PROD policy onboarding...")
+[13:54, 17/06/2025] Kuldeep: def onboard_prod_policy(session, base_url, config_id, prod_policy_id, nonprod_policy_id, section):
+    print(f"[INFO] Starting PROD onboarding for policy: {prod_policy_id}")
 
-    # Define NonProd and Prod policy names
-    nonprod_policy_name = f"PL-{access_group}-NonProd"
-    prod_policy_name = f"PL-{access_group}-Prod"
-
-    # Check NonProd policy exists before cloning
-    nonprod_policy_id = policy_exists(session, base_url, config_id, nonprod_policy_name)
-    if not nonprod_policy_id:
-        print(f"[ABORT] Cannot proceed with PROD onboarding because NonProd policy '{nonprod_policy_name}' does not exist.")
-        sys.exit(1)
-
-    print(f"[INFO] Found NonProd policy '{nonprod_policy_name}' (ID: {nonprod_policy_id}). Proceeding to clone to '{prod_policy_name}'")
-
-    # Clone NonProd policy to Prod
-    new_policy_id = create_default_policy(
-        session,
-        base_url,
-        config_id,
-        version,
-        prod_policy_name,
-        nonprod_policy_id
-    )
-
-    print("[INFO] Reassigning match targets...")
-    reassignment_results = reassign_match_targets(
-        session,
-        base_url,
-        config_id,
-        version,
-        nonprod_policy_id,
-        new_policy_id,
-        fqdn_list,
-        is_prod=True,
-        account=access_group,
-        access_group=access_group,
+    # Step 1: Clone policy from NonProd
+    success = clone_policy_from_nonprod(
+        session=session,
+        base_url=base_url,
+        config_id=config_id,
+        source_policy_id=nonprod_policy_id,
+        target_policy_id=prod_policy_id,
         section=section
     )
-    print("[INFO] Match Target Reassignment Summary:", reassignment_results)
+    if not success:
+        print(f"[ERROR] Failed to clone NonProd policy '{nonprod_policy_id}' to Prod policy '{prod_policy_id}'. Aborting.")
+        return
 
-    print("[INFO] PROD onboarding complete.")
-    print(f"[SUCCESS] Security Config ID: {config_id}")
-    print(f"[SUCCESS] Security Policy ID (PROD): {new_policy_id}")
+    # Step 2: Clone and reassign match targets for PROD policy
+    success = clone_match_targets_from_nonprod_to_prod(
+        session=session,
+        base_url=base_url,
+        config_id=config_id,
+        prod_policy_id=prod_policy_id,
+        nonprod_policy_id=nonprod_policy_id,
+        section=section
+    )
+    if not success:
+        print(f"[WARN] Match target reassignment for Prod failed. Please verify manually.")
 
+    print(f"[INFO] PROD onboarding complete for policy: {prod_policy_id}")
+[13:55, 17/06/2025] Kuldeep: def clone_match_targets_for_prod(session, base_url, config_id, version, section, nonprod_policy_id, prod_policy_id):
+    print("[INFO] Cloning match targets from NonProd policy to Prod policy...")
+    try:
+        # Get match targets for NonProd policy
+        get_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{nonprod_policy_id}/match-targets"
+        if section:
+            get_url += f"?section={section}"
+        get_resp = session.get(get_url)
+        get_resp.raise_for_status()
+        match_targets = get_resp.json().get("matchTargets", [])
 
-# Main execution entry point
-if _name_ == "_main_":
-    args = parse_args()
-    session, base_url = setup_session(args.edgerc_file, args.section)
+        if not match_targets:
+            print("[WARN] No match targets found on NonProd policy.")
+            return {"status": "warning", "message": "No match targets to clone."}
 
-    region, region_data = get_region_from_section(args.section)
-    region_id = region_data["region_id"]
-    contract_id = region_data["contract_id"]
+        clone_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{prod_policy_id}/match-targets"
+        if section:
+            clone_url += f"?section={section}"
 
-    config_name = f"SC-{args.access_group}"
-    policy_suffix = "Prod" if args.is_prod else "NonProd"
-    policy_name = f"PL-{args.access_group}-{policy_suffix}"
+        success, failure = 0, 0
+        for target in match_targets:
+            for readonly_field in ["configId", "configVersion", "targetId", "securityPolicy": "policyId"]:
+                target.pop(readonly_field, None)
+            
+            post_resp = session.post(clone_url, json=target)
+            if post_resp.ok:
+                print(f"[SUCCESS] Cloned match target for '{target.get('defaultAction', 'unknown')}'")
+                success += 1
+            else:
+                print(f"[ERROR] Failed to clone match target: {post_resp.status_code} {post_resp.text}")
+                failure += 1
 
-    existing_config_id = config_exists(session, base_url, config_name)
-    if existing_config_id:
-        existing_policy_id = policy_exists(session, base_url, existing_config_id, policy_name)
-        if existing_policy_id:
-            print(f"[ABORT] Config '{config_name}' and Policy '{policy_name}' already exist. Exiting onboarding.")
-            sys.exit(1)
+        return {
+            "status": "complete",
+            "cloned": success,
+            "failed": failure
+        }
 
-        # If onboarding PROD, check NonProd exists
-        if args.is_prod:
-            nonprod_policy_name = f"PL-{args.access_group}-NonProd"
-            nonprod_policy_id = policy_exists(session, base_url, existing_config_id, nonprod_policy_name)
-            if not nonprod_policy_id:
-                print(f"[ABORT] Cannot onboard PROD policy until NonProd policy '{nonprod_policy_name}' exists.")
-                sys.exit(1)
-
-            # Proceed with onboarding only PROD policy (skip config creation)
-            onboard_prod_policy(
-                session,
-                base_url,
-                existing_config_id,
-                version="1",
-                access_group=args.access_group,
-                fqdn_list=args.fqdn,
-                section=args.section
-            )
-            sys.exit(0)
-
-    else:
-        # No config exists, so proceed with NonProd onboarding
-        fqdn_list = args.fqdn
-        if not fqdn_list:
-            print("[ERROR] No FQDNs provided. Aborting.")
-            sys.exit(1)
-
-        template_config_id = get_config_id_by_name(session, base_url, args.template_config_name)
-        print(f"[INFO] Security Config to Clone From: {template_config_id}")
-
-        config_id = create_security_config(
-            session,
-            base_url,
-            config_name,
-            region_id,
-            contract_id,
-            template_config_id,
-            fqdn_list
-        )
-
-        print(f"[INFO] Security Config Created: {config_id}")
-
-        template_policy_id = get_policy_id_from_config(session, base_url, config_id, args.template_policy_id)
-        print(f"[INFO] Security Policy to Clone From: {template_policy_id}")
-
-        policy_id = create_default_policy(
-            session,
-            base_url,
-            config_id,
-            version="1",
-            policy_name=policy_name,
-            template_policy_id=template_policy_id
-        )
-
-        print("[INFO] Reassigning protections from TEMP policy...")
-        version = "1"
-        reassignment_results = run_all_reassignments(
-            base_url,
-            session,
-            config_id,
-            version,
-            template_policy_id,
-            policy_id,
-            args.fqdn,
-            is_prod=args.is_prod,
-            section=args.section,
-            access_group=args.access_group
-        )
-
-        print("[SUCCESS] Completed NonProd onboarding")
-        print(f"[SUCCESS] Security Config ID: {config_id}")
-        print(f"[SUCCESS] Security Policy ID: {policy_id}")
+    except Exception as e:
+        print(f"[ERROR] Exception cloning match targets: {e}")
+        return {"status": "error", "message": str(e)}
