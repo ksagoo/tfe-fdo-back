@@ -1,3 +1,73 @@
+def onboard_prod_policy(session, base_url, config_id, version, section, access_group, nonprod_policy_name, prod_policy_name):
+    print("[INFO] Starting onboarding of PROD policy")
+
+    summary = {
+        "prod_policy_created": False,
+        "match_targets_cloned": False,
+        "errors": []
+    }
+
+    try:
+        # Step 1: Clone policy from NonProd to Prod
+        print(f"[INFO] Cloning NonProd policy '{nonprod_policy_name}' to create Prod policy '{prod_policy_name}'")
+
+        policies_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+        if section:
+            policies_url += f"?section={section}"
+
+        response = session.get(policies_url)
+        response.raise_for_status()
+        policies = response.json().get("policies", [])
+
+        source_policy = next((p for p in policies if p["policyName"] == nonprod_policy_name), None)
+        if not source_policy:
+            raise Exception(f"NonProd policy '{nonprod_policy_name}' not found")
+
+        clone_payload = {
+            "policyName": prod_policy_name,
+            "cloneFromPolicy": {
+                "policyId": source_policy["policyId"]
+            }
+        }
+
+        clone_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+        if section:
+            clone_url += f"?section={section}"
+
+        clone_response = session.post(clone_url, json=clone_payload)
+        clone_response.raise_for_status()
+
+        new_policy = clone_response.json()
+        prod_policy_id = new_policy.get("policyId")
+
+        print(f"[SUCCESS] Created PROD policy '{prod_policy_name}' with ID: {prod_policy_id}")
+        summary["prod_policy_created"] = True
+
+        # Step 2: Clone match targets from NonProd policy to newly created Prod policy
+        print("[INFO] Cloning match targets from NonProd to Prod policy")
+        from clone_match_targets_for_prod import clone_match_targets_for_prod
+
+        match_target_result = clone_match_targets_for_prod(
+            session=session,
+            base_url=base_url,
+            config_id=config_id,
+            version=version,
+            section=section,
+            access_group=access_group,
+            nonprod_policy_id=source_policy["policyId"],
+            prod_policy_id=prod_policy_id
+        )
+
+        summary["match_targets_cloned"] = match_target_result.get("success", False)
+
+    except Exception as e:
+        print(f"[ERROR] Failed to onboard PROD policy: {e}")
+        summary["errors"].append(str(e))
+
+    return summary
+
+
+
 def clone_match_targets_for_prod(session, base_url, config_id, version, section, nonprod_policy_id, prod_policy_id, access_group):
     print("[INFO] Cloning match targets from NonProd to Prod policy")
 
