@@ -1,1 +1,50 @@
-get_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/policies/{nonprod_policy_id}/match-targets"
+def clone_match_targets_for_prod(session, base_url, config_id, version, section,
+                                 nonprod_policy_id, prod_policy_id, fqdn_list, access_group):
+    print(f"[INFO] Cloning match targets from NonProd to Prod for policy ID {prod_policy_id}")
+
+    get_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
+    if section:
+        get_url += f"?section={section}"
+
+    try:
+        get_resp = session.get(get_url)
+        get_resp.raise_for_status()
+        match_targets = get_resp.json().get("matchTargets", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch match targets from NonProd policy: {e}")
+        return {"success": False, "error": str(e)}
+
+    cloned = []
+    post_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
+    if section:
+        post_url += f"?section={section}"
+
+    for mt in match_targets:
+        try:
+            if not mt.get("securityPolicy") or mt["securityPolicy"].get("policyId") != nonprod_policy_id:
+                continue
+
+            clone = {
+                "type": mt.get("type", "website"),
+                "defaultAction": mt.get("defaultAction"),
+                "useFastMatch": mt.get("useFastMatch", False),
+                "isNegativeFileExtensionMatch": mt.get("isNegativeFileExtensionMatch", False),
+                "isNegativePathMatch": mt.get("isNegativePathMatch", False),
+                "sequence": 2,
+                "filePaths": mt.get("filePaths", ["/*"]),
+                "hostnames": fqdn_list,
+                "securityPolicy": {"policyId": prod_policy_id},
+                "bypassNetworkLists": build_bypass_list_from_client_lists(
+                    session, base_url, access_group, account=None, is_prod=True
+                )
+            }
+
+            response = session.post(post_url, json=clone)
+            response.raise_for_status()
+            print(f"[SUCCESS] Cloned match target for FQDNs {fqdn_list}")
+            cloned.append(clone)
+
+        except Exception as e:
+            print(f"[ERROR] Failed to clone match target for FQDNs {fqdn_list}: {e}")
+
+    return {"success": True, "cloned": cloned}
