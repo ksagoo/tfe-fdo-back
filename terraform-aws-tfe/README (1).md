@@ -91,6 +91,3 @@ The script provides a detailed summary per module, including:
 - `requests` module
 - Akamai API credentials with access to AppSec APIs
 
-## License
-
-Internal use only — HSBC security onboarding automation.
