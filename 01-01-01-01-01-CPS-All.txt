@@ -1,56 +1,99 @@
-[
-  {
-    "availableActions": {
-      "DEACTIVATE": {
-        "available": false
-      },
-      "DELETE": {
-        "available": false
-      }
-    },
-    "createdDate": "2025-06-16T10:32:14.728+00:00",
-    "createdBy": "evsxb6jyr4wpw74u",
-    "deprecated": false,
-    "listId": "240331_SCWPBAPACINCYBERWASPTES",
-    "listType": "IP",
-    "name": "SC-WPB-APAC-IN-CyberWASPTesting-Security Bypass List",
-    "productionActivationStatus": "INACTIVE",
-    "readOnly": false,
-    "rollbackPossible": false,
-    "shared": false,
-    "stagingActivationStatus": "INACTIVE",
-    "tags": [],
-    "type": "IP",
-    "updatedDate": "2025-06-16T10:32:14.728+00:00",
-    "updatedBy": "evsxb6jyr4wpw74u",
-    "upgradedFromNetworkList": false,
-    "version": 1
-  },
-  {
-    "availableActions": {
-      "DEACTIVATE": {
-        "available": false
-      },
-      "DELETE": {
-        "available": true
-      }
-    },
-    "createdDate": "2025-06-16T10:32:14.000+00:00",
-    "createdBy": "evsxb6jyr4wpw74u",
-    "deprecated": false,
-    "listId": "240332_SCWPBAPACINCYBERWASPTES",
-    "listType": "IP",
-    "name": "SC-WPB-APAC-IN-CyberWASPTesting-Rate Controls Bypass List",
-    "productionActivationStatus": "INACTIVE",
-    "readOnly": false,
-    "rollbackPossible": false,
-    "shared": false,
-    "stagingActivationStatus": "INACTIVE",
-    "tags": [],
-    "type": "IP",
-    "updatedDate": "2025-06-16T10:32:14.000+00:00",
-    "updatedBy": "evsxb6jyr4wpw74u",
-    "upgradedFromNetworkList": false,
-    "version": 1
-  }
-]
+def update_rate_policies(session, base_url, config_id, version, access_group,
+                         search_client_lists_by_id, search_client_lists_by_name):
+    import copy
+    import json
+
+    get_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
+    result = {"processed": 0, "successful": 0, "failed": 0, "skipped": 0, "details": []}
+
+    try:
+        response = session.get(get_url)
+        response.raise_for_status()
+        policies = response.json().get("ratePolicies", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch rate policies: {e}")
+        return result
+
+    result["processed"] = len(policies)
+
+    for policy in policies:
+        policy_id = policy.get("id")
+        original_name = policy.get("name")
+        updated = False
+
+        # === Step 1: Rename policy if it's a template ===
+        if "Security Policy Template" in original_name:
+            suffix = original_name.split("Security Policy Template")[-1].strip()
+            new_name = f"SC-{access_group} {suffix}"
+            policy["name"] = new_name
+            updated = True
+        else:
+            new_name = original_name
+
+        # === Step 2: Sanitize additionalMatchOptions ===
+        for option in policy.get("additionalMatchOptions", []):
+            if option.get("type") == "NetworkListCondition":
+                original_ids = option.get("values", [])
+                new_ids = []
+
+                for list_id in original_ids:
+                    matches = search_client_lists_by_id(session, base_url, list_id)
+                    if not matches:
+                        result["failed"] += 1
+                        result["details"].append({
+                            "id": policy_id,
+                            "name": new_name,
+                            "status": "skipped",
+                            "reason": f"No match found for list ID: {list_id}"
+                        })
+                        break
+
+                    match_name = matches[0].get("name", "")
+                    if "Security Policy Template" not in match_name:
+                        result["failed"] += 1
+                        result["details"].append({
+                            "id": policy_id,
+                            "name": new_name,
+                            "status": "skipped",
+                            "reason": f"Template name not found for list ID: {list_id}"
+                        })
+                        break
+
+                    suffix = match_name.split("Security Policy Template")[-1].strip()
+                    new_lookup = f"SC-{access_group} {suffix}"
+                    new_match = search_client_lists_by_name(session, base_url, new_lookup)
+                    if not new_match:
+                        result["failed"] += 1
+                        result["details"].append({
+                            "id": policy_id,
+                            "name": new_name,
+                            "status": "skipped",
+                            "reason": f"No matching client list found for: {new_lookup}"
+                        })
+                        break
+
+                    new_ids.append(new_match[0]["uniqueId"])
+                    updated = True
+
+                option["values"] = new_ids
+
+        if updated:
+            # === Step 3: Remove read-only fields ===
+            clean_payload = copy.deepcopy(policy)
+            for field in ["id", "used", "createDate", "updateDate"]:
+                clean_payload.pop(field, None)
+
+            put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{policy_id}"
+            print("Payload:", json.dumps(clean_payload, indent=2))
+            try:
+                put_response = session.put(put_url, json=clean_payload)
+                put_response.raise_for_status()
+                result["successful"] += 1
+                result["details"].append({"id": policy_id, "name": new_name, "status": "success"})
+            except Exception as e:
+                result["failed"] += 1
+                result["details"].append({"id": policy_id, "name": new_name, "status": "failed", "error": str(e)})
+        else:
+            result["skipped"] += 1
+
+    return result
