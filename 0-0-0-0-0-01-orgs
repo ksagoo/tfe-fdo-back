@@ -1,1 +1,77 @@
-url = "https://hostname/appsec/v1/configs/configId/versions/versionNumber/rate-policies"
+def update_rate_policies(session, base_url, config_id, version, access_group, search_client_lists_by_name):
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
+    result = { "processed": 0, "successful": 0, "failed": 0, "details": [] }
+
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        rate_policies = response.json().get("ratePolicies", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch rate policies: {e}")
+        return result
+
+    result["processed"] = len(rate_policies)
+
+    for policy in rate_policies:
+        policy_id = policy.get("id")
+        name = policy.get("name", "")
+
+        if "Security Policy Template" not in name:
+            continue
+
+        # Attempt to find the matching client list
+        suffix = name.split("Security Policy Template")[-1].strip()
+        target_list_name = f"SC-{access_group} {suffix}"
+        matched_list = search_client_lists_by_name(session, base_url, target_list_name)
+
+        if not matched_list:
+            print(f"[WARN] No matching client list found for: {target_list_name}")
+            result["failed"] += 1
+            result["details"].append({
+                "id": policy_id,
+                "name": name,
+                "status": "skipped",
+                "reason": "No matching client list found"
+            })
+            continue
+
+        # Build updated payload
+        updated_name = name.replace("Security Policy Template", f"SC-{access_group}")
+        updated_match_options = []
+
+        for match_option in policy.get("additionalMatchOptions", []):
+            if match_option.get("type") == "CLIENT_LIST":
+                updated_match_options.append({
+                    "type": "CLIENT_LIST",
+                    "values": [matched_list["id"]]
+                })
+            else:
+                updated_match_options.append(match_option)
+
+        payload = {
+            "name": updated_name,
+            "threshold": policy.get("threshold"),
+            "period": policy.get("period"),
+            "action": policy.get("action"),
+            "additionalMatchOptions": updated_match_options,
+            "actionSettings": policy.get("actionSettings", {}),
+            "type": policy.get("type", "custom"),
+            "description": policy.get("description", "")
+        }
+
+        print(f"[DEBUG] Would update rate policy {policy_id} with name: {updated_name}")
+        print(json.dumps(payload, indent=2))
+
+        # In live mode, replace with:
+        # put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{policy_id}"
+        # response = session.put(put_url, json=payload)
+        # response.raise_for_status()
+
+        result["successful"] += 1
+        result["details"].append({
+            "id": policy_id,
+            "name": updated_name,
+            "status": "success (debug)"
+        })
+
+    return result
