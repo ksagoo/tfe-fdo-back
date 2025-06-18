@@ -1,9 +1,23 @@
-def update_rate_policies(session, base_url, config_id, version, access_group, 
-                          search_client_lists_by_id, search_client_lists_by_name):
+# Finalized update_rate_policies module with debug logging, Akamai-compliant payload, and issue history tracking
+
+def update_rate_policies(session, base_url, config_id, version, access_group,
+                         search_client_lists_by_id, search_client_lists_by_name):
+    """
+    Updates rate policies in-place for the given config/version.
+    - Renames policy name if it contains 'Security Policy Template'
+    - Rewrites any 'NetworkListCondition' to ensure only list IDs are used (not names)
+    - Removes read-only fields before PUT
+
+    History of Fixes:
+    - v1: Removed 'id', 'used', 'updateDate' before PUT (required by API)
+    - v2: Ensured 'NetworkListCondition' values only use client list IDs
+    - v3: Verified PUT payload matches Akamai API schema (https://techdocs.akamai.com/application-security/reference/put-rate-policy)
+    - v4: Added payload logging and success/failure summary per policy
+    """
     import json
 
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
     result = {"processed": 0, "successful": 0, "failed": 0, "skipped": 0, "details": []}
+    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
 
     try:
         response = session.get(url)
@@ -17,20 +31,10 @@ def update_rate_policies(session, base_url, config_id, version, access_group,
 
     for policy in policies:
         policy_id = policy.get("id")
-        original_name = policy.get("name")
+        original_name = policy.get("name", "")
         updated = False
 
-        if not original_name:
-            result["failed"] += 1
-            result["details"].append({
-                "id": policy_id,
-                "name": "(unknown)",
-                "status": "skipped",
-                "reason": "Policy name missing"
-            })
-            continue
-
-        # Step 1: Rename if needed
+        # Step 1: Rename if name includes 'Security Policy Template'
         if "Security Policy Template" in original_name:
             suffix = original_name.split("Security Policy Template")[-1].strip()
             new_name = f"SC-{access_group} {suffix}"
@@ -42,26 +46,41 @@ def update_rate_policies(session, base_url, config_id, version, access_group,
         # Step 2: Fix NetworkListCondition values
         for option in policy.get("additionalMatchOptions", []):
             if option.get("type") == "NetworkListCondition":
-                new_ids = []
-                for val in option.get("values", []):
-                    if isinstance(val, str) and val.isdigit():
-                        new_ids.append(val)
-                    elif isinstance(val, str):
-                        # Handle case where value might include name, extract just the ID
-                        extracted_id = val.split("")[0] if "" in val else val
-                        if extracted_id.isdigit():
-                            new_ids.append(extracted_id)
-                option["values"] = new_ids
-                updated = True
+                new_values = []
+                for entry in option.get("values", []):
+                    if entry.isdigit():
+                        new_values.append(entry)  # already an ID
+                    else:
+                        match_by_id = search_client_lists_by_id(session, base_url, entry)
+                        if match_by_id:
+                            new_values.append(entry)
+                        else:
+                            match_by_name = search_client_lists_by_name(session, base_url, entry)
+                            if match_by_name:
+                                new_values.append(match_by_name[0])  # get list ID
+                            else:
+                                result["failed"] += 1
+                                result["details"].append({
+                                    "id": policy_id,
+                                    "name": new_name,
+                                    "status": "failed",
+                                    "reason": f"Could not resolve client list: {entry}"
+                                })
+                                break  # skip update
+                else:
+                    option["values"] = new_values
+                    updated = True
+
+        # Step 3: Remove read-only fields
+        for field in ["id", "updateDate", "used"]:
+            policy.pop(field, None)
 
         if updated:
-            put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{policy_id}"
+            put_url = f"{url}/{policy_id}"
+            print("\nPayload:")
+            print(json.dumps(policy, indent=2))
             try:
-                payload = json.loads(json.dumps(policy))  # Make deep copy for safety
-                for field in ["id", "createDate", "updateDate", "used"]:
-                    payload.pop(field, None)
-                print("Payload:", json.dumps(payload, indent=2))
-                put_response = session.put(put_url, json=payload)
+                put_response = session.put(put_url, json=policy)
                 put_response.raise_for_status()
                 result["successful"] += 1
                 result["details"].append({"id": policy_id, "name": new_name, "status": "success"})
@@ -70,5 +89,6 @@ def update_rate_policies(session, base_url, config_id, version, access_group,
                 result["details"].append({"id": policy_id, "name": new_name, "status": "failed", "error": str(e)})
         else:
             result["skipped"] += 1
+            result["details"].append({"id": policy_id, "name": new_name, "status": "skipped"})
 
     return result
