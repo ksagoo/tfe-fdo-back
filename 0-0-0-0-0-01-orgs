@@ -15,86 +15,99 @@ def update_rate_policies(session, base_url, config_id, version, access_group,
 
     for policy in policies:
         policy_id = policy.get("id")
-        original_name = policy.get("name", "")
+        original_name = policy.get("name")
         updated = False
 
-        # Step 1: Rename policy name if it includes 'Security Policy Template'
+        # Fetch the full policy object first
+        get_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{policy_id}"
+        try:
+            full_response = session.get(get_url)
+            full_response.raise_for_status()
+            full_policy = full_response.json()
+        except Exception as e:
+            result["failed"] += 1
+            result["details"].append({
+                "id": policy_id,
+                "name": original_name,
+                "status": "failed",
+                "error": f"GET failed: {e}"
+            })
+            continue
+
+        # Update name if needed
+        new_name = original_name
         if "Security Policy Template" in original_name:
             suffix = original_name.split("Security Policy Template")[-1].strip()
             new_name = f"SC-{access_group} {suffix}"
-            policy["name"] = new_name
+            full_policy["name"] = new_name
             updated = True
-        else:
-            new_name = original_name
 
-        # Step 2: Update network list references in additionalMatchOptions
-        for option in policy.get("additionalMatchOptions", []):
-            if option.get("type") != "NetworkListCondition":
-                continue
+        # Handle additionalMatchOptions: find and update client list ID
+        for option in full_policy.get("additionalMatchOptions", []):
+            if option.get("type") == "NetworkListCondition":
+                original_ids = option.get("values", [])
+                new_ids = []
 
-            original_ids = option.get("values", [])
-            new_ids = []
+                for list_id in original_ids:
+                    matches = search_client_lists_by_id(session, base_url, list_id)
+                    if not matches:
+                        result["skipped"] += 1
+                        result["details"].append({
+                            "id": policy_id,
+                            "name": new_name,
+                            "status": "skipped",
+                            "reason": f"No match found for list ID: {list_id}"
+                        })
+                        break
 
-            for list_id in original_ids:
-                # Search by ID to get the associated name
-                matches = search_client_lists_by_id(session, base_url, list_id)
-                if not matches:
-                    result["failed"] += 1
-                    result["details"].append({
-                        "id": policy_id,
-                        "name": new_name,
-                        "status": "skipped",
-                        "reason": f"No match found for list ID: {list_id}"
-                    })
-                    break
+                    original_name = matches[0][1]
+                    if "Security Policy Template" not in original_name:
+                        result["skipped"] += 1
+                        result["details"].append({
+                            "id": policy_id,
+                            "name": new_name,
+                            "status": "skipped",
+                            "reason": f"Template name not found for list ID: {list_id}"
+                        })
+                        break
 
-                original_list_id, original_list_name = matches[0]
-                if "Security Policy Template" not in original_list_name:
-                    result["failed"] += 1
-                    result["details"].append({
-                        "id": policy_id,
-                        "name": new_name,
-                        "status": "skipped",
-                        "reason": f"Template name not found for list ID: {list_id}"
-                    })
-                    break
+                    suffix = original_name.split("Security Policy Template")[-1].strip()
+                    new_lookup = f"SC-{access_group} {suffix}"
+                    new_match = search_client_lists_by_name(session, base_url, new_lookup)
 
-                suffix = original_list_name.split("Security Policy Template")[-1].strip()
-                new_name_lookup = f"SC-{access_group} {suffix}"
-                new_match = search_client_lists_by_name(session, base_url, new_name_lookup)
+                    if not new_match:
+                        result["failed"] += 1
+                        result["details"].append({
+                            "id": policy_id,
+                            "name": new_name,
+                            "status": "failed",
+                            "reason": f"No matching client list found for: {new_lookup}"
+                        })
+                        break
 
-                if not new_match:
-                    result["failed"] += 1
-                    result["details"].append({
-                        "id": policy_id,
-                        "name": new_name,
-                        "status": "skipped",
-                        "reason": f"No matching client list found for: {new_name_lookup}"
-                    })
-                    break
+                    new_ids.append(new_match[0][0])
 
-                new_ids.append(new_match[0][0])  # Only pass the list ID
-
-            else:
                 option["values"] = new_ids
                 updated = True
 
         if updated:
-            # Clean up PUT payload
-            for field in ["createDate", "updateDate", "used"]:
-                policy.pop(field, None)
+            # Remove disallowed fields
+            for field in ["id", "createDate", "updateDate", "used"]:
+                full_policy.pop(field, None)
 
             put_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{policy_id}"
             try:
-                print("Payload:", json.dumps(policy, indent=2))
-                put_response = session.put(put_url, json=policy)
+                put_response = session.put(put_url, json=full_policy)
                 put_response.raise_for_status()
                 result["successful"] += 1
                 result["details"].append({"id": policy_id, "name": new_name, "status": "success"})
             except Exception as e:
                 result["failed"] += 1
-                result["details"].append({"id": policy_id, "name": new_name, "status": "failed", "error": str(e)})
-        else:
-            result["skipped"] += 1
+                result["details"].append({
+                    "id": policy_id,
+                    "name": new_name,
+                    "status": "failed",
+                    "error": str(e)
+                })
 
     return result
