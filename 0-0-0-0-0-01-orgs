@@ -1,128 +1,42 @@
-def update_rate_policies(session, base_url, config_id, version, access_group,
-                         search_client_lists_by_id, search_client_lists_by_name):
-    result = {"processed": 0, "successful": 0, "failed": 0, "skipped": 0, "details": []}
-    get_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
+"""
+====================================================================================
+    Akamai AppSec Onboarding Automation
+====================================================================================
 
-    try:
-        response = session.get(get_url)
-        response.raise_for_status()
-        policies = response.json().get("ratePolicies", [])
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch rate policies: {e}")
-        return result
+    Description:
+    Automates the onboarding process for Akamai Application Security configurations,
+    including:
 
-    result["processed"] = len(policies)
+    - Security config and policy creation (NonProd and Prod)
+    - Cloning and reassignment of match targets
+    - Reassignment of client lists, custom rules, rate limits, reputation profiles,
+      bot category actions, WAF rule exceptions, slow post protection, geo ACLs,
+      and DoS rate policies
+    - Section-aware API logic for safe reassignment
+    - Environment-specific bypass list selection (Dev, PreProd, Prod)
+    - Activation of configuration and policy
+    - Summary reporting per module
+    - Dry-run preview support
 
-    for policy in policies:
-        policy_id = policy.get("id")
-        original_name = policy.get("name", "")
-        updated_name = original_name
-        updated = False
+    Features:
+    - Reusable onboarding logic for both NonProd and Prod policies
+    - Client list reassignment logic ensures no conflict with shared resources
+    - DoS policy payload cleanup (removes read-only fields before PUT)
+    - Uses both client list ID and name to ensure safe list mapping
+    - Modular onboarding logic with success/failure status per step
 
-        # 1. Fetch full policy JSON to use as payload base
-        get_policy_url = f"{get_url}/{policy_id}"
-        try:
-            policy_response = session.get(get_policy_url)
-            policy_response.raise_for_status()
-            full_policy = policy_response.json()
-        except Exception as e:
-            result["failed"] += 1
-            result["details"].append({
-                "id": policy_id,
-                "name": original_name,
-                "status": "failed",
-                "error": f"Failed to fetch policy: {e}"
-            })
-            continue
+    Usage:
+        python akamai_appsec_onboarding.py --section <SECTION> \
+            --access_group <ACCESS_GROUP> --fqdn <FQDN> \
+            --template_config_name <TEMPLATE_NAME> \
+            --isProd <true|false>
 
-        # 2. Rename policy if it contains 'Security Policy Template'
-        if "Security Policy Template" in original_name:
-            suffix = original_name.split("Security Policy Template")[-1].strip()
-            updated_name = f"SC-{access_group} {suffix}"
-            full_policy["name"] = updated_name
-            updated = True
+    Requirements:
+    - Python 3.x
+    - requests, jinja2, PyYAML
+    - Valid Akamai API credentials (edgegrid config) with appropriate group access
 
-        # 3. Update client list references in additionalMatchOptions
-        new_match_options = []
-        for option in full_policy.get("additionalMatchOptions", []):
-            if option.get("type") == "NetworkListCondition":
-                new_values = []
-                for original_id in option.get("values", []):
-                    matches = search_client_lists_by_id(session, base_url, original_id)
-                    if not matches:
-                        result["failed"] += 1
-                        result["details"].append({
-                            "id": policy_id,
-                            "name": updated_name,
-                            "status": "skipped",
-                            "reason": f"No match found for list ID: {original_id}"
-                        })
-                        break
-                    original_name_match = matches[0][1]
-                    if "Security Policy Template" not in original_name_match:
-                        result["failed"] += 1
-                        result["details"].append({
-                            "id": policy_id,
-                            "name": updated_name,
-                            "status": "skipped",
-                            "reason": f"Template name not found for list ID: {original_id}"
-                        })
-                        break
-
-                    suffix = original_name_match.split("Security Policy Template")[-1].strip()
-                    new_lookup = f"SC-{access_group} {suffix}"
-                    new_match = search_client_lists_by_name(session, base_url, new_lookup)
-                    if not new_match:
-                        result["failed"] += 1
-                        result["details"].append({
-                            "id": policy_id,
-                            "name": updated_name,
-                            "status": "skipped",
-                            "reason": f"No matching client list found for: {new_lookup}"
-                        })
-                        break
-
-                    new_values.append(new_match[0][0])  # only List ID
-                else:
-                    option["values"] = new_values
-                    new_match_options.append(option)
-                    updated = True
-            else:
-                new_match_options.append(option)
-
-        full_policy["additionalMatchOptions"] = new_match_options
-
-        # 4. Sanitize payload by removing read-only / non-updatable fields
-        for readonly_field in ["id", "createDate", "updateDate", "used"]:
-            full_policy.pop(readonly_field, None)
-
-        # 5. Submit updated policy
-        if updated:
-            put_url = f"{get_url}/{policy_id}"
-            try:
-                print("Payload:", json.dumps(full_policy, indent=2))  # for debug
-                put_response = session.put(put_url, json=full_policy)
-                put_response.raise_for_status()
-                result["successful"] += 1
-                result["details"].append({
-                    "id": policy_id,
-                    "name": updated_name,
-                    "status": "success"
-                })
-            except Exception as e:
-                result["failed"] += 1
-                result["details"].append({
-                    "id": policy_id,
-                    "name": updated_name,
-                    "status": "failed",
-                    "error": str(e)
-                })
-        else:
-            result["skipped"] += 1
-            result["details"].append({
-                "id": policy_id,
-                "name": updated_name,
-                "status": "skipped"
-            })
-
-    return result
+    Created: June 2025
+    License: Internal use only – HSBC / Akamai onboarding automation
+====================================================================================
+"""
