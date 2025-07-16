@@ -1,94 +1,164 @@
-# Finalized update_rate_policies module with debug logging, Akamai-compliant payload, and issue history tracking
+Onboarding Automation – User Guide
+Overview: Jira Workflow and Automated Flow
 
-def update_rate_policies(session, base_url, config_id, version, access_group,
-                         search_client_lists_by_id, search_client_lists_by_name):
-    """
-    Updates rate policies in-place for the given config/version.
-    - Renames policy name if it contains 'Security Policy Template'
-    - Rewrites any 'NetworkListCondition' to ensure only list IDs are used (not names)
-    - Removes read-only fields before PUT
+This guide walks you through the automated onboarding process initiated via the Jira Front Door form. The following diagram outlines the key Jira workflow stages:
 
-    History of Fixes:
-    - v1: Removed 'id', 'used', 'updateDate' before PUT (required by API)
-    - v2: Ensured 'NetworkListCondition' values only use client list IDs
-    - v3: Verified PUT payload matches Akamai API schema (https://techdocs.akamai.com/application-security/reference/put-rate-policy)
-    - v4: Added payload logging and success/failure summary per policy
-    """
-    import json
+!01.jpeg|width=800!
+Workflow Stages
 
-    result = {"processed": 0, "successful": 0, "failed": 0, "skipped": 0, "details": []}
-    url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
+    Submitted – Request is submitted via the Front Door form.
 
-    try:
-        response = session.get(url)
-        response.raise_for_status()
-        policies = response.json().get("ratePolicies", [])
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch rate policies: {e}")
-        return result
+    Validated – Access groups and change tickets are verified.
 
-    result["processed"] = len(policies)
+    In Progress – Jenkins pipelines trigger and provision configurations.
 
-    for policy in policies:
-        policy_id = policy.get("id")
-        original_name = policy.get("name", "")
-        updated = False
+    Awaiting Activation Approval – Staging activation is complete, awaiting production approval.
 
-        # Step 1: Rename if name includes 'Security Policy Template'
-        if "Security Policy Template" in original_name:
-            suffix = original_name.split("Security Policy Template")[-1].strip()
-            new_name = f"SC-{access_group} {suffix}"
-            policy["name"] = new_name
-            updated = True
-        else:
-            new_name = original_name
+    Completed – Final production activation is performed.
 
-        # Step 2: Fix NetworkListCondition values
-        for option in policy.get("additionalMatchOptions", []):
-            if option.get("type") == "NetworkListCondition":
-                new_values = []
-                for entry in option.get("values", []):
-                    if entry.isdigit():
-                        new_values.append(entry)  # already an ID
-                    else:
-                        match_by_id = search_client_lists_by_id(session, base_url, entry)
-                        if match_by_id:
-                            new_values.append(entry)
-                        else:
-                            match_by_name = search_client_lists_by_name(session, base_url, entry)
-                            if match_by_name:
-                                new_values.append(match_by_name[0])  # get list ID
-                            else:
-                                result["failed"] += 1
-                                result["details"].append({
-                                    "id": policy_id,
-                                    "name": new_name,
-                                    "status": "failed",
-                                    "reason": f"Could not resolve client list: {entry}"
-                                })
-                                break  # skip update
-                else:
-                    option["values"] = new_values
-                    updated = True
+Step-by-Step Instructions
+Step 1: Access the Jira Front Door Form
 
-        # Step 3: Remove read-only fields
-        for field in ["id", "updateDate", "used"]:
-            policy.pop(field, None)
+!02.jpeg|width=700!
 
-        if updated:
-            put_url = f"{url}/{policy_id}"
-            print("\nPayload:")
-            print(json.dumps(policy, indent=2))
-            try:
-                put_response = session.put(put_url, json=policy)
-                put_response.raise_for_status()
-                result["successful"] += 1
-                result["details"].append({"id": policy_id, "name": new_name, "status": "success"})
-            except Exception as e:
-                result["failed"] += 1
-                result["details"].append({"id": policy_id, "name": new_name, "status": "failed", "error": str(e)})
-        else:
-            result["skipped"] += 1
-            result["details"].append({"id": policy_id, "name": new_name, "status": "skipped"})
+Navigate to the Front Door form and complete the following fields:
 
-    return result
+    Property Name
+
+    Access Group
+
+    Environment (NonProd or Prod)
+
+    Business and Technical Owners
+
+    Required Configurations
+
+All fields include inline descriptions for clarity.
+Step 2: Attach Change Tickets
+
+!03.jpeg|width=700!
+
+You must include two separate change tickets with your request:
+
+    Onboarding Change Ticket
+
+        Must be fully approved
+
+        Must fall within the scheduled change window
+
+    Property Activation & Security Configuration Ticket
+
+        Can be in Draft initially
+
+        Must be fully approved prior to production activation
+
+System validations ensure:
+
+    Change ticket status is approved
+
+    Assignment group is correct
+
+    Approver belongs to the assignment group
+
+Step 3: Submit Form and Trigger Automation
+
+!04.jpeg|width=700!
+
+Once submitted, the request transitions to the Submitted state. This action triggers a webhook to Jenkins, which begins processing.
+Step 4: Confirmation Email
+
+!06.jpeg|width=700!
+
+You will receive a confirmation email indicating that your onboarding request has been received and automation has been triggered.
+Step 5: Jenkins – Access Group and Change Ticket Validation
+
+!07.jpeg|width=700!
+
+The pipeline performs the following checks:
+
+    Validates the access group exists
+
+    Confirms both change tickets meet approval and timing requirements
+
+If any validation fails, the ticket is returned to the requestor.
+Step 6: CPS and Site Delivery Creation
+
+!08.jpeg|width=700!
+
+A new Site Delivery is created. Certificate Provisioning System (CPS) requests are initiated based on the property and domain.
+Step 7: Activate Site Delivery in Staging
+
+!09.jpeg|width=700!
+
+The pipeline activates the property in the Staging Akamai network. This ensures the configuration is fully tested before going to production.
+Step 8: Clone Security Configuration from Template
+
+!10.jpeg|width=700!
+
+A security configuration is cloned from the pre-approved Security Policy Template, including:
+
+    Client Lists
+
+    Custom Rules
+
+    Rate Limits
+
+    Reputation Profiles
+
+All cloned items are renamed using the format:
+SC-<AccessGroup>-<OriginalNameSuffix>
+Step 9: Jenkins Pipeline Output
+
+!11.jpeg|width=700!
+
+Pipeline logs and outputs are updated in real-time. Any failures are automatically flagged and pushed to Jira with detailed trace logs.
+Step 10: Email Notification for Production Approval
+
+!15.jpeg|width=700!
+
+Once staging is successful, an approval email is sent to designated approvers for production deployment authorization.
+Step 11: Manual Approval via Jira or ServiceNow
+
+!16.jpeg|width=700!
+
+The assigned approver reviews and approves via the linked ticketing system. Once approved, production deployment proceeds.
+Step 12: Activate in Production
+
+!17.jpeg|width=700!
+
+The final production activation is performed. This includes Akamai configuration updates for property and security policies.
+Step 13: Final Notification
+
+!18.jpeg|width=700!
+
+A final confirmation email is sent to the requester confirming successful onboarding and production deployment.
+Step 14: Jira Ticket Closure
+
+!19.jpeg|width=700!
+
+The Jira ticket transitions to Completed. A complete audit trail is attached to the issue, including logs, screenshots, and timestamps.
+Step 15: Summary of Cloned Entities
+
+!20.jpeg|width=700!
+
+The following elements are logged:
+
+    Client lists cloned
+
+    Rate policies applied
+
+    Custom rules reassigned
+
+    Match targets reassigned
+
+Step 16: Handling Failures and Retries
+
+!21.jpeg|width=700!
+
+If any part of the onboarding fails:
+
+    You will receive an email notification
+
+    The Jira ticket will indicate the failure reason
+
+    You can re-trigger the onboarding by correcting the issue and transitioning the ticket again
