@@ -97,6 +97,12 @@ Python Project (akamai_cert_automation/)
 
 - The solution will integrate with the **Jira Front Door Form System** to allow users to initiate certificate renewal workflows via a self-service interface.
 
+#### Entitlement Validation (AD Group-Based Access Control)
+- Before proceeding with certificate renewal actions, the automation will perform a **real-time entitlement check**.
+- This involves validating whether the initiating user is a member of the **Active Directory (AD) Group** that corresponds to the **Akamai Access Group** for the targeted configuration.
+- This entitlement verification step ensures that only authorized teams can initiate renewals, eliminating reliance on manual entitlement spreadsheets.
+- Refer to the **“Entitlement Enforcement Design Document”** for detailed architecture and workflow of this validation logic.
+
 - **Form Behavior:**
   - Submitting the form creates a Jira Ticket capturing the certificate renewal request.
   - Jira workflows enforce approval chains (Change Approval, Assignment Group validation).
