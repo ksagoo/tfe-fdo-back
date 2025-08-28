@@ -1,3 +1,5 @@
+sudo /Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
+
 {
   "terminal.integrated.profiles.windows": {
     "Git Bash": {
