@@ -43,7 +43,7 @@ Usage:
         python akamai-entitlement-check.py --user 45384191 --user-b 45376071
 ===================================================================================
 """
-
+from __future__ import annotations
 import argparse
 import json
 import os
