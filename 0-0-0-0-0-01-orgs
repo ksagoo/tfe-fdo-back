@@ -1,3 +1,18 @@
+"terminal.integrated.profiles": {
+    "PowerShell": {
+        "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    },
+    "Command Prompt": {
+        "path": "C:\\Windows\\System32\\cmd.exe"
+    },
+    "Git Bash": {
+        "path": "C:\\Program Files\\Git\\bin\\bash.exe"
+    }
+},
+"terminal.integrated.defaultProfile.windows": "Git Bash"
+
+
+
 python ldap_lookup.py \
   --base https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap \
   --user 45384191 \
