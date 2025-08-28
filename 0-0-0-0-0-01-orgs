@@ -1,16 +1,142 @@
-Hi Helen,
+import argparse
+import json
+import os
+import re
+import sys
+from typing import Any, Dict, List
 
-I hope you are doing well.
+try:
+    import requests
+except ImportError:
+    requests = None
 
-I was advised by Tom Gulliver to reach out to you regarding a requirement we are exploring within the CyberWasp DevOps Automation team.
 
-We are currently working on Akamai shift-left automation, and as part of this, we were looking at whether it might be possible to update the SNOW Standard Change Template to include a custom field. The idea is to capture the ADLDS group that the change raiser is a member of, which would then be mapped to the corresponding Akamai Access Group for which the change is being requested.
+def _headers_from_env() -> Dict[str, str]:
+    headers = {"Accept": "application/json"}
+    bearer = os.getenv("LDAP_BEARER")
+    cookies = os.getenv("LDAP_COOKIES")
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    if cookies:
+        headers["Cookie"] = cookies
+    return headers
 
-The purpose of this is to ensure that only users with the correct entitlement can raise changes related to specific Akamai resources (e.g., certificate renewals, property creation, security activation, etc.), and to help us cross-reference entitlements more efficiently.
 
-Would you be open to scheduling a short meeting to walk through the requirement and discuss whether this could fit within the current change management process, or if there are alternative approaches we should consider?
+def fetch_user_json(base_url: str, user_id: str, timeout: float = 20.0) -> Dict[str, Any]:
+    if requests is None:
+        raise RuntimeError("The 'requests' package is not installed. Install it with: pip install requests")
 
-Thanks in advance for your guidance.
+    url = f"{base_url.rstrip('/')}/{user_id}"
+    headers = _headers_from_env()
+    resp = requests.get(url, headers=headers, timeout=timeout, verify=False)
+    resp.raise_for_status()
+    return resp.json()
 
-Best regards,
-Kuldeep
+
+def load_json_from_file(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _extract_groups(payload: Dict[str, Any]) -> List[str]:
+    """
+    Try to extract groups from common LDAP fields.
+    """
+    if "memberOf" in payload and isinstance(payload["memberOf"], list):
+        return sorted(set(payload["memberOf"]), key=str.casefold)
+    return []
+
+
+def print_summary(payload: Dict[str, Any]) -> None:
+    fields = [
+        ("displayName", payload.get("displayName")),
+        ("mail", payload.get("mail")),
+        ("sAMAccountName", payload.get("sAMAccountName")),
+        ("employeeId", payload.get("employeeId")),
+        ("department", payload.get("department")),
+        ("company", payload.get("company")),
+    ]
+    print("== User Summary ==")
+    for k, v in fields:
+        if v:
+            print(f"{k:18}: {v}")
+
+    groups = _extract_groups(payload)
+    print(f"\nGroups ({len(groups)}):")
+    for g in groups:
+        print(f"  - {g}")
+
+
+def is_member(payload: Dict[str, Any], group: str, exact: bool = False) -> bool:
+    groups = _extract_groups(payload)
+    if exact:
+        return any(g.strip().casefold() == group.strip().casefold() for g in groups)
+    return any(group.lower() in g.lower() for g in groups)
+
+
+def find_groups(payload: Dict[str, Any], pattern: str, regex: bool = False) -> List[str]:
+    groups = _extract_groups(payload)
+    if regex:
+        rx = re.compile(pattern, re.IGNORECASE)
+        return [g for g in groups if rx.search(g)]
+    return [g for g in groups if pattern.lower() in g.lower()]
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Fetch and query LDAP/AD details from an internal API.")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--from-file", help="Path to a saved JSON file")
+    src.add_argument("--base", help="Base API URL (e.g. https://.../api/v1/ldap)")
+    ap.add_argument("--user", help="User ID (e.g. 45384191)")
+
+    ap.add_argument("--summary", action="store_true", help="Print user summary")
+    ap.add_argument("--groups", action="store_true", help="List only groups")
+    ap.add_argument("--is-member", metavar="GROUP", help="Check membership (substring or exact match)")
+    ap.add_argument("--exact", action="store_true", help="Use exact match for --is-member")
+    ap.add_argument("--find", metavar="PATTERN", help="Find groups by substring")
+    ap.add_argument("--find-regex", metavar="REGEX", help="Find groups by regex")
+    ap.add_argument("--save-json", metavar="PATH", help="Save fetched JSON to file")
+
+    args = ap.parse_args()
+
+    if args.from_file:
+        payload = load_json_from_file(args.from_file)
+    else:
+        if not args.user:
+            ap.error("--user is required with --base")
+        payload = fetch_user_json(args.base, args.user)
+        if args.save_json:
+            with open(args.save_json, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+
+    did_any = False
+    if args.summary or (not args.groups and not args.is_member and not args.find and not args.find_regex):
+        print_summary(payload)
+        did_any = True
+
+    if args.groups:
+        for g in _extract_groups(payload):
+            print(g)
+        did_any = True
+
+    if args.is_member:
+        print("YES" if is_member(payload, args.is_member, args.exact) else "NO")
+        did_any = True
+
+    if args.find:
+        for g in find_groups(payload, args.find):
+            print(g)
+        did_any = True
+
+    if args.find_regex:
+        for g in find_groups(payload, args.find_regex, regex=True):
+            print(g)
+        did_any = True
+
+    if not did_any:
+        print("No action selected. Use --summary, --groups, --is-member, --find, or --find-regex.")
+
+
+if __name__ == "__main__":
+    main()
+
