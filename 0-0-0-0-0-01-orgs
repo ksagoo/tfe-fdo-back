@@ -1,3 +1,27 @@
+python ldap_lookup.py \
+  --base https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap \
+  --user 45384191 \
+  --summary
+
+python ldap_lookup.py \
+  --base https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap \
+  --user 45384191 \
+  --groups
+
+python ldap_lookup.py \
+  --base https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap \
+  --user 45384191 \
+  --is-member "O365"
+
+
+python ldap_lookup.py \
+  --base https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap \
+  --user 45384191 \
+  --is-member "CN=Infdor-CYBERWASPJIRA-Admin,OU=Cyber WASP Automation,OU=Applications,OU=Groups,DC=InfoDir,DC=Prod,DC=HSBC" \
+  --exact
+
+
+
 import argparse
 import json
 import os
