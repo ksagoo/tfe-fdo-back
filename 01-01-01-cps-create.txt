@@ -1,131 +1,183 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
 ===================================================================================
-                           Akamai IAM Client Credential Management Script
+                           LDAP Lookup & Group Membership Script
 ===================================================================================
 Script Name:
-    Akamai IAM Credential Rotation Script
+    ldap_lookup.py
 
 Description:
-    This script authenticates using EdgeGrid and interacts with Akamai's IAM API to:
-    - List all API clients and their IDs
-    - List all credentials for a specific API client
-    - Rotate client credentials (generate new client token/secret/access token)
-    - Optionally delete older credentials
+    This script queries the internal LDAP/AD API endpoint and retrieves user details,
+    including group memberships. It supports checking membership, listing groups,
+    searching by substring/regex, and exporting JSON.
 
 Parameters:
-    --list_clients               : Lists all available API clients and exits
-    --client_id (optional)       : ID of the API client to manage credentials for
-    --rotate (optional)          : Rotate credentials for the client. Default is 'N'
-    --delete_old (optional)      : Delete previous credentials after rotation. Default is 'N'
-    --edgerc (optional)          : Path to the .edgerc file. Default is '~/.edgerc'
-    --section (optional)         : Section in the .edgerc file. Default is 'default'
+    --base (required)            : Base API URL (e.g., https://.../api/v1/ldap)
+    --user (required)            : User ID (e.g., 45384191)
+
+    --summary (optional)         : Print user summary (default if no other option given)
+    --groups (optional)          : Print only group memberships
+    --is-member (optional)       : Check if user is in a group (substring match unless --exact)
+    --exact (optional)           : Use exact match for --is-member
+    --find (optional)            : Find groups by substring
+    --find-regex (optional)      : Find groups by regex
+    --save-json (optional)       : Save raw API JSON response to a file
+    --verify-ca (optional)       : Path to CA certificate file for HTTPS verification.
+                                   Default is insecure mode (verify=False, warning suppressed).
 
 Usage:
-    - List all API clients:
-        python akamai_manage_iam_creds.py --list_clients
+    - Print summary of a user:
+        python ldap_lookup.py --base https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap --user 45384191 --summary
 
-    - Rotate and delete old:
-        python akamai_manage_iam_creds.py --client_id abc123 --rotate Y --delete_old Y
+    - List groups only:
+        python ldap_lookup.py --base https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap --user 45384191 --groups
+
+    - Check membership (substring match):
+        python ldap_lookup.py --base ... --user 45384191 --is-member "O365"
+
+    - Check exact membership:
+        python ldap_lookup.py --base ... --user 45384191 --is-member "CN=Infdor-O365-AllowAccess,...,DC=HSBC" --exact
+
+    - Find groups containing substring:
+        python ldap_lookup.py --base ... --user 45384191 --find "Azure"
+
+    - Find groups using regex:
+        python ldap_lookup.py --base ... --user 45384191 --find-regex "^CN=Infdor-.*O365"
+
+    - Save JSON for inspection:
+        python ldap_lookup.py --base ... --user 45384191 --save-json my_ldap.json
+
+    - Run with CA cert verification:
+        python ldap_lookup.py --base ... --user 45384191 --summary --verify-ca hsbc-ca.pem
 ===================================================================================
 """
-import os
+
 import argparse
-import requests
 import json
-from akamai.edgegrid import EdgeGridAuth, EdgeRc
-from urllib.parse import urljoin
+import os
+import re
+from typing import Any, Dict, List
 
-def setup_session(edgerc_path, section):
-    try:
-        edgerc = EdgeRc(edgerc_path)
-        base_url = f"https://{edgerc.get(section, 'host')}/"
-        session = requests.Session()
-        session.auth = EdgeGridAuth.from_edgerc(edgerc, section)
-        return session, base_url
-    except Exception as e:
-        print(f"Failed to load EdgeGrid credentials: {e}")
-        exit(1)
+import requests
+import urllib3
 
-def list_api_clients(session, base_url):
-    url = urljoin(base_url, "identity-management/v3/api-clients")
-    response = session.get(url)
-    if response.status_code == 200:
-        clients = response.json()
-        print("Available API Clients:")
-        for client in clients:
-            print(f"  - clientId: {client['clientId']}")
-            print(f"    name:     {client.get('name', '(no name)')}")
-            print(f"    desc:     {client.get('description', '(no description)')}\n")
-        return clients
+# Disable warnings by default
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def _headers_from_env() -> Dict[str, str]:
+    headers = {"Accept": "application/json"}
+    bearer = os.getenv("LDAP_BEARER")
+    cookies = os.getenv("LDAP_COOKIES")
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    if cookies:
+        headers["Cookie"] = cookies
+    return headers
+
+
+def fetch_user_json(base_url: str, user_id: str, ca_path: str = None, timeout: float = 20.0) -> Dict[str, Any]:
+    url = f"{base_url.rstrip('/')}/{user_id}"
+    headers = _headers_from_env()
+
+    if ca_path:
+        resp = requests.get(url, headers=headers, timeout=timeout, verify=ca_path)
     else:
-        print(f"Failed to list API clients: {response.status_code}")
-        print(response.text)
-        return []
+        resp = requests.get(url, headers=headers, timeout=timeout, verify=False)
 
-def list_client_credentials(session, base_url, client_id):
-    url = urljoin(base_url, f"identity-management/v3/api-clients/{client_id}/credentials")
-    resp = session.get(url)
-    if resp.status_code == 200:
-        creds = resp.json()
-        print(f"Credentials for client ID {client_id}:")
-        for cred in creds:
-            print(f"  - ID: {cred['credentialId']}, Created: {cred.get('createdDate', 'N/A')}, Status: {cred.get('status', 'N/A')}")
-        return creds
-    else:
-        print(f"Failed to list credentials (status code {resp.status_code}): {resp.text}")
-        return []
+    resp.raise_for_status()
+    return resp.json()
 
-def rotate_client_credentials(session, base_url, client_id):
-    url = urljoin(base_url, f"identity-management/v3/api-clients/{client_id}/credentials")
-    resp = session.post(url)
-    if resp.status_code == 201:
-        data = resp.json()
-        print("New credential created:")
-        print(json.dumps(data, indent=4))
-        return data["credentialId"]
-    else:
-        print(f"Failed to create new credentials: {resp.status_code}")
-        print(resp.text)
-        return None
 
-def delete_credential(session, base_url, client_id, credential_id):
-    url = urljoin(base_url, f"identity-management/v3/api-clients/{client_id}/credentials/{credential_id}")
-    resp = session.delete(url)
-    if resp.status_code == 204:
-        print(f"Deleted old credential: {credential_id}")
-    else:
-        print(f"Failed to delete credential {credential_id}: {resp.status_code}")
-        print(resp.text)
+def _extract_groups(payload: Dict[str, Any]) -> List[str]:
+    if "memberOf" in payload and isinstance(payload["memberOf"], list):
+        return sorted(set(payload["memberOf"]), key=str.casefold)
+    return []
+
+
+def print_summary(payload: Dict[str, Any]) -> None:
+    fields = [
+        ("displayName", payload.get("displayName")),
+        ("mail", payload.get("mail")),
+        ("sAMAccountName", payload.get("sAMAccountName")),
+        ("employeeId", payload.get("employeeId")),
+        ("department", payload.get("department")),
+        ("company", payload.get("company")),
+    ]
+    print("== User Summary ==")
+    for k, v in fields:
+        if v:
+            print(f"{k:18}: {v}")
+
+    groups = _extract_groups(payload)
+    print(f"\nGroups ({len(groups)}):")
+    for g in groups:
+        print(f"  - {g}")
+
+
+def is_member(payload: Dict[str, Any], group: str, exact: bool = False) -> bool:
+    groups = _extract_groups(payload)
+    if exact:
+        return any(g.strip().casefold() == group.strip().casefold() for g in groups)
+    return any(group.lower() in g.lower() for g in groups)
+
+
+def find_groups(payload: Dict[str, Any], pattern: str, regex: bool = False) -> List[str]:
+    groups = _extract_groups(payload)
+    if regex:
+        rx = re.compile(pattern, re.IGNORECASE)
+        return [g for g in groups if rx.search(g)]
+    return [g for g in groups if pattern.lower() in g.lower()]
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Fetch and query LDAP/AD details from an internal API.")
+    ap.add_argument("--base", required=True, help="Base API URL (e.g. https://.../api/v1/ldap)")
+    ap.add_argument("--user", required=True, help="User ID (e.g. 45384191)")
+
+    ap.add_argument("--summary", action="store_true", help="Print user summary")
+    ap.add_argument("--groups", action="store_true", help="List only groups")
+    ap.add_argument("--is-member", metavar="GROUP", help="Check membership (substring or exact match)")
+    ap.add_argument("--exact", action="store_true", help="Use exact match for --is-member")
+    ap.add_argument("--find", metavar="PATTERN", help="Find groups by substring")
+    ap.add_argument("--find-regex", metavar="REGEX", help="Find groups by regex")
+    ap.add_argument("--save-json", metavar="PATH", help="Save fetched JSON to file")
+    ap.add_argument("--verify-ca", metavar="CA_PATH", help="Path to CA cert for TLS verification")
+
+    args = ap.parse_args()
+
+    payload = fetch_user_json(args.base, args.user, ca_path=args.verify_ca)
+    if args.save_json:
+        with open(args.save_json, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+    did_any = False
+    if args.summary or (not args.groups and not args.is_member and not args.find and not args.find_regex):
+        print_summary(payload)
+        did_any = True
+
+    if args.groups:
+        for g in _extract_groups(payload):
+            print(g)
+        did_any = True
+
+    if args.is_member:
+        print("YES" if is_member(payload, args.is_member, args.exact) else "NO")
+        did_any = True
+
+    if args.find:
+        for g in find_groups(payload, args.find):
+            print(g)
+        did_any = True
+
+    if args.find_regex:
+        for g in find_groups(payload, args.find_regex, regex=True):
+            print(g)
+        did_any = True
+
+    if not did_any:
+        print("No action selected. Use --summary, --groups, --is-member, --find, or --find-regex.")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Manage IAM API client credentials via Akamai API")
-
-    parser.add_argument("--list_clients", action="store_true", help="List all available API clients")
-    parser.add_argument("--client_id", help="The API client ID")
-    parser.add_argument("--rotate", choices=["Y", "N"], default="N", help="Rotate credentials (default: N)")
-    parser.add_argument("--delete_old", choices=["Y", "N"], default="N", help="Delete previous credentials (default: N)")
-    parser.add_argument("--edgerc", default=os.path.expanduser("~/.edgerc"), help="Path to .edgerc file")
-    parser.add_argument("--section", default="default", help="Section in .edgerc")
-
-    args = parser.parse_args()
-    session, base_url = setup_session(args.edgerc, args.section)
-
-    if args.list_clients:
-        list_api_clients(session, base_url)
-        exit(0)
-
-    if not args.client_id:
-        print("Error: --client_id is required unless --list_clients is used")
-        exit(1)
-
-    existing_credentials = list_client_credentials(session, base_url, args.client_id)
-
-    if args.rotate == "Y":
-        new_credential_id = rotate_client_credentials(session, base_url, args.client_id)
-        if args.delete_old == "Y" and new_credential_id:
-            for cred in existing_credentials:
-                if cred["credentialId"] != new_credential_id:
-                    delete_credential(session, base_url, args.client_id, cred["credentialId"])
+    main()
