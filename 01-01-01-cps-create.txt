@@ -47,7 +47,7 @@ Usage:
 import argparse
 import json
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import requests
 import urllib3
@@ -67,7 +67,7 @@ def _headers_from_env() -> Dict[str, str]:
     return headers
 
 
-def fetch_user_json(base_url: str, user_id: str, ca_path: str | None = None, timeout: float = 20.0) -> Dict[str, Any]:
+def fetch_user_json(base_url: str, user_id: str, ca_path: Optional[str] = None, timeout: float = 20.0) -> Dict[str, Any]:
     url = f"{base_url.rstrip('/')}/{user_id}"
     headers = _headers_from_env()
     resp = requests.get(url, headers=headers, timeout=timeout, verify=(ca_path if ca_path else False))
