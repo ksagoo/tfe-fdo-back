@@ -1,3 +1,34 @@
+def is_member(payload: Dict[str, Any], group: str, exact: bool = False) -> List[str]:
+    groups = _extract_groups(payload)
+    matches: List[str] = []
+    if exact:
+        tgt = group.strip().casefold()
+        matches = [g for g in groups if g.strip().casefold() == tgt]
+    else:
+        tgt = group.lower()
+        matches = [g for g in groups if tgt in g.lower()]
+
+    # Clean output: strip "CN=" if present, keep the rest
+    cleaned = []
+    for g in matches:
+        if g.startswith("CN="):
+            cleaned.append(g.split(",", 1)[0].replace("CN=", ""))
+        else:
+            cleaned.append(g)
+    return cleaned
+
+
+if args.is_member:
+    matches = is_member(u1, args.is_member, args.exact)
+    if matches:
+        print("YES")
+        for m in matches:
+            print(m)
+    else:
+        print("NO")
+    did_any = True
+
+
 #!/usr/bin/env python3
 """
 ===================================================================================
