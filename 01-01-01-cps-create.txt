@@ -1,67 +1,58 @@
 #!/usr/bin/env python3
 """
 ===================================================================================
-                           LDAP Lookup & Group Membership Script
+                           Akamai Entitlement Check Script
 ===================================================================================
 Script Name:
-    ldap_lookup.py
+    akamai-entitlement-check.py
 
 Description:
-    This script queries the internal LDAP/AD API endpoint and retrieves user details,
-    including group memberships. It supports checking membership, listing groups,
-    searching by substring/regex, and exporting JSON.
+    Query the internal LDAP/AD API and retrieve user details, including group
+    memberships. Supports listing, membership checks, substring search, exporting
+    JSON, and comparing a primary user against another user. HTTPS certificate
+    verification can be enabled with a provided CA file; otherwise warnings are
+    suppressed by default.
 
 Parameters:
-    --base (required)            : Base API URL (e.g., https://.../api/v1/ldap)
-    --user (required)            : User ID (e.g., 45384191)
+    --base (optional)            : Base API URL. Default:
+                                   https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap
+    --user (required)            : Primary user ID (e.g., 45384191)
+    --user-b (optional)          : Second user ID for comparison
 
     --summary (optional)         : Print user summary (default if no other option given)
     --groups (optional)          : Print only group memberships
     --is-member (optional)       : Check if user is in a group (substring match unless --exact)
     --exact (optional)           : Use exact match for --is-member
     --find (optional)            : Find groups by substring
-    --find-regex (optional)      : Find groups by regex
     --save-json (optional)       : Save raw API JSON response to a file
+
     --verify-ca (optional)       : Path to CA certificate file for HTTPS verification.
-                                   Default is insecure mode (verify=False, warning suppressed).
+                                   If omitted, TLS runs with verify=False and warnings suppressed.
 
 Usage:
     - Print summary of a user:
-        python ldap_lookup.py --base https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap --user 45384191 --summary
+        python akamai-entitlement-check.py --user 45384191 --summary
 
     - List groups only:
-        python ldap_lookup.py --base https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap --user 45384191 --groups
+        python akamai-entitlement-check.py --user 45384191 --groups
 
     - Check membership (substring match):
-        python ldap_lookup.py --base ... --user 45384191 --is-member "O365"
+        python akamai-entitlement-check.py --user 45384191 --is-member "O365"
 
-    - Check exact membership:
-        python ldap_lookup.py --base ... --user 45384191 --is-member "CN=Infdor-O365-AllowAccess,...,DC=HSBC" --exact
-
-    - Find groups containing substring:
-        python ldap_lookup.py --base ... --user 45384191 --find "Azure"
-
-    - Find groups using regex:
-        python ldap_lookup.py --base ... --user 45384191 --find-regex "^CN=Infdor-.*O365"
-
-    - Save JSON for inspection:
-        python ldap_lookup.py --base ... --user 45384191 --save-json my_ldap.json
-
-    - Run with CA cert verification:
-        python ldap_lookup.py --base ... --user 45384191 --summary --verify-ca hsbc-ca.pem
+    - Compare two users:
+        python akamai-entitlement-check.py --user 45384191 --user-b 45376071
 ===================================================================================
 """
 
 import argparse
 import json
 import os
-import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import requests
 import urllib3
 
-# Disable warnings by default
+# Suppress warnings if running in insecure mode (default when --verify-ca not given)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -76,23 +67,20 @@ def _headers_from_env() -> Dict[str, str]:
     return headers
 
 
-def fetch_user_json(base_url: str, user_id: str, ca_path: str = None, timeout: float = 20.0) -> Dict[str, Any]:
+def fetch_user_json(base_url: str, user_id: str, ca_path: str | None = None, timeout: float = 20.0) -> Dict[str, Any]:
     url = f"{base_url.rstrip('/')}/{user_id}"
     headers = _headers_from_env()
-
-    if ca_path:
-        resp = requests.get(url, headers=headers, timeout=timeout, verify=ca_path)
-    else:
-        resp = requests.get(url, headers=headers, timeout=timeout, verify=False)
-
+    resp = requests.get(url, headers=headers, timeout=timeout, verify=(ca_path if ca_path else False))
     resp.raise_for_status()
     return resp.json()
 
 
 def _extract_groups(payload: Dict[str, Any]) -> List[str]:
-    if "memberOf" in payload and isinstance(payload["memberOf"], list):
-        return sorted(set(payload["memberOf"]), key=str.casefold)
-    return []
+    groups = payload.get("memberOf", [])
+    if not isinstance(groups, list):
+        return []
+    # Normalize & sort (case-insensitive)
+    return sorted({str(g) for g in groups}, key=str.casefold)
 
 
 def print_summary(payload: Dict[str, Any]) -> None:
@@ -100,7 +88,7 @@ def print_summary(payload: Dict[str, Any]) -> None:
         ("displayName", payload.get("displayName")),
         ("mail", payload.get("mail")),
         ("sAMAccountName", payload.get("sAMAccountName")),
-        ("employeeId", payload.get("employeeId")),
+        ("employeeId", payload.get("employeeId") or payload.get("employeeID")),
         ("department", payload.get("department")),
         ("company", payload.get("company")),
     ]
@@ -118,65 +106,114 @@ def print_summary(payload: Dict[str, Any]) -> None:
 def is_member(payload: Dict[str, Any], group: str, exact: bool = False) -> bool:
     groups = _extract_groups(payload)
     if exact:
-        return any(g.strip().casefold() == group.strip().casefold() for g in groups)
-    return any(group.lower() in g.lower() for g in groups)
+        tgt = group.strip().casefold()
+        return any(g.strip().casefold() == tgt for g in groups)
+    tgt = group.lower()
+    return any(tgt in g.lower() for g in groups)
 
 
-def find_groups(payload: Dict[str, Any], pattern: str, regex: bool = False) -> List[str]:
+def find_groups(payload: Dict[str, Any], pattern: str) -> List[str]:
     groups = _extract_groups(payload)
-    if regex:
-        rx = re.compile(pattern, re.IGNORECASE)
-        return [g for g in groups if rx.search(g)]
-    return [g for g in groups if pattern.lower() in g.lower()]
+    pat = pattern.lower()
+    return [g for g in groups if pat in g.lower()]
+
+
+def compare_groups(a_payload: Dict[str, Any], b_payload: Dict[str, Any]) -> Tuple[List[str], List[str], List[str]]:
+    """Return (only_in_a, only_in_b, in_both). Case-insensitive compare, original strings kept."""
+    a = _extract_groups(a_payload)
+    b = _extract_groups(b_payload)
+
+    a_map = {g.casefold(): g for g in a}
+    b_map = {g.casefold(): g for g in b}
+
+    a_keys = set(a_map.keys())
+    b_keys = set(b_map.keys())
+
+    only_a = [a_map[k] for k in sorted(a_keys - b_keys)]
+    only_b = [b_map[k] for k in sorted(b_keys - a_keys)]
+    both = [a_map[k] for k in sorted(a_keys & b_keys)]
+    return only_a, only_b, both
 
 
 def main():
     ap = argparse.ArgumentParser(description="Fetch and query LDAP/AD details from an internal API.")
-    ap.add_argument("--base", required=True, help="Base API URL (e.g. https://.../api/v1/ldap)")
-    ap.add_argument("--user", required=True, help="User ID (e.g. 45384191)")
+    ap.add_argument(
+        "--base",
+        default="https://apprunner.hk.hsbc/cached-ldap-looker-upperer/api/v1/ldap",
+        help="Base API URL (default: HSBC LDAP endpoint)",
+    )
+    ap.add_argument("--user", required=True, help="Primary user ID (e.g. 45384191)")
+    ap.add_argument("--user-b", help="Second user ID for comparison")
 
     ap.add_argument("--summary", action="store_true", help="Print user summary")
     ap.add_argument("--groups", action="store_true", help="List only groups")
     ap.add_argument("--is-member", metavar="GROUP", help="Check membership (substring or exact match)")
     ap.add_argument("--exact", action="store_true", help="Use exact match for --is-member")
     ap.add_argument("--find", metavar="PATTERN", help="Find groups by substring")
-    ap.add_argument("--find-regex", metavar="REGEX", help="Find groups by regex")
     ap.add_argument("--save-json", metavar="PATH", help="Save fetched JSON to file")
+
     ap.add_argument("--verify-ca", metavar="CA_PATH", help="Path to CA cert for TLS verification")
 
     args = ap.parse_args()
 
-    payload = fetch_user_json(args.base, args.user, ca_path=args.verify_ca)
+    # Fetch primary user
+    u1 = fetch_user_json(args.base, args.user, ca_path=args.verify_ca)
     if args.save_json:
         with open(args.save_json, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+            json.dump(u1, f, indent=2)
 
+    if args.user_b:
+        # Compare mode
+        u2 = fetch_user_json(args.base, args.user_b, ca_path=args.verify_ca)
+        u1_name = u1.get("displayName") or args.user
+        u2_name = u2.get("displayName") or args.user_b
+
+        only_u1, only_u2, both = compare_groups(u1, u2)
+
+        print("== Compare Group Memberships ==")
+        print(f"User A : {u1_name} ({args.user})")
+        print(f"User B : {u2_name} ({args.user_b})")
+        print(f"Totals : A={len(_extract_groups(u1))}, B={len(_extract_groups(u2))}, common={len(both)}\n")
+
+        print(f"-- Only in A ({len(only_u1)}) --")
+        for g in only_u1:
+            print(g)
+        print()
+
+        print(f"-- Only in B ({len(only_u2)}) --")
+        for g in only_u2:
+            print(g)
+        print()
+
+        print(f"-- In BOTH ({len(both)}) --")
+        for g in both:
+            print(g)
+
+        return
+
+    # Single-user mode
     did_any = False
-    if args.summary or (not args.groups and not args.is_member and not args.find and not args.find_regex):
-        print_summary(payload)
+
+    if args.summary or (not args.groups and not args.is_member and not args.find):
+        print_summary(u1)
         did_any = True
 
     if args.groups:
-        for g in _extract_groups(payload):
+        for g in _extract_groups(u1):
             print(g)
         did_any = True
 
     if args.is_member:
-        print("YES" if is_member(payload, args.is_member, args.exact) else "NO")
+        print("YES" if is_member(u1, args.is_member, args.exact) else "NO")
         did_any = True
 
     if args.find:
-        for g in find_groups(payload, args.find):
-            print(g)
-        did_any = True
-
-    if args.find_regex:
-        for g in find_groups(payload, args.find_regex, regex=True):
-            print(g)
+        for m in find_groups(u1, args.find):
+            print(m)
         did_any = True
 
     if not did_any:
-        print("No action selected. Use --summary, --groups, --is-member, --find, or --find-regex.")
+        print("No action selected. Use --summary, --groups, --is-member, --find, or --user-b to compare.")
 
 
 if __name__ == "__main__":
