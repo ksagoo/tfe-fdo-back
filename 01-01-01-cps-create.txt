@@ -1,3 +1,246 @@
+#!/usr/bin/env python3
+# ============================================================================
+# Akamai Entitlement Check Script - LDAP Lookup & Group Membership Script
+# ============================================================================
+#
+# Description:
+#   - Queries an internal LDAP/AD API to retrieve user details (incl. groups).
+#   - Supports listing groups, membership checks (substring / exact), substring
+#     search, JSON export, and comparing two users' group memberships.
+#   - Validates an Access Group via Akamai PAPI (EdgeGrid) using the region’s
+#     contract (region -> contract_id lookup is built-in and required).
+#
+# Requirements:
+#   pip install requests akamai-edgegrid
+#
+# Examples:
+#   # Validate Access Group via PAPI and check membership for a user
+#   python entitlement_check.py --region APAC --user 45384191 \
+#       --access-group "HSBC-APAC-SomeGroup" \
+#       --edgerc-file ~/.edgerc --section-name default
+#
+#   # Compare two users' group memberships (no access group validation)
+#   python entitlement_check.py --region APAC --user 45384191 --user-b 45376071
+# ============================================================================
+
+import argparse
+import json
+import os
+from typing import Any, Dict, List, Tuple, Optional
+
+import requests
+import urllib3
+from urllib.parse import urljoin
+
+# Akamai EdgeGrid
+from akamai.edgegrid import EdgeGridAuth, EdgeRc
+
+# Suppress TLS warnings if running insecurely for LDAP (when --verify-ca omitted)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ---- Region -> Contract mapping (final) ----
+REGION_SETTINGS = {
+    "Global": {"contract_id": "P-2YNY4RH"},
+    "APAC":   {"contract_id": "V-5A82LRN"},
+    "EMEA":   {"contract_id": "V-5A82MHB"},
+    "LATAM":  {"contract_id": "V-5A854K9"},
+    "AMER":   {"contract_id": "V-5A854K9"},
+    "DEV":    {"contract_id": "V-5A82MTA"},
+}
+
+# =========================
+# LDAP helper functionality
+# =========================
+
+def _headers_from_env() -> Dict[str, str]:
+    headers = {"Accept": "application/json"}
+    bearer = os.getenv("LDAP_BEARER")
+    cookies = os.getenv("LDAP_COOKIES")
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    if cookies:
+        headers["Cookie"] = cookies
+    return headers
+
+def fetch_user_json(base_url: str, user_id: str, ca_path: Optional[str] = None, timeout: float = 20.0) -> Dict[str, Any]:
+    url = f"{base_url.rstrip('/')}/{user_id}"
+    resp = requests.get(url, headers=_headers_from_env(), timeout=timeout, verify=(ca_path if ca_path else False))
+    resp.raise_for_status()
+    return resp.json()
+
+def _extract_groups(payload: Dict[str, Any]) -> List[str]:
+    groups = payload.get("memberOf", [])
+    return sorted([str(g) for g in groups], key=str.casefold) if isinstance(groups, list) else []
+
+def print_summary(payload: Dict[str, Any]) -> None:
+    fields = [
+        ("displayName", payload.get("displayName")),
+        ("mail", payload.get("mail")),
+        ("sAMAccountName", payload.get("sAMAccountName")),
+        ("employeeID", payload.get("employeeID") or payload.get("employeeId")),
+        ("department", payload.get("department")),
+        ("company", payload.get("company")),
+    ]
+    print("\n== User Summary ==")
+    for k, v in fields:
+        if v:
+            print(f"{k:18}: {v}")
+    groups = _extract_groups(payload)
+    print(f"InGroups ({len(groups)}):")
+    for g in groups:
+        print(f"  - {g}")
+
+def is_member(payload: Dict[str, Any], group: str, exact: bool = False) -> List[str]:
+    groups = _extract_groups(payload)
+    if exact:
+        tgt = group.strip().casefold()
+        matches = [g for g in groups if g.strip().casefold() == tgt]
+    else:
+        tgt = group.lower()
+        matches = [g for g in groups if tgt in g.lower()]
+    return [g.split(",", 1)[0].replace("CN=", "") if g.startswith("CN=") else g for g in matches]
+
+def find_groups(payload: Dict[str, Any], pattern: str) -> List[str]:
+    return [g for g in _extract_groups(payload) if pattern.lower() in g.lower()]
+
+def compare_groups(a_payload: Dict[str, Any], b_payload: Dict[str, Any]) -> Tuple[List[str], List[str], List[str]]:
+    a_map = {g.casefold(): g for g in _extract_groups(a_payload)}
+    b_map = {g.casefold(): g for g in _extract_groups(b_payload)}
+    only_a = [a_map[k] for k in sorted(set(a_map) - set(b_map))]
+    only_b = [b_map[k] for k in sorted(set(b_map) - set(a_map))]
+    both = [a_map[k] for k in sorted(set(a_map) & set(b_map))]
+    return only_a, only_b, both
+
+# ===========================
+# Akamai EdgeGrid functionality
+# ===========================
+
+def setup_edgegrid_session(edgerc_file: str, section_name: str):
+    """
+    Build a `requests.Session()` with EdgeGrid auth and return (session, base_url).
+    """
+    edgerc = EdgeRc(os.path.expanduser(edgerc_file))
+    base_url = f"https://{edgerc.get(section_name, 'host').strip('/')}/"
+    sess = requests.Session()
+    sess.auth = EdgeGridAuth(
+        client_token=edgerc.get(section_name, 'client_token'),
+        client_secret=edgerc.get(section_name, 'client_secret'),
+        access_token=edgerc.get(section_name, 'access_token')
+    )
+    return sess, base_url
+
+def get_akamai_group_id(group_name: str, contract_id: str, session: requests.Session, base_url: str) -> Optional[str]:
+    """
+    Use PAPI to list groups for a contract and return the groupId for `group_name` if found.
+    """
+    url = urljoin(base_url, f"/papi/v1/groups?contractId={contract_id}")
+    resp = session.get(url, headers={"accept": "application/json"})
+    resp.raise_for_status()
+    for g in resp.json().get("groups", {}).get("items", []):
+        if g.get("groupName") == group_name:
+            return g.get("groupId")
+    return None
+
+def access_group_exists(group_name: str, *, edgerc_file: str, section_name: str, region: str) -> bool:
+    """
+    Validate an Access Group exists using PAPI/EdgeGrid. Region -> contract_id is required.
+    """
+    # Strict region match (choices enforced at argparse level)
+    contract_id = REGION_SETTINGS[region]["contract_id"]
+    session, base_url = setup_edgegrid_session(edgerc_file, section_name)
+    return get_akamai_group_id(group_name, contract_id, session, base_url) is not None
+
+# =========
+# CLI / main
+# =========
+
+def main():
+    ap = argparse.ArgumentParser(description="LDAP/AD Entitlement check with Akamai Access Group validation.")
+    # LDAP args
+    ap.add_argument("--base", default="https://apprunner.hk.hsbc/cached-ldap-looker-upper/api/v1/ldap",
+                    help="LDAP base API URL")
+    ap.add_argument("--user", required=True, help="Primary user ID")
+    ap.add_argument("--user-b", help="Second user ID for comparison")
+    ap.add_argument("--summary", action="store_true", help="Print user summary")
+    ap.add_argument("--groups", action="store_true", help="List only groups")
+    ap.add_argument("--is-member", metavar="GROUP", help="Check membership (substring or exact match)")
+    ap.add_argument("--exact", action="store_true", help="Use exact match for --is-member")
+    ap.add_argument("--find", metavar="PATTERN", help="Find groups by substring")
+    ap.add_argument("--save-json", metavar="PATH", help="Save raw JSON")
+    ap.add_argument("--verify-ca", metavar="CA_PATH", help="CA cert path for LDAP TLS verification")
+
+    # Access Group validation (region is required)
+    ap.add_argument("--access-group", help="Access Group name from Front Door form. Validated via PAPI.")
+    ap.add_argument("--edgerc-file", default="~/.edgerc", help="Path to .edgerc for EdgeGrid")
+    ap.add_argument("--section-name", default="default", help="Section in .edgerc")
+    ap.add_argument("--region", required=True, choices=list(REGION_SETTINGS.keys()),
+                    help="Region (resolves Contract ID for PAPI)")
+
+    args = ap.parse_args()
+
+    # Fetch primary user from LDAP
+    u1 = fetch_user_json(args.base, args.user, ca_path=args.verify_ca)
+    if args.save_json:
+        with open(args.save_json, "w", encoding="utf-8") as f:
+            json.dump(u1, f, indent=2)
+
+    # Compare mode
+    if args.user_b:
+        u2 = fetch_user_json(args.base, args.user_b, ca_path=args.verify_ca)
+        u1_name, u2_name = u1.get("displayName") or args.user, u2.get("displayName") or args.user_b
+        print(f"User A: {u1_name} ({args.user})\nUser B: {u2_name} ({args.user_b})")
+        only_u1, only_u2, both = compare_groups(u1, u2)
+        print(f"Totals: A={len(_extract_groups(u1))}, B={len(_extract_groups(u2))}, common={len(both)}\n")
+        print("-- Only in A --"); print("\n".join(only_u1))
+        print("\n-- Only in B --"); print("\n".join(only_u2))
+        print("\n-- In BOTH --"); print("\n".join(both))
+        return
+
+    did_any = False
+
+    # Access Group check wins if provided
+    if args.access_group:
+        try:
+            if not access_group_exists(args.access_group, edgerc_file=args.edgerc_file,
+                                       section_name=args.section_name, region=args.region):
+                print(f"ERROR: Access Group '{args.access_group}' not found in PAPI for region {args.region}.")
+                return
+        except Exception as e:
+            print(f"ERROR: Access Group validation via PAPI failed: {e}")
+            return
+
+        matches = is_member(u1, args.access_group, args.exact)
+        print("YES" if matches else "NO")
+        for m in matches:
+            print(m)
+        did_any = True
+
+    # Fallback / other operations
+    if (not did_any) and (args.summary or (not args.groups and not args.is_member and not args.find)):
+        print_summary(u1); did_any = True
+
+    if args.groups:
+        for g in _extract_groups(u1): print(g); did_any = True
+
+    if args.is_member and not args.access_group:
+        matches = is_member(u1, args.is_member, args.exact)
+        print("YES" if matches else "NO")
+        for m in matches: print(m)
+        did_any = True
+
+    if args.find:
+        for m in find_groups(u1, args.find): print(m); did_any = True
+
+    if not did_any:
+        print("No action selected. Use --summary, --groups, --is-member, --find, or --user-b to compare.")
+
+if __name__ == "__main__":
+    main()
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
 def is_member(payload: Dict[str, Any], group: str, exact: bool = False) -> List[str]:
     groups = _extract_groups(payload)
     matches: List[str] = []
