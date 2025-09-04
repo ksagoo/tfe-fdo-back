@@ -1,3 +1,17 @@
+Hi [Name],
+
+Hope you’re doing well.
+
+I’ve raised a new ServiceNow request (RITM36861428 – Cyber WASP Automation - ADLDS Access Request) to be added to the new ADLDS group:
+Infodir-CyberWASP-Akamai-GOA-APAC-cyberwasp-test (Entitlement: GOA-APAC-cyberwasp-test).
+
+This is needed for the Akamai Shift Left Entitlement PoC module development/testing. The previous group request (REQ033665031) was approved, but since the group owner was a contractor, we had to create a new group with an FTE owner.
+
+Paul Edelman has already approved the new request, and it’s now pending your approval as secondary approver. Would you mind reviewing/approving when you get a chance so we can progress to STP?
+
+Thanks a lot for your support 
+
+
 #!/usr/bin/env python3
 # ============================================================================
 # Akamai Entitlement Check Script - LDAP Lookup & Group Membership Script
