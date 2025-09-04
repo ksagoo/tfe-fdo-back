@@ -1,15 +1,32 @@
-Hi [Name],
-
 Hope you’re doing well.
 
-I’ve raised a new ServiceNow request (RITM36861428 – Cyber WASP Automation - ADLDS Access Request) to be added to the new ADLDS group:
-Infodir-CyberWASP-Akamai-GOA-APAC-cyberwasp-test (Entitlement: GOA-APAC-cyberwasp-test).
+I’m reaching out for your secondary approval on a set of ServiceNow requests raised for each of the team members. These are required so the team can be added to the correct ADLDS group needed for the Akamai Shift Left Entitlement PoC module development/testing.
 
-This is needed for the Akamai Shift Left Entitlement PoC module development/testing. The previous group request (REQ033665031) was approved, but since the group owner was a contractor, we had to create a new group with an FTE owner.
+The original group request (REQ033665031) was approved, but since the group owner was a contractor, a new group with an FTE owner had to be created.
 
-Paul Edelman has already approved the new request, and it’s now pending your approval as secondary approver. Would you mind reviewing/approving when you get a chance so we can progress to STP?
+Here are the details:
 
-Thanks a lot for your support 
+Cyber WASP Automation - ADLDS Access Request
+
+Group: Infodir-CyberWASP-Akamai-GOA-APAC-cyberwasp-test
+
+Entitlement: GOA-APAC-cyberwasp-test
+
+The following requests are now pending your secondary approval (one per team member):
+
+RITM36861428
+
+REQ033665031
+
+REQ033665093
+
+REQ033666421
+
+REQ033664129
+
+Paul Edelman has already approved these. Would you mind reviewing/approving when you get a chance so we can progress to STP?
+
+Thanks a lot for your support
 
 
 #!/usr/bin/env python3
