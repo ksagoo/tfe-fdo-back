@@ -1,3 +1,41 @@
+if args.access_group:
+    matches = is_member(u1, args.access_group, args.exact)
+    print("YES" if matches else "NO")
+    for m in matches:
+        print(m)
+    did_any = True
+
+with:
+
+if args.access_group:
+    mode = "exact" if args.exact else "substring"
+    print(f"[SEARCH] pattern='{args.access_group}' (mode={mode})")
+    matches = is_member(u1, args.access_group, args.exact)
+    print("YES" if matches else "NO")
+    for m in matches:
+        print(m)
+    did_any = True
+
+
+
+if args.is_member and not args.access_group:
+    matches = is_member(u1, args.is_member, args.exact)
+    print("YES" if matches else "NO")
+    for m in matches: print(m)
+    did_any = True
+
+with:
+
+if args.is_member and not args.access_group:
+    mode = "exact" if args.exact else "substring"
+    print(f"[SEARCH] pattern='{args.is_member}' (mode={mode})")
+    matches = is_member(u1, args.is_member, args.exact)
+    print("YES" if matches else "NO")
+    for m in matches:
+        print(m)
+    did_any = True
+
+
 #!/usr/bin/env python3
 # ============================================================================
 # Akamai Entitlement Check Script - LDAP Lookup & Akamai Access Group Validation
