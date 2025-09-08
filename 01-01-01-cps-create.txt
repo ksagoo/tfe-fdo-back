@@ -68,6 +68,9 @@
 #         --edgerc-file ~/.edgerc --section-name default \
 #         --verify-ca "/C/Users/45384191/certs/certs.pem" \
 #         --debug
+#
+#     # Compare two users
+#     python entitlement_check.py --user 45384191 --user-b 45376071
 # ============================================================================
 
 import argparse
