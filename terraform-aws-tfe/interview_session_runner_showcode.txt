@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os, sys, time, random, argparse, importlib.util
+
+HERE = os.path.abspath(os.path.dirname(__file__))
+
+# Try both filenames so users can keep either one.
+CANDIDATE_FILES = [
+    "interview_options_runner_full_v2_ascii.py",
+    "interview_options_runner_full_v2.py",
+]
+
+v2_path = None
+for fname in CANDIDATE_FILES:
+    p = os.path.join(HERE, fname)
+    if os.path.exists(p):
+        v2_path = p
+        break
+
+if not v2_path:
+    print("Error: couldn't find v2 exercises file next to this script.")
+    print("Expected one of:", ", ".join(CANDIDATE_FILES))
+    sys.exit(1)
+
+spec = importlib.util.spec_from_file_location("runner_v2", v2_path)
+runner_v2 = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner_v2)
+
+EXERCISES = runner_v2.EXERCISES
+_capture_stdout = runner_v2._capture_stdout
+_print_header = runner_v2._print_header
+_safe_exec = runner_v2._safe_exec
+
+def timed_input(prompt: str, timeout: float):
+    # Cross-platform timed input. Returns (text, timed_out: bool).
+    # If timeout <= 0, behaves like normal input.
+    if timeout is None or timeout <= 0:
+        try:
+            return input(prompt), False
+        except EOFError:
+            return "", False
+
+    if os.name == "nt":
+        try:
+            import msvcrt
+        except Exception:
+            try:
+                return input(prompt), False
+            except EOFError:
+                return "", False
+        sys.stdout.write(prompt); sys.stdout.flush()
+        start = time.time()
+        chars = []
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\r", "\n"):
+                    print("")
+                    return "".join(chars), False
+                elif ch == "\003":
+                    raise KeyboardInterrupt
+                elif ch == "\b":
+                    if chars:
+                        chars.pop()
+                        sys.stdout.write("\b \b"); sys.stdout.flush()
+                else:
+                    chars.append(ch)
+                    sys.stdout.write(ch); sys.stdout.flush()
+            if time.time() - start >= timeout:
+                print("")
+                return "".join(chars), True
+            time.sleep(0.01)
+    else:
+        try:
+            import select
+        except Exception:
+            try:
+                return input(prompt), False
+            except EOFError:
+                return "", False
+        sys.stdout.write(prompt); sys.stdout.flush()
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+        if rlist:
+            try:
+                line = sys.stdin.readline()
+            except EOFError:
+                return "", False
+            return line.rstrip("\n"), False
+        else:
+            print("")
+            return "", True
+
+def run_single_show_code(ex_num: int, time_limit: float = 0.0, reveal: bool = False):
+    spec = EXERCISES[ex_num]
+
+    # 1) Show buggy code (do not run it).
+    _print_header(f"{spec['title']} - Buggy code")
+    print(spec['buggy'])
+
+    # 2) Show randomized options with full code blocks.
+    _print_header(f"{spec['title']} - Options (randomized)")
+    options = spec['options'][:]
+    random.shuffle(options)
+    labels = ['A', 'B', 'C']
+    label_map = {}
+    for label, opt in zip(labels, options):
+        label_map[label] = opt
+        print(f"{label})\n{opt['code']}")
+
+    # 3) Prompt and time (if enabled).
+    start = time.time()
+    choice, timed_out = timed_input("Choose A, B, or C: ", time_limit)
+    elapsed = time.time() - start
+    if timed_out or choice.upper() not in label_map:
+        print("TIMEOUT" if timed_out else "Invalid choice")
+        return False, elapsed, None
+
+    chosen = label_map[choice.upper()]
+
+    # 4) Run only the selected option and evaluate.
+    _print_header(f"Running option {choice.upper()}")
+    fn = _safe_exec(chosen['code'])
+    try:
+        out = _capture_stdout(fn)
+    except Exception as e:
+        print(f"[EXCEPTION] {type(e).__name__}: {e}")
+        print("FAIL (exception during option execution)")
+        return False, elapsed, None
+
+    # Special secret leak guard for exercise 14.
+    if ex_num == 14 and "sk_live" in out:
+        print("FAIL (secret leaked)")
+        return False, elapsed, "Secret leaked"
+
+    ok = False
+    if spec['kind'] == 'equals':
+        ok = (out == spec['expected'])
+        print("PASS" if ok else "FAIL")
+        if not ok:
+            print("Expected:", repr(spec['expected']))
+            print("Got     :", repr(out))
+    elif spec['kind'] == 'lines':
+        out_lines = out.splitlines(keepends=True)
+        ok = (out_lines == spec['expected'])
+        print("PASS" if ok else "FAIL")
+        if not ok:
+            print("Expected lines:", spec['expected'])
+            print("Got lines     :", out_lines)
+
+    if reveal:
+        # Show which option was correct (by label) after running.
+        for lbl, opt in label_map.items():
+            if opt.get("ok"):
+                print(f"(Correct was {lbl})")
+
+    return ok, elapsed, None
+
+def run_session(order, time_limit=0.0, reveal=False):
+    score = 0
+    results = []
+    for ex in order:
+        ok, elapsed, err = run_single_show_code(ex, time_limit=time_limit, reveal=reveal)
+        results.append((ex, ok, elapsed, err))
+        if ok:
+            score += 1
+    _print_header("Session Summary")
+    print(f"Score: {score} / {len(order)}")
+    for ex, ok, elapsed, err in results:
+        status = "PASS" if ok else "FAIL"
+        print(f"  Ex {ex:>2}: {status}  ({elapsed:.1f}s)")
+    return score, results
+
+def main():
+    p = argparse.ArgumentParser(description="Session Runner (shows code, scoring + timed mode)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--all", action="store_true", help="run all exercises (1..14)")
+    g.add_argument("--pick", nargs="+", type=int, help="specific exercises, e.g. --pick 3 7 10")
+    p.add_argument("--limit", type=int, default=0, help="limit number of exercises (use with --all/--shuffle)")
+    p.add_argument("--shuffle", action="store_true", help="shuffle exercise order")
+    p.add_argument("--time-limit", type=float, default=0.0, help="seconds allowed for choosing an option (0 disables timeout)")
+    p.add_argument("--reveal", action="store_true", help="reveal the correct option after each exercise")
+    args = p.parse_args()
+
+    if args.all:
+        order = list(EXERCISES.keys())
+    elif args.pick:
+        order = [n for n in args.pick if n in EXERCISES]
+        if not order:
+            print("No valid exercises in --pick."); return
+    else:
+        print("Available exercises:", ", ".join(str(k) for k in sorted(EXERCISES.keys())))
+        while True:
+            s = input("Enter exercise number: ").strip()
+            if s.isdigit() and int(s) in EXERCISES:
+                order = [int(s)]
+                break
+            print("Please enter a valid number.")
+    if args.shuffle:
+        random.shuffle(order)
+    if args.limit and args.limit < len(order):
+        order = order[:args.limit]
+
+    run_session(order, time_limit=args.time_limit, reveal=args.reveal)
+
+if __name__ == "__main__":
+    main()
