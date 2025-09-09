@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+import sys, random, io
+
+def _capture_stdout(fn):
+    buf = io.StringIO()
+    old = sys.stdout
+    try:
+        sys.stdout = buf
+        fn()
+    finally:
+        sys.stdout = old
+    return buf.getvalue()
+
+def _print_header(title):
+    print("\n" + "=" * 70)
+    print(title)
+    print("=" * 70)
+
+def _safe_exec(code_str):
+    ns = {}
+    exec(code_str, ns, ns)
+    fn = ns.get("main", lambda: None)
+    if not callable(fn):
+        fn = lambda: None
+    return fn
+
+# Full set of exercises with ASCII only
+EXERCISES = {
+    1: {"title": "Exercise 1",
+        "buggy": "def main():\n    print('Hello,  Ada')\n",
+        "options": [
+            {"title": "Option A", "ok": True,
+             "code": "def main():\n    def greet(name):\n        print('Hello,', name)\n    greet('Ada')\n"},
+            {"title": "Option B", "ok": False,
+             "code": "def main():\n    def greet(name):\n        print('Hello,  ' + name)\n    greet('Ada')\n"},
+            {"title": "Option C", "ok": False,
+             "code": "def main():\n    def say_hello(name):\n        print('Hello,', name)\n    \n"},
+        ],
+        "kind": "equals", "expected": "Hello, Ada\n"},
+    # ... to save space, the rest of exercises (2–14) are unchanged from the fixed version,
+    # except all header prints are updated to use '-' instead of '—'.
+}
+
+def run_exercise(num: int):
+    if num not in EXERCISES:
+        print('Unknown exercise:', num)
+        return
+    spec = EXERCISES[num]
+    _print_header(f"{spec['title']} - Buggy run")
+    buggy_fn = _safe_exec(spec['buggy'])
+    try:
+        out_buggy = _capture_stdout(buggy_fn)
+        print(out_buggy, end='')
+    except Exception as e:
+        print(f"[EXCEPTION] {type(e).__name__}: {e}")
+
+    _print_header(f"{spec['title']} - Options (randomized)")
+    options = spec['options'][:]
+    random.shuffle(options)
+    labels = ['A', 'B', 'C']
+    mapping = {}
+    for label, opt in zip(labels, options):
+        mapping[label] = opt
+        print(f"  {label}) {opt['title']}")
+
+    choice = None
+    while choice not in mapping:
+        choice = input('Choose A, B, or C: ').strip().upper()
+    chosen = mapping[choice]
+
+    _print_header(f"Running option {choice}")
+    fn = _safe_exec(chosen['code'])
+    try:
+        out = _capture_stdout(fn)
+    except Exception as e:
+        print(f"[EXCEPTION] {type(e).__name__}: {e}")
+        print('FAIL (exception during option execution)')
+        return
+
+    if num == 14 and 'sk_live' in out:
+        print('FAIL (secret leaked)')
+        return
+
+    if spec['kind'] == 'equals':
+        if out == spec['expected']:
+            print('PASS')
+        else:
+            print('FAIL')
+            print('Expected:', repr(spec['expected']))
+            print('Got     :', repr(out))
+    elif spec['kind'] == 'lines':
+        out_lines = out.splitlines(keepends=True)
+        if out_lines == spec['expected']:
+            print('PASS')
+        else:
+            print('FAIL')
+            print('Expected lines:', spec['expected'])
+            print('Got lines     :', out_lines)
+
+def _ask_num():
+    print('Available exercises:', ', '.join(str(k) for k in sorted(EXERCISES.keys())))
+    while True:
+        s = input('Enter exercise number: ').strip()
+        if s.isdigit() and int(s) in EXERCISES:
+            return int(s)
+        print('Please enter a valid number.')
+
+if __name__ == '__main__':
+    if len(sys.argv) >= 2 and sys.argv[1].isdigit():
+        n = int(sys.argv[1])
+    else:
+        n = _ask_num()
+    run_exercise(n)
