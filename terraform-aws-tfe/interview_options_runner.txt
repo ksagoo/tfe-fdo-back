@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""
+Python Debugging Interview — Options Runner (Warm-up Set)
+
+How it works (CLI, plain Python):
+- Pick an exercise number: 1..5
+- The script first runs the buggy version (so the candidate sees the problem).
+- Then it shows three options (A/B/C) in RANDOM order.
+- You type A/B/C; it executes that option and runs a quick test.
+- Prints PASS/FAIL.
+
+Usage:
+  python interview_options_runner.py 1
+  python interview_options_runner.py 3
+  # (You can also just run without args; it will prompt.)
+
+Notes:
+- This file contains 5 warm-up exercises. I can extend it to include more.
+- Works great over Zoom with Git Bash + VS Code.
+"""
+
+import sys
+import random
+import io
+import sys as _sys
+
+# ----------------------------
+# Utilities
+# ----------------------------
+
+def _capture_stdout(fn, *args, **kwargs):
+    """Run fn and capture stdout; return (return_value, stdout_str)."""
+    buf = io.StringIO()
+    old = _sys.stdout
+    try:
+        _sys.stdout = buf
+        rv = fn(*args, **kwargs)
+    finally:
+        _sys.stdout = old
+    return rv, buf.getvalue()
+
+def _print_header(title):
+    print("\n" + "=" * 70)
+    print(title)
+    print("=" * 70)
+
+def _print_exception(e):
+    print(f"[EXCEPTION] {type(e).__name__}: {e}")
+
+# ----------------------------
+# Exercise 1
+# ----------------------------
+
+def exercise1_buggy():
+    # Simulate wrong output formatting (extra space).
+    print("Hello,  Ada")  # double space to force mismatch
+
+def exercise1_option1_correct():
+    def greet(name):
+        print("Hello,", name)
+    greet("Ada")
+
+def exercise1_option2_wrong():
+    # still wrong formatting
+    def greet(name):
+        print("Hello,  " + name)  # two spaces
+    greet("Ada")
+
+def exercise1_option3_wrong():
+    # wrong function / not called
+    def say_hello(name):
+        print("Hello,", name)
+    # forget to call anything
+
+def exercise1_test():
+    expected_out = "Hello, Ada\n"
+    return expected_out
+
+# ----------------------------
+# Exercise 2
+# ----------------------------
+
+def exercise2_buggy():
+    def add_numbers(a, b):
+        return a + c  # undefined variable
+    print(add_numbers(2, 3))
+
+def exercise2_option1_correct():
+    def add_numbers(a, b):
+        return a + b
+    print(add_numbers(2, 3))
+
+def exercise2_option2_wrong():
+    c = 0  # masking the bug with a global
+    def add_numbers(a, b):
+        return a + c
+    print(add_numbers(2, 3))
+
+def exercise2_option3_wrong():
+    def add_numbers(a, b):
+        return a  # ignores b
+    print(add_numbers(2, 3))
+
+def exercise2_test(ns=None):
+    expected = "5\n"
+    return expected
+
+# ----------------------------
+# Exercise 3
+# ----------------------------
+
+def exercise3_buggy():
+    age = "25"
+    print(age + 5)  # TypeError
+
+def exercise3_option1_correct():
+    def add_five(age):
+        return int(age) + 5
+    print(add_five("25"))
+
+def exercise3_option2_wrong():
+    def add_five(age):
+        return age + "5"  # concatenation
+    print(add_five("25"))
+
+def exercise3_option3_wrong():
+    def add_five(age):
+        return age + 5  # still TypeError
+    print(add_five("25"))
+
+def exercise3_test():
+    expected = "30\n"
+    return expected
+
+# ----------------------------
+# Exercise 4
+# ----------------------------
+
+def exercise4_buggy():
+    def is_even(n):
+        return n % 2 == 1  # wrong
+    print(is_even(2))
+
+def exercise4_option1_correct():
+    def is_even(n):
+        return n % 2 == 0
+    print(is_even(0), is_even(1), is_even(2))  # True False True
+
+def exercise4_option2_wrong():
+    def is_even(n):
+        return n % 2  # truthy check (1/0)
+    print(is_even(0), is_even(1), is_even(2))
+
+def exercise4_option3_wrong():
+    def is_even(n):
+        return n % 2 == 1  # same bug
+    print(is_even(0), is_even(1), is_even(2))
+
+def exercise4_test():
+    expected = "True False True\n"
+    return expected
+
+# ----------------------------
+# Exercise 5
+# ----------------------------
+
+def exercise5_buggy():
+    def append_item(item, items=[]):
+        items.append(item)
+        return items
+    print(append_item("x"))
+    print(append_item("y"))  # shows shared list
+
+def exercise5_option1_correct():
+    def append_item(item, items=None):
+        if items is None:
+            items = []
+        items.append(item)
+        return items
+    print(append_item("x"))
+    print(append_item("y"))  # isolated lists
+
+def exercise5_option2_wrong():
+    def append_item(item, items=[]):
+        items.append(item)
+        return items
+    print(append_item("x"))
+    print(append_item("y"))  # still shared
+
+def exercise5_option3_wrong():
+    def append_item(item, items=()):  # tuple
+        items.append(item)  # will raise
+        return items
+    try:
+        print(append_item("x"))
+    except Exception as e:
+        print(type(e).__name__)
+
+def exercise5_test():
+    expected_lines = ["['x']\n", "['y']\n"]
+    return expected_lines
+
+# ----------------------------
+# Registry and runner
+# ----------------------------
+
+EXERCISES = {
+    1: {
+        "title": "Exercise 1",
+        "buggy": exercise1_buggy,
+        "options": [
+            ("Fix greeting output exactly", exercise1_option1_correct, True),
+            ("Keep extra space in output", exercise1_option2_wrong, False),
+            ("Wrong function / not called", exercise1_option3_wrong, False),
+        ],
+        "test_kind": "stdout_equals",
+        "expected": exercise1_test(),
+    },
+    2: {
+        "title": "Exercise 2",
+        "buggy": exercise2_buggy,
+        "options": [
+            ("Use parameter b correctly", exercise2_option1_correct, True),
+            ("Introduce global c (mask bug)", exercise2_option2_wrong, False),
+            ("Ignore b entirely", exercise2_option3_wrong, False),
+        ],
+        "test_kind": "stdout_equals",
+        "expected": exercise2_test(),
+    },
+    3: {
+        "title": "Exercise 3",
+        "buggy": exercise3_buggy,
+        "options": [
+            ("Cast age to int before adding", exercise3_option1_correct, True),
+            ("Concatenate strings instead", exercise3_option2_wrong, False),
+            ("Leave code as-is", exercise3_option3_wrong, False),
+        ],
+        "test_kind": "stdout_equals",
+        "expected": exercise3_test(),
+    },
+    4: {
+        "title": "Exercise 4",
+        "buggy": exercise4_buggy,
+        "options": [
+            ("Return n % 2 == 0", exercise4_option1_correct, True),
+            ("Return n % 2", exercise4_option2_wrong, False),
+            ("Return n % 2 == 1", exercise4_option3_wrong, False),
+        ],
+        "test_kind": "stdout_equals",
+        "expected": exercise4_test(),
+    },
+    5: {
+        "title": "Exercise 5",
+        "buggy": exercise5_buggy,
+        "options": [
+            ("Use None default and new list", exercise5_option1_correct, True),
+            ("Keep default [] (shared)", exercise5_option2_wrong, False),
+            ("Use tuple default (TypeError)", exercise5_option3_wrong, False),
+        ],
+        "test_kind": "stdout_lines",
+        "expected": exercise5_test(),
+    },
+}
+
+def _print_header(title):
+    print("\n" + "=" * 70)
+    print(title)
+    print("=" * 70)
+
+def run_exercise(ex_num: int):
+    if ex_num not in EXERCISES:
+        print("Unknown exercise:", ex_num)
+        return
+    spec = EXERCISES[ex_num]
+    _print_header(f"{spec['title']} — Buggy run")
+    try:
+        spec["buggy"]()
+    except Exception as e:
+        _print_exception(e)
+
+    _print_header(f"{spec['title']} — Options (randomized)")
+    options = spec["options"][:]
+    random.shuffle(options)
+    labels = ["A", "B", "C"]
+    label_map = {}
+    for label, (desc, fn, is_correct) in zip(labels, options):
+        label_map[label] = (desc, fn, is_correct)
+        print(f"  {label}) {desc}")
+
+    # Prompt for choice
+    choice = None
+    valid = set(labels)
+    while choice not in valid:
+        choice = input("Choose A, B, or C: ").strip().upper()
+
+    desc, fn, is_correct = label_map[choice]
+    _print_header(f"Running option {choice}: {desc}")
+
+    # Capture stdout and run, then test
+    try:
+        _, out = _capture_stdout(fn)
+    except Exception as e:
+        _print_exception(e)
+        print("❌ FAIL (exception while executing option)")
+        return
+
+    expected = spec["expected"]
+    kind = spec["test_kind"]
+    if kind == "stdout_equals":
+        if out == expected:
+            print("✅ PASS")
+        else:
+            print("❌ FAIL")
+            print("Expected:", repr(expected))
+            print("Got     :", repr(out))
+    elif kind == "stdout_lines":
+        out_lines = out.splitlines(keepends=True)
+        if out_lines == expected:
+            print("✅ PASS")
+        else:
+            print("❌ FAIL")
+            print("Expected lines:", expected)
+            print("Got lines     :", out_lines)
+    else:
+        print("Internal: unknown test kind")
+
+def _ask_exercise_number():
+    print("Available exercises:", ", ".join(str(k) for k in sorted(EXERCISES.keys())))
+    while True:
+        raw = input("Enter exercise number: ").strip()
+        if raw.isdigit() and int(raw) in EXERCISES:
+            return int(raw)
+        print("Please enter one of:", ", ".join(str(k) for k in sorted(EXERCISES.keys())))
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1].isdigit():
+        ex_num = int(sys.argv[1])
+    else:
+        ex_num = _ask_exercise_number()
+    run_exercise(ex_num)
