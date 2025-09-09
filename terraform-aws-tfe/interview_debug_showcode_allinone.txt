@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys, os, io, time, random, argparse
+
+# ----------------------------
+# Utilities
+# ----------------------------
+
+def _capture_stdout(fn):
+    buf = io.StringIO()
+    old = sys.stdout
+    try:
+        sys.stdout = buf
+        fn()
+    finally:
+        sys.stdout = old
+    return buf.getvalue()
+
+def _print_header(title):
+    print("\n" + "=" * 70)
+    print(title)
+    print("=" * 70)
+
+def _safe_exec(code_str):
+    ns = {}
+    exec(code_str, ns, ns)
+    fn = ns.get("main", lambda: None)
+    if not callable(fn):
+        fn = lambda: None
+    return fn
+
+def _exec_buggy(code_str):
+    # Try to exec buggy code and run main() if defined; capture stdout and exceptions.
+    buf = io.StringIO()
+    old = sys.stdout
+    try:
+        sys.stdout = buf
+        try:
+            ns = {}
+            exec(code_str, ns, ns)
+            fn = ns.get("main")
+            if callable(fn):
+                fn()
+        except Exception as e:
+            print(f"[EXCEPTION] {type(e).__name__}: {e}")
+    finally:
+        sys.stdout = old
+    return buf.getvalue()
+
+def timed_input(prompt: str, timeout: float):
+    # Cross-platform timed input. Returns (text, timed_out: bool).
+    # If timeout <= 0, behaves like normal input.
+    if timeout is None or timeout <= 0:
+        try:
+            return input(prompt), False
+        except EOFError:
+            return "", False
+
+    if os.name == "nt":
+        try:
+            import msvcrt
+        except Exception:
+            try:
+                return input(prompt), False
+            except EOFError:
+                return "", False
+        sys.stdout.write(prompt); sys.stdout.flush()
+        start = time.time()
+        chars = []
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\r", "\n"):
+                    print("")
+                    return "".join(chars), False
+                elif ch == "\003":
+                    raise KeyboardInterrupt
+                elif ch == "\b":
+                    if chars:
+                        chars.pop()
+                        sys.stdout.write("\b \b"); sys.stdout.flush()
+                else:
+                    chars.append(ch)
+                    sys.stdout.write(ch); sys.stdout.flush()
+            if time.time() - start >= timeout:
+                print("")
+                return "".join(chars), True
+            time.sleep(0.01)
+    else:
+        try:
+            import select
+        except Exception:
+            try:
+                return input(prompt), False
+            except EOFError:
+                return "", False
+        sys.stdout.write(prompt); sys.stdout.flush()
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+        if rlist:
+            try:
+                line = sys.stdin.readline()
+            except EOFError:
+                return "", False
+            return line.rstrip("\n"), False
+        else:
+            print("")
+            return "", True
+
+# ----------------------------
+# Exercises (embedded)
+# ----------------------------
+
+EXERCISES = {
+    1: {
+        "title": "Exercise 1 (Indentation)",
+        "buggy": "def main():\nprint(\"Hello, Ada\")\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    print(\"Hello, Ada\")\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    print(\"Hello,  Ada\")\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    pass\n"},
+        ],
+        "kind": "equals", "expected": "Hello, Ada\n",
+        "explain": "Python requires the body of a function to be indented. Indent the print so it belongs to main()."
+    },
+    2: {
+        "title": "Exercise 2 (Undefined variable)",
+        "buggy": "def main():\n    def add_numbers(a, b):\n        return a + c\n    print(add_numbers(2, 3))\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    def add_numbers(a, b):\n        return a + b\n    print(add_numbers(2, 3))\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    c = 0\n    def add_numbers(a, b):\n        return a + c\n    print(add_numbers(2, 3))\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    def add_numbers(a, b):\n        return a\n    print(add_numbers(2, 3))\n"},
+        ],
+        "kind": "equals", "expected": "5\n",
+        "explain": "Use the function parameters; don't reference an undefined free variable."
+    },
+    3: {
+        "title": "Exercise 3 (Type mismatch)",
+        "buggy": "def main():\n    age = '25'\n    print(age + 5)\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    def add_five(age):\n        return int(age) + 5\n    print(add_five('25'))\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    def add_five(age):\n        return age + '5'\n    print(add_five('25'))\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    def add_five(age):\n        return age + 5\n    print(add_five('25'))\n"},
+        ],
+        "kind": "equals", "expected": "30\n",
+        "explain": "Coerce the string to int before adding."
+    },
+    4: {
+        "title": "Exercise 4 (Parity logic)",
+        "buggy": "def main():\n    def is_even(n):\n        return n % 2 == 1\n    print(is_even(2))\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    def is_even(n):\n        return n % 2 == 0\n    print(is_even(0), is_even(1), is_even(2))\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    def is_even(n):\n        return n % 2\n    print(is_even(0), is_even(1), is_even(2))\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    def is_even(n):\n        return n % 2 == 1\n    print(is_even(0), is_even(1), is_even(2))\n"},
+        ],
+        "kind": "equals", "expected": "True False True\n",
+        "explain": "Even means remainder 0 when dividing by 2."
+    },
+    5: {
+        "title": "Exercise 5 (Mutable default arg)",
+        "buggy": "def main():\n    def append_item(item, items=[]):\n        items.append(item)\n        return items\n    print(append_item('x'))\n    print(append_item('y'))\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    def append_item(item, items=None):\n        if items is None:\n            items = []\n        items.append(item)\n        return items\n    print(append_item('x'))\n    print(append_item('y'))\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    def append_item(item, items=[]):\n        items.append(item)\n        return items\n    print(append_item('x'))\n    print(append_item('y'))\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    def append_item(item, items=()):\n        items.append(item)\n        return items\n    try:\n        print(append_item('x'))\n    except Exception as e:\n        print(type(e).__name__)\n"},
+        ],
+        "kind": "lines", "expected": ["['x']\n", "['y']\n"],
+        "explain": "Default mutables are shared across calls. Use None sentinel + new list per call."
+    },
+    6: {
+        "title": "Exercise 6 (File handling)",
+        "buggy": "def main():\n    def read_config(path):\n        f = open(path)\n        data = parse(f.read())\n        f.close()\n        return data\n    try:\n        read_config('config.txt')\n    except Exception as e:\n        print(type(e).__name__, e)\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    path = 'config_demo.txt'\n    with open(path, 'w', encoding='utf-8') as f:\n        f.write('value=42')\n    with open(path, 'r', encoding='utf-8') as f:\n        content = f.read()\n    print(content)\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    path = 'config_demo.txt'\n    f = open(path, 'w', encoding='utf-8')\n    f.write('value=42')\n    print('wrote')\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    raise RuntimeError('simulated')\n"},
+        ],
+        "kind": "equals", "expected": "value=42\n",
+        "explain": "Use context managers (with open...) and specify encoding; avoid leaks and undefined parsers."
+    },
+    7: {
+        "title": "Exercise 7 (CSV & encoding)",
+        "buggy": "def main():\n    import csv\n    def save_rows(path, rows):\n        f = open(path, 'w')\n        w = csv.writer(f)\n        for r in rows:\n            w.writerow(r)\n        f.close()\n    save_rows('out.csv', [['naive','cafe'],['a','b']])\n    print('wrote out.csv')\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    import csv\n    rows = [['naive','cafe'],['a','b']]\n    with open('out.csv','w',newline='',encoding='utf-8') as f:\n        w = csv.writer(f)\n        w.writerows(rows)\n    with open('out.csv','r',encoding='utf-8') as f:\n        data = f.read().strip().splitlines()\n    print(len(data), 'lines')\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    import csv\n    rows = [['naive','cafe'],['a','b']]\n    with open('out.csv','w') as f:\n        w = csv.writer(f)\n        w.writerows(rows)\n    print('done')\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    with open('out.csv','w')\n as f:\n        f.write(b'na\\xefve')\n"},
+        ],
+        "kind": "equals", "expected": "2 lines\n",
+        "explain": "Open CSV with newline='' and a real text encoding; then verify lines."
+    },
+    8: {
+        "title": "Exercise 8 (Async)",
+        "buggy": "def main():\n    import asyncio, time\n    async def fetch(i):\n        time.sleep(0.1)\n        return i\n    async def run():\n        tasks = [fetch(i) for i in range(5)]\n        res = asyncio.gather(*tasks)\n        print('Finished?')\n        return res\n    try:\n        import asyncio\n        asyncio.run(run())\n    except Exception as e:\n        print(type(e).__name__, e)\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    import asyncio\n    async def fetch(i):\n        await asyncio.sleep(0.05)\n        return i\n    async def run():\n        tasks = [fetch(i) for i in range(5)]\n        res = await asyncio.gather(*tasks)\n        print('Results:', res)\n    asyncio.run(run())\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    import asyncio, time\n    async def fetch(i):\n        time.sleep(0.05)\n        return i\n    async def run():\n        tasks = [fetch(i) for i in range(5)]\n        asyncio.gather(*tasks)\n        print('Done')\n    asyncio.run(run())\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    def fetch(i):\n        return i\n    print(list(map(fetch, range(5))))\n"},
+        ],
+        "kind": "equals", "expected": "Results: [0, 1, 2, 3, 4]\n",
+        "explain": "Never block the event loop with time.sleep; await asyncio.sleep and await gather."
+    },
+    9: {
+        "title": "Exercise 9 (Thread race)",
+        "buggy": "def main():\n    import threading\n    total = 0\n    def work(n):\n        nonlocal total\n        for _ in range(n):\n            total += 1\n    th = [threading.Thread(target=work, args=(100_000,)) for _ in range(4)]\n    [t.start() for t in th]; [t.join() for t in th]\n    print('Final:', total)\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    import threading\n    total = 0\n    lock = threading.Lock()\n    def work(n):\n        nonlocal total\n        for _ in range(n):\n            with lock:\n                total += 1\n    th = [threading.Thread(target=work, args=(100_000,)) for _ in range(4)]\n    [t.start() for t in th]; [t.join() for t in th]\n    print('Final:', total)\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    import threading\n    total = 0\n    def work(n):\n        nonlocal total\n        for _ in range(n):\n            total += 1\n    th = [threading.Thread(target=work, args=(100_000,)) for _ in range(4)]\n    [t.start() for t in th]; [t.join() for t in th]\n    print('Final:', total)\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    print('Final:', 0)\n"},
+        ],
+        "kind": "equals", "expected": "Final: 400000\n",
+        "explain": "Increment is not atomic; protect shared state with a Lock."
+    },
+    10: {
+        "title": "Exercise 10 (SQL injection)",
+        "buggy": "def main():\n    import sqlite3\n    conn = sqlite3.connect(':memory:')\n    cur = conn.cursor()\n    cur.execute('CREATE TABLE users (id INT, name TEXT)')\n    cur.execute('INSERT INTO users VALUES (1, \\'O\\\\\\'Malley\\')')\n    username = \"O'Malley\"\n    q = f\"SELECT id, name FROM users WHERE name = '{username}'\"\n    try:\n        cur.execute(q)\n        print(cur.fetchone())\n    except Exception as e:\n        print(type(e).__name__, e)\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    import sqlite3\n    with sqlite3.connect(':memory:') as conn:\n        cur = conn.cursor()\n        cur.execute('CREATE TABLE users (id INT, name TEXT)')\n        cur.execute('INSERT INTO users VALUES (?, ?)', (1, \"O'Malley\"))\n        username = \"O'Malley\"\n        cur.execute('SELECT id, name FROM users WHERE name = ?', (username,))\n        print(cur.fetchone())\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    import sqlite3\n    with sqlite3.connect(':memory:') as conn:\n        cur = conn.cursor()\n        cur.execute('CREATE TABLE users (id INT, name TEXT)')\n        cur.execute(\"INSERT INTO users VALUES (1, 'Bob')\")\n        username = \"O'Malley\"\n        q = \"SELECT id, name FROM users WHERE name = '\" + username + \"'\"\n        cur.execute(q)\n        print(cur.fetchone())\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    print('None')\n"},
+        ],
+        "kind": "equals", "expected": "(1, \"O'Malley\")\n",
+        "explain": "Use parameterized queries with placeholders; never interpolate user input into SQL."
+    },
+    11: {
+        "title": "Exercise 11 (TZ/DST)",
+        "buggy": "def main():\n    from datetime import datetime, timedelta\n    start = datetime.now()\n    end = start + timedelta(hours=24)\n    print('Naive')\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    from datetime import datetime, timedelta\n    try:\n        from zoneinfo import ZoneInfo\n        tz = ZoneInfo('Europe/London')\n        now = datetime.now(tz)\n        _ = now + timedelta(hours=24)\n        print('TZ-aware')\n    except Exception:\n        print('TZ-aware')\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    from datetime import datetime, timedelta\n    now = datetime.utcnow()\n    _ = now + timedelta(hours=24)\n    print('Naive')\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    print('Unknown')\n"},
+        ],
+        "kind": "equals", "expected": "TZ-aware\n",
+        "explain": "Use timezone-aware datetimes via zoneinfo; DST shifts can make 24h != 1 day."
+    },
+    12: {
+        "title": "Exercise 12 (Iterator exhaustion)",
+        "buggy": "def main():\n    def process(lines_iter):\n        return [s.strip() for s in lines_iter if s.strip()]\n    data = iter(['a\\n', '\\n', 'b\\n'])\n    first = process(data)\n    second = process(data)\n    print('first:', first, 'second:', second)\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    def process(lines_iterable):\n        items = list(lines_iterable)\n        return [s.strip() for s in items if s.strip()]\n    src = ['a\\n', '\\n', 'b\\n']\n    first = process(src)\n    second = process(src)\n    print('first:', first, 'second:', second)\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    def process(lines_iter):\n        return [s.strip() for s in lines_iter if s.strip()]\n    src_iter = iter(['a\\n', '\\n', 'b\\n'])\n    first = process(src_iter)\n    second = process(src_iter)\n    print('first:', first, 'second:', second)\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    print('first:', [], 'second:', [])\n"},
+        ],
+        "kind": "equals", "expected": "first: ['a', 'b'] second: ['a', 'b']\n",
+        "explain": "Iterators are one-shot; convert to a list or iterate the source twice."
+    },
+    13: {
+        "title": "Exercise 13 (dataclass defaults)",
+        "buggy": "def main():\n    from dataclasses import dataclass\n    @dataclass\n    class Cart:\n        items: list = []\n    c1 = Cart(); c2 = Cart()\n    c1.items.append('x')\n    print('c2.items:', c2.items)\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    from dataclasses import dataclass, field\n    @dataclass\n    class Cart:\n        items: list = field(default_factory=list)\n    c1 = Cart(); c2 = Cart()\n    c1.items.append('x')\n    print('c2.items:', c2.items)\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    from dataclasses import dataclass\n    @dataclass\n    class Cart:\n        items: list = []\n    c1 = Cart(); c2 = Cart()\n    c1.items.append('x')\n    print('c2.items:', c2.items)\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    from dataclasses import dataclass, field\n    @dataclass\n    class Cart:\n        items: tuple = field(default_factory=tuple)\n    c1 = Cart(); c2 = Cart()\n    try:\n        c1.items += ('x',)\n        print('c2.items:', c2.items)\n    except Exception as e:\n        print(type(e).__name__)\n"},
+        ],
+        "kind": "equals", "expected": "c2.items: []\n",
+        "explain": "Use field(default_factory=list) to avoid one shared list across instances."
+    },
+    14: {
+        "title": "Exercise 14 (logging hygiene)",
+        "buggy": "def main():\n    import logging\n    API_KEY = 'sk_live_example_secret_value'\n    try:\n        raise TimeoutError('simulated')\n    except Exception as e:\n        logging.error('Charge failed for key=%s err=%r', API_KEY, e)\n        print('logged')\n",
+        "options": [
+            {"title": "Option A", "ok": True, "code": "def main():\n    import logging\n    try:\n        raise TimeoutError('simulated')\n    except TimeoutError as e:\n        logging.error('Charge failed; err=%s', e)\n        print('logged')\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    import logging\n    API_KEY = 'sk_live_example_secret_value'\n    try:\n        raise TimeoutError('simulated')\n    except Exception as e:\n        logging.error('Charge failed; api=%s; err=%s', API_KEY, e)\n        print('logged', API_KEY)\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    print('silent')\n"},
+        ],
+        "kind": "equals", "expected": "logged\n",
+        "explain": "Never log secrets; log the error only. Also use specific exception types."
+    },
+}
+
+# ----------------------------
+# Session runner
+# ----------------------------
+
+def run_single_show_code(ex_num: int, time_limit: float = 0.0, reveal: bool = False, run_buggy_first: bool = False, explain: bool = False):
+    spec = EXERCISES[ex_num]
+
+    _print_header(f"{spec['title']} - Buggy code")
+    print(spec['buggy'])
+
+    if run_buggy_first:
+        _print_header(f"{spec['title']} - Buggy run (executed)")
+        buggy_out = _exec_buggy(spec['buggy'])
+        print(buggy_out, end="")
+
+    _print_header(f"{spec['title']} - Options (randomized)")
+    options = spec['options'][:]
+    random.shuffle(options)
+    labels = ['A', 'B', 'C']
+    label_map = {}
+    for label, opt in zip(labels, options):
+        label_map[label] = opt
+        print(f"{label})\n{opt['code']}")
+
+    start = time.time()
+    choice, timed_out = timed_input("Choose A, B, or C: ", time_limit)
+    elapsed = time.time() - start
+    if timed_out or choice.upper() not in label_map:
+        print("TIMEOUT" if timed_out else "Invalid choice")
+        return False, elapsed, None
+
+    chosen = label_map[choice.upper()]
+
+    _print_header(f"Running option {choice.upper()}")
+    fn = _safe_exec(chosen['code'])
+    try:
+        out = _capture_stdout(fn)
+    except Exception as e:
+        print(f"[EXCEPTION] {type(e).__name__}: {e}")
+        print("FAIL (exception during option execution)")
+        ok = False
+    else:
+        # Secret leak guard for #14
+        if ex_num == 14 and "sk_live" in out:
+            print("FAIL (secret leaked)")
+            ok = False
+        else:
+            if spec['kind'] == 'equals':
+                ok = (out == spec['expected'])
+                print("PASS" if ok else "FAIL")
+                if not ok:
+                    print("Expected:", repr(spec['expected']))
+                    print("Got     :", repr(out))
+            elif spec['kind'] == 'lines':
+                out_lines = out.splitlines(keepends=True)
+                ok = (out_lines == spec['expected'])
+                print("PASS" if ok else "FAIL")
+                if not ok:
+                    print("Expected lines:", spec['expected'])
+                    print("Got lines     :", out_lines)
+            else:
+                ok = False
+                print("Internal test kind error.")
+
+    if not ok and explain:
+        # Show correct answer and explanation
+        correct_label = None
+        correct_opt = None
+        for lbl, opt in label_map.items():
+            if opt.get("ok"):
+                correct_label, correct_opt = lbl, opt
+                break
+        if correct_opt:
+            _print_header(f"Correct answer was {correct_label} - running it now")
+            corr_fn = _safe_exec(correct_opt['code'])
+            corr_out = _capture_stdout(corr_fn)
+            print(corr_out, end="")
+        if spec.get("explain"):
+            print("Why: " + spec["explain"])
+
+    if reveal and ok:
+        for lbl, opt in label_map.items():
+            if opt.get("ok"):
+                print(f"(Correct was {lbl})")
+
+    return ok, elapsed, None
+
+def run_session(order, time_limit=0.0, reveal=False, run_buggy_first=False, explain=False, limit_time_total=0.0):
+    score = 0
+    results = []
+    start_session = time.time()
+    for ex in order:
+        if limit_time_total and (time.time() - start_session) >= limit_time_total:
+            _print_header("Session time limit reached")
+            break
+        ok, elapsed, err = run_single_show_code(
+            ex,
+            time_limit=time_limit,
+            reveal=reveal,
+            run_buggy_first=run_buggy_first,
+            explain=explain,
+        )
+        results.append((ex, ok, elapsed, err))
+        if ok:
+            score += 1
+        if limit_time_total and (time.time() - start_session) >= limit_time_total:
+            _print_header("Session time limit reached")
+            break
+    _print_header("Session Summary")
+    print(f"Score: {score} / {len(results)}")
+    if limit_time_total:
+        used = time.time() - start_session
+        print(f"Time used: {used:.1f}s (limit {limit_time_total:.1f}s)")
+    for ex, ok, elapsed, err in results:
+        status = "PASS" if ok else "FAIL"
+        print(f"  Ex {ex:>2}: {status}  ({elapsed:.1f}s)")
+    return score, results
+
+# ----------------------------
+# CLI
+# ----------------------------
+
+def main():
+    p = argparse.ArgumentParser(description="Python Debugging Interview - Show Code (all-in-one)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--all", action="store_true", help="run all exercises (1..14)")
+    g.add_argument("--pick", nargs="+", type=int, help="specific exercises, e.g. --pick 3 7 10")
+    p.add_argument("--limit", type=int, default=0, help="limit number of exercises (use with --all/--shuffle)")
+    p.add_argument("--shuffle", action="store_true", help="shuffle exercise order")
+    p.add_argument("--time-limit", type=float, default=0.0, help="seconds allowed for choosing an option (0 disables timeout)")
+    p.add_argument("--reveal", action="store_true", help="reveal the correct option label after each exercise (when right)")
+    p.add_argument("--run-buggy-first", action="store_true", help="execute buggy code first and show its output/error")
+    p.add_argument("--explain", action="store_true", help="if the chosen option is wrong, run the correct one and explain why")
+    p.add_argument("--limit-time", type=float, default=0.0, help="overall session time limit in seconds (0 disables)")
+    args = p.parse_args()
+
+    if args.all:
+        order = list(EXERCISES.keys())
+    elif args.pick:
+        order = [n for n in args.pick if n in EXERCISES]
+        if not order:
+            print("No valid exercises in --pick."); return
+    else:
+        print("Available exercises:", ", ".join(str(k) for k in sorted(EXERCISES.keys())))
+        while True:
+            s = input("Enter exercise number: ").strip()
+            if s.isdigit() and int(s) in EXERCISES:
+                order = [int(s)]
+                break
+            print("Please enter a valid number.")
+    if args.shuffle:
+        random.shuffle(order)
+    if args.limit and args.limit < len(order):
+        order = order[:args.limit]
+
+    run_session(
+        order,
+        time_limit=args.time_limit,
+        reveal=args.reveal,
+        run_buggy_first=args.run_buggy_first,
+        explain=args.explain,
+        limit_time_total=args.limit_time,
+    )
+
+if __name__ == "__main__":
+    main()
