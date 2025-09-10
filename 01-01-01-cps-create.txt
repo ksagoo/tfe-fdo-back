@@ -1,3 +1,31 @@
+if args.check_access_group_only:
+    if not args.access_group or not args.region:
+        print("ERROR: --access-group and --region are required with --check-access-group-only")
+        return
+    gid = access_group_exists(
+        args.access_group,
+        edgerc_file=os.path.expanduser(args.edgerc_file),
+        section_name=args.section_name,
+        region=args.region,
+        debug=args.debug
+    )
+    if gid:
+        print(f"YES groupName=\"{args.access_group}\" groupId=\"{gid}\"")
+    else:
+        print(f"NO pattern=\"{args.access_group}\"")
+    return
+
+ap.add_argument("--check-access-group-only", action="store_true",
+                help="Only validate access group via PAPI and exit (YES/NO with details).")
+
+
+python entitlement_check.py \
+  --check-access-group-only \
+  --region APAC \
+  --access-group "HSBC-APAC-VL"
+
+
+
 #!/usr/bin/env python3
 """
 Akamai Entitlement Check Script - LDAP Lookup & Group Membership Script
