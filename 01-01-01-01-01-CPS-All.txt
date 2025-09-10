@@ -1,164 +1,70 @@
-Onboarding Automation – User Guide
-Overview: Jira Workflow and Automated Flow
-
-This guide walks you through the automated onboarding process initiated via the Jira Front Door form. The following diagram outlines the key Jira workflow stages:
-
-!01.jpeg|width=800!
-Workflow Stages
-
-    Submitted – Request is submitted via the Front Door form.
-
-    Validated – Access groups and change tickets are verified.
-
-    In Progress – Jenkins pipelines trigger and provision configurations.
-
-    Awaiting Activation Approval – Staging activation is complete, awaiting production approval.
-
-    Completed – Final production activation is performed.
-
-Step-by-Step Instructions
-Step 1: Access the Jira Front Door Form
-
-!02.jpeg|width=700!
-
-Navigate to the Front Door form and complete the following fields:
-
-    Property Name
-
-    Access Group
-
-    Environment (NonProd or Prod)
-
-    Business and Technical Owners
-
-    Required Configurations
-
-All fields include inline descriptions for clarity.
-Step 2: Attach Change Tickets
-
-!03.jpeg|width=700!
-
-You must include two separate change tickets with your request:
-
-    Onboarding Change Ticket
-
-        Must be fully approved
-
-        Must fall within the scheduled change window
-
-    Property Activation & Security Configuration Ticket
-
-        Can be in Draft initially
-
-        Must be fully approved prior to production activation
-
-System validations ensure:
-
-    Change ticket status is approved
-
-    Assignment group is correct
-
-    Approver belongs to the assignment group
-
-Step 3: Submit Form and Trigger Automation
-
-!04.jpeg|width=700!
-
-Once submitted, the request transitions to the Submitted state. This action triggers a webhook to Jenkins, which begins processing.
-Step 4: Confirmation Email
-
-!06.jpeg|width=700!
-
-You will receive a confirmation email indicating that your onboarding request has been received and automation has been triggered.
-Step 5: Jenkins – Access Group and Change Ticket Validation
-
-!07.jpeg|width=700!
-
-The pipeline performs the following checks:
-
-    Validates the access group exists
-
-    Confirms both change tickets meet approval and timing requirements
-
-If any validation fails, the ticket is returned to the requestor.
-Step 6: CPS and Site Delivery Creation
-
-!08.jpeg|width=700!
-
-A new Site Delivery is created. Certificate Provisioning System (CPS) requests are initiated based on the property and domain.
-Step 7: Activate Site Delivery in Staging
-
-!09.jpeg|width=700!
-
-The pipeline activates the property in the Staging Akamai network. This ensures the configuration is fully tested before going to production.
-Step 8: Clone Security Configuration from Template
-
-!10.jpeg|width=700!
-
-A security configuration is cloned from the pre-approved Security Policy Template, including:
-
-    Client Lists
-
-    Custom Rules
-
-    Rate Limits
-
-    Reputation Profiles
-
-All cloned items are renamed using the format:
-SC-<AccessGroup>-<OriginalNameSuffix>
-Step 9: Jenkins Pipeline Output
-
-!11.jpeg|width=700!
-
-Pipeline logs and outputs are updated in real-time. Any failures are automatically flagged and pushed to Jira with detailed trace logs.
-Step 10: Email Notification for Production Approval
-
-!15.jpeg|width=700!
-
-Once staging is successful, an approval email is sent to designated approvers for production deployment authorization.
-Step 11: Manual Approval via Jira or ServiceNow
-
-!16.jpeg|width=700!
-
-The assigned approver reviews and approves via the linked ticketing system. Once approved, production deployment proceeds.
-Step 12: Activate in Production
-
-!17.jpeg|width=700!
-
-The final production activation is performed. This includes Akamai configuration updates for property and security policies.
-Step 13: Final Notification
-
-!18.jpeg|width=700!
-
-A final confirmation email is sent to the requester confirming successful onboarding and production deployment.
-Step 14: Jira Ticket Closure
-
-!19.jpeg|width=700!
-
-The Jira ticket transitions to Completed. A complete audit trail is attached to the issue, including logs, screenshots, and timestamps.
-Step 15: Summary of Cloned Entities
-
-!20.jpeg|width=700!
-
-The following elements are logged:
-
-    Client lists cloned
-
-    Rate policies applied
-
-    Custom rules reassigned
-
-    Match targets reassigned
-
-Step 16: Handling Failures and Retries
-
-!21.jpeg|width=700!
-
-If any part of the onboarding fails:
-
-    You will receive an email notification
-
-    The Jira ticket will indicate the failure reason
-
-    You can re-trigger the onboarding by correcting the issue and transitioning the ticket again
+"""
+Python Debugging Interview — Candidate-Safe Runner
+==================================================
+
+This is the **candidate-facing** version of the interview tool.
+It **never reveals** correct answers, does **not** show per-question PASS/FAIL,
+and only writes results to files for the interviewer/agency.
+
+What the candidate sees
+-----------------------
+- Header: "Exercise N - <short description>"
+- Buggy code snippet
+- Three options (A/B/C) in random order
+- A prompt to enter A/B/C
+
+What is NOT shown
+-----------------
+- No PASS/FAIL after each question
+- No "correct answer was ..." reveal
+- No code execution outputs
+
+Outputs
+-------
+- **CSV**: per-question PASS/FAIL, totals, percentage
+- **Optional PDF** (with `--pdf`): agency summary with only "Ex NN: PASS/FAIL",
+  candidate name, timestamp, and overall score. No code or question text.
+
+Command line
+------------
+Usage:
+  python interview_debug_showcode_candidate.py [--all | --pick N N ...] [options]
+
+Required (choose one):
+  --all                        Run all exercises.
+  --pick 2 5 8                 Run only the listed exercises.
+
+Common options:
+  --shuffle                    Shuffle exercise order.
+  --limit N                    Limit number of exercises after shuffle/filter.
+  --time-limit SECS            Seconds allowed for entering a choice (0 = no limit).
+  --pause                      Pause after each exercise and clear the screen.
+
+Output options:
+  --name "Candidate Name"      Name used in files (prompted if omitted).
+  --output-dir PATH            Directory for results (default: current directory).
+  --results-file NAME.csv      Exact CSV filename (overrides generated one).
+  --no-display-results         Do NOT print final summary on screen (still saved to files).
+
+Agency PDF:
+  --pdf                        Also write a one-page PDF summary (no question details).
+  --pdf-file NAME.pdf          Explicit PDF filename (overrides generated one).
+
+Examples
+--------
+  # Run all, pause between exercises, and save PDF + CSV with no visiual display at end of test
+  python interview_debug_showcode_candidate.py \
+      --all --shuffle --pause \
+      --name "Jane Doe" \
+      --output-dir results \
+      ----no-display-results \
+      --pdf
+
+  # Pick specific questions, custom CSV/PDF filenames, hide on-screen summary
+  python interview_debug_showcode_candidate.py \
+      --pick 2 5 8 10 \
+      --name "John Smith" \
+      --results-file agency_submission.csv \
+      --pdf --pdf-file agency_summary.pdf \
+      --no-display-results
+"""
