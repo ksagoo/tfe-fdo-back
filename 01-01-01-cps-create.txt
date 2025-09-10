@@ -1,3 +1,15 @@
+    # Validate Access Group via PAPI only (no LDAP calls)
+    python entitlement_check.py --check-access-group-only \
+        --region APAC \
+        --access-group "HSBC-APAC-VL" \
+        --edgerc-file ~/.edgerc --section-name default
+
+    # Example output if group exists
+    YES groupName="HSBC-APAC-VL" groupId="grp_12345"
+
+    # Example output if group not found
+    NO pattern="HSBC-APAC-VL"
+
 """
 Akamai Entitlement Check Script - LDAP Lookup & Group Membership Script
 
