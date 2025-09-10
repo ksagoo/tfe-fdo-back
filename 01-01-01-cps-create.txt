@@ -1,3 +1,46 @@
+"""
+Akamai Entitlement Check Script - LDAP Lookup & Group Membership Script
+
+Description:
+    Query the internal LDAP/AD API and retrieve user details, including group
+    memberships. Supports listing, membership checks, substring search,
+    exporting JSON, comparing two users, and validating Akamai Access Groups.
+
+New in this version:
+    --check-access-group-only
+        Runs ONLY the Akamai PAPI validation step. Does not call LDAP at all.
+        Useful in environments (e.g. Jenkins) where outbound proxy is required
+        for Akamai but breaks LDAP.
+
+        - If the group exists:
+              YES groupName="<NAME>" groupId="<ID>"
+        - If not found:
+              NO pattern="<SEARCH_STRING>"
+
+Parameters:
+    --base (optional)        Base LDAP API URL (default: HSBC LDAP endpoint)
+    --user (required)        Primary user ID (e.g., 45384191)
+    --user-b (optional)      Second user ID for comparison
+    --summary (optional)     Print user summary
+    --groups (optional)      Print only group memberships
+    --is-member (optional)   Check membership (substring or exact match)
+    --exact (optional)       Require exact match for --is-member
+    --find (optional)        Find groups containing substring
+    --save-json (optional)   Save raw JSON for inspection
+    --verify-ca (optional)   Path to CA cert for LDAP TLS verification
+    --access-group (opt)     Access Group name (validated via PAPI, used for LDAP search)
+    --region (optional)      Region (required if --access-group is provided)
+    --edgerc-file (optional) Path to .edgerc file (default ~/.edgerc)
+    --section-name (opt)     Section inside .edgerc (default: default)
+    --check-access-group-only (opt)
+                             Run only PAPI Access Group validation step
+    --timeout (optional)     LDAP request timeout in seconds (default: 20)
+    --retries (optional)     LDAP retry attempts (default: 3)
+    --retry-backoff (opt)    Backoff factor for LDAP retries (default: 0.5)
+    --debug (optional)       Enable debug output
+"""
+
+
 if args.check_access_group_only:
     if not args.access_group or not args.region:
         print("ERROR: --access-group and --region are required with --check-access-group-only")
