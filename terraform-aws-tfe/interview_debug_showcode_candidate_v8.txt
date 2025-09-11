@@ -1,0 +1,558 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Python Debugging Interview — Candidate-Safe Runner (v8)
+=======================================================
+
+What’s new in v8
+----------------
+- When `--pdf` is supplied, we now generate **two PDFs**:
+  1) `summary_...pdf` (unchanged): PASS/FAIL per exercise + totals
+  2) `details_...pdf` (**new**): multi-page text PDF with, for each exercise:
+     - Exercise # + description
+     - Buggy code (as shown)
+     - Candidate’s chosen code
+     - If wrong, the correct code
+- Zero third-party deps; minimal PDF writer with multi-page support.
+
+Typical usage
+-------------
+python interview_debug_showcode_candidate_v8.py --all --shuffle --pause --name "Jane Doe" --pdf
+"""
+
+import sys, os, io, time, random, argparse, csv, re
+import logging
+from datetime import datetime
+from textwrap import wrap
+
+# ----------------------------
+# Utilities
+# ----------------------------
+
+def _print_header(title):
+    print("\n" + "=" * 70)
+    print(title)
+    print("=" * 70)
+
+def timed_input(prompt: str, timeout: float):
+    """Cross-platform timed input with optional timeout."""
+    if timeout is None or timeout <= 0:
+        try:
+            return input(prompt), False
+        except EOFError:
+            return "", False
+
+    if os.name == "nt":
+        try:
+            import msvcrt
+        except Exception:
+            try:
+                return input(prompt), False
+            except EOFError:
+                return "", False
+        sys.stdout.write(prompt); sys.stdout.flush()
+        start = time.time()
+        chars = []
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\r", "\n"):
+                    print("")
+                    return "".join(chars), False
+                elif ch == "\003":  # Ctrl+C
+                    raise KeyboardInterrupt
+                elif ch == "\b":
+                    if chars:
+                        chars.pop()
+                        sys.stdout.write("\b \b"); sys.stdout.flush()
+                else:
+                    chars.append(ch)
+                    sys.stdout.write(ch); sys.stdout.flush()
+            if time.time() - start >= timeout:
+                print("")
+                return "".join(chars), True
+            time.sleep(0.01)
+    else:
+        try:
+            import select
+        except Exception:
+            try:
+                return input(prompt), False
+            except EOFError:
+                return "", False
+        sys.stdout.write(prompt); sys.stdout.flush()
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+        if rlist:
+            try:
+                line = sys.stdin.readline()
+            except EOFError:
+                return "", False
+            return line.rstrip("\n"), False
+        else:
+            print("")
+            return "", True
+
+def sanitize_filename(s: str) -> str:
+    s = s.strip()
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"[^A-Za-z0-9._-]", "", s)
+    return s or "candidate"
+
+# ----------------------------
+# Minimal PDF writers (no deps)
+# ----------------------------
+
+def _pdf_escape(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+def write_summary_pdf(path, title, candidate_name, timestamp, lines, footer):
+    """Write a single-page, text-only PDF (Helvetica)."""
+    width, height = 595, 842  # A4 points
+    margin_top = 56
+    leading = 16
+    y = height - margin_top
+
+    content = []
+    content.append(f"BT /F1 16 Tf 50 {y} Td ({_pdf_escape(title)}) Tj ET"); y -= (leading + 6)
+    content.append(f"BT /F1 12 Tf 50 {y} Td (Candidate: {_pdf_escape(candidate_name)}) Tj ET"); y -= leading
+    content.append(f"BT /F1 12 Tf 50 {y} Td (Timestamp: {_pdf_escape(timestamp)}) Tj ET"); y -= (leading + 6)
+
+    for line in lines:
+        if y < 80: break
+        content.append(f"BT /F1 12 Tf 50 {y} Td ({_pdf_escape(line)}) Tj ET")
+        y -= leading
+
+    y -= leading
+    for line in footer:
+        if y < 60: break
+        content.append(f"BT /F1 12 Tf 50 {y} Td ({_pdf_escape(line)}) Tj ET")
+        y -= leading
+
+    content_stream = "\n".join(content).encode("latin-1", "replace")
+
+    out = bytearray(); out.extend(b"%PDF-1.4\n")
+    xref = [0]
+
+    def write_obj(obj_id, payload_bytes):
+        xref.append(len(out))
+        out.extend(f"{obj_id} 0 obj\n".encode("latin-1"))
+        out.extend(payload_bytes)
+        if not payload_bytes.endswith(b"\n"):
+            out.extend(b"\n")
+        out.extend(b"endobj\n")
+
+    write_obj(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+    write_obj(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+    resources = b"<< /Font << /F1 5 0 R >> >>"
+    write_obj(3, f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources {resources.decode('latin-1')} /Contents 4 0 R >>".encode("latin-1"))
+    stream = b"<< /Length " + str(len(content_stream)).encode("latin-1") + b" >>\nstream\n" + content_stream + b"\nendstream\n"
+    write_obj(4, stream)
+    write_obj(5, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+    xref_pos = len(out)
+    out.extend(b"xref\n")
+    out.extend(f"0 {len(xref)}\n".encode("latin-1"))
+    out.extend(b"0000000000 65535 f \n")
+    for off in xref[1:]:
+        out.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
+    out.extend(b"trailer\n")
+    out.extend(f"<< /Size {len(xref)} /Root 1 0 R >>\n".encode("latin-1"))
+    out.extend(b"startxref\n")
+    out.extend(f"{xref_pos}\n".encode("latin-1"))
+    out.extend(b"%%EOF")
+
+    with open(path, "wb") as f:
+        f.write(out)
+
+def write_text_pdf_multipage(path, title, candidate_name, timestamp, sections,
+                             max_chars_per_line=92, leading=14, top_margin=56, bottom_margin=56):
+    """
+    Minimal multipage text PDF:
+    - sections: list of (header_line: str, lines_iterable: List[str])
+    - wraps each text line to max_chars_per_line
+    """
+    width, height = 595, 842
+    left_x = 50
+    y_start = height - top_margin
+    y_min = bottom_margin
+
+    pages = []
+    cur = []
+    y = y_start
+
+    def add_line(s: str, font_size=12):
+        nonlocal y, cur, pages
+        if y - leading < y_min:
+            pages.append(cur); cur = []; y = y_start
+        cur.append(f"BT /F1 {font_size} Tf {left_x} {y} Td ({_pdf_escape(s)}) Tj ET")
+        y -= leading
+
+    # Document header on first page
+    add_line(title, font_size=16); y -= 6
+    add_line(f"Candidate: {candidate_name}")
+    add_line(f"Timestamp: {timestamp}")
+    y -= 6
+
+    for header, lines in sections:
+        if y - 2*leading < y_min:  # ensure space for section header
+            pages.append(cur); cur = []; y = y_start
+        add_line(header, font_size=13)
+        for raw in lines:
+            # Break the raw string into actual lines, then wrap each visually
+            for phyl in str(raw).splitlines() or [""]:
+                wrapped = wrap(phyl, width=max_chars_per_line) or [""]
+                for wline in wrapped:
+                    add_line(wline)
+            # preserve blank separation between code blocks
+        y -= 4  # small vertical gap after a section block
+
+    if cur:
+        pages.append(cur)
+
+    # assemble PDF
+    out = bytearray(); out.extend(b"%PDF-1.4\n")
+    xref = [0]
+
+    def write_obj(obj_id, payload_bytes):
+        xref.append(len(out))
+        out.extend(f"{obj_id} 0 obj\n".encode("latin-1"))
+        out.extend(payload_bytes)
+        if not payload_bytes.endswith(b"\n"):
+            out.extend(b"\n")
+        out.extend(b"endobj\n")
+
+    # Build page objects
+    kids = []
+    contents_ids = []
+    for i, content_lines in enumerate(pages, start=1):
+        stream_bytes = "\n".join(content_lines).encode("latin-1", "replace")
+        contents_ids.append(len(xref) + 2)  # will be the id of the stream object (after page obj)
+
+        # Page object (points to content stream)
+        write_obj(len(xref)+1,
+                  f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
+                  f"/Resources << /Font << /F1 5 0 R >> >> /Contents {len(xref)+2} 0 R >>".encode("latin-1"))
+        kids.append(f"{len(xref)} 0 R")  # the page object id we just wrote is len(xref)
+
+        # Content stream object
+        stream = b"<< /Length " + str(len(stream_bytes)).encode("latin-1") + b" >>\nstream\n" + stream_bytes + b"\nendstream\n"
+        write_obj(len(xref)+1, stream)
+
+    # Pages tree
+    kids_str = "[ " + " ".join(kids) + " ]"
+    write_obj(2, f"<< /Type /Pages /Kids {kids_str} /Count {len(pages)} >>".encode("latin-1"))
+
+    # Catalog
+    write_obj(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+
+    # Font
+    write_obj(5, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+    # xref/trailer
+    xref_pos = len(out)
+    out.extend(b"xref\n")
+    out.extend(f"0 {len(xref)}\n".encode("latin-1"))
+    out.extend(b"0000000000 65535 f \n")
+    for off in xref[1:]:
+        out.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
+    out.extend(b"trailer\n")
+    out.extend(f"<< /Size {len(xref)} /Root 1 0 R >>\n".encode("latin-1"))
+    out.extend(b"startxref\n")
+    out.extend(f"{xref_pos}\n".encode("latin-1"))
+    out.extend(b"%%EOF")
+
+    with open(path, "wb") as f:
+        f.write(out)
+
+# ----------------------------
+# Exercises
+# ----------------------------
+# Keep your full EXERCISES dict from v7 (all 14 items) – unchanged.
+# v8 only changes how we emit PDFs.
+
+EXERCISES = {
+    # ... paste your full 1–14 exercises dict here (same as v7) ...
+}
+
+# ----------------------------
+# Core logic
+# ----------------------------
+
+def run_single(ex_num: int, time_limit: float = 0.0, args_pause: bool = False):
+    spec = EXERCISES[ex_num]
+    _print_header(f"{spec['title']} - {spec.get('desc','Code')}")
+    print(spec['buggy'])
+
+    _print_header(f"{spec['title']} - Options")
+    options = spec['options'][:]
+    random.shuffle(options)
+
+    labels = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")[:len(options)]
+    label_map = dict(zip(labels, options))
+
+    for label, opt in label_map.items():
+        print(f"{label})\n{opt['code']}")
+
+    choice, timed_out = timed_input(f"Enter choice ({'/'.join(labels)}): ", time_limit)
+
+    chosen_label = "TIMEOUT" if timed_out else "INVALID"
+    ok = False
+    chosen_code = ""
+    correct_label = None
+    correct_code_if_wrong = ""
+
+    for lbl, opt in label_map.items():
+        if opt.get("ok"):
+            correct_label = lbl
+            break
+
+    if not timed_out and choice.upper() in label_map:
+        chosen_label = choice.upper()
+        chosen = label_map[chosen_label]
+        chosen_code = chosen["code"]
+
+        ns = {}
+        try:
+            exec(chosen["code"], ns, ns)
+            fn = ns.get("main", lambda: None)
+            if not callable(fn):
+                fn = lambda: None
+
+            # Silence stdout + logging while running
+            buf_out = io.StringIO()
+            buf_err = io.StringIO()
+            old_stdout, old_stderr = sys.stdout, sys.stderr
+            old_disable = logging.root.manager.disable
+            try:
+                sys.stdout, sys.stderr = buf_out, buf_err
+                logging.disable(logging.CRITICAL)
+                fn()
+            finally:
+                logging.disable(old_disable)
+                sys.stdout, sys.stderr = old_stdout, old_stderr
+
+            out = buf_out.getvalue()
+            if spec['kind'] == 'equals':
+                ok = (out == spec['expected'])
+            elif spec['kind'] == 'lines':
+                ok = (out.splitlines(keepends=True) == spec['expected'])
+            else:
+                ok = False
+        except Exception:
+            ok = False
+
+    if not ok and correct_label:
+        correct_code_if_wrong = label_map[correct_label]["code"]
+
+    if args_pause:
+        input("Press Enter to continue...")
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+    return {
+        "chosen_label": chosen_label,
+        "ok": ok,
+        "correct_label": correct_label or "",
+        "buggy_code": spec.get("buggy", ""),
+        "chosen_code": chosen_code,
+        "correct_code_if_wrong": correct_code_if_wrong,
+    }
+
+def run_session(order, time_limit=0.0, args_pause=False, output_dir=".", results_file=None,
+                details_file=None, display_results=True, candidate_name="candidate",
+                pdf=False, pdf_file=None):
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    file_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = sanitize_filename(candidate_name)
+
+    # Summary CSV path
+    csv_path = os.path.join(output_dir, results_file) if results_file \
+               else os.path.join(output_dir, f"results_{safe_name}_{file_ts}.csv")
+
+    # Details CSV path
+    details_path = os.path.join(output_dir, details_file) if details_file \
+                   else os.path.join(output_dir, f"results_details_{safe_name}_{file_ts}.csv")
+
+    total = 0
+    rows = []
+    detail_rows = []
+    try:
+        for ex in order:
+            try:
+                res = run_single(ex, time_limit=time_limit, args_pause=args_pause)
+            except KeyboardInterrupt:
+                print("\n[Session cancelled by interviewer]")
+                break
+
+            desc = EXERCISES[ex].get('desc','')
+            rows.append((ex, desc, res["chosen_label"], res["ok"]))
+            if res["ok"]:
+                total += 1
+
+            detail_rows.append({
+                "exercise": ex,
+                "description": desc,
+                "chosen_label": res["chosen_label"],
+                "chosen_ok": str(res["ok"]),
+                "correct_label_if_wrong": (res["correct_label"] if not res["ok"] else ""),
+                "buggy_code": res["buggy_code"],
+                "chosen_code": res["chosen_code"],
+                "correct_code_if_wrong": res["correct_code_if_wrong"] if not res["ok"] else "",
+            })
+    except KeyboardInterrupt:
+        print("\n[Session cancelled by interviewer]")
+
+    # Write summary CSV
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["candidate", safe_name])
+        w.writerow(["timestamp", timestamp])
+        w.writerow([])
+        w.writerow(["exercise", "description", "choice", "correct"])
+        for ex, desc, choice, ok in rows:
+            w.writerow([ex, desc, choice, str(ok)])
+        w.writerow([])
+        w.writerow(["TOTAL_CORRECT", total])
+        w.writerow(["TOTAL_QUESTIONS", len(rows)])
+        pct = (total / len(rows) * 100.0) if rows else 0.0
+        w.writerow(["PERCENT", f"{pct:.0f}%"])
+
+    # Write streamlined details CSV
+    with open(details_path, "w", newline="", encoding="utf-8") as f:
+        fieldnames = ["exercise","description","chosen_label","chosen_ok",
+                      "correct_label_if_wrong","buggy_code","chosen_code","correct_code_if_wrong"]
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for row in detail_rows:
+            w.writerow(row)
+
+    # PDFs
+    pdf_path = None
+    details_pdf_path = None
+    if pdf:
+        # 1) Summary PDF (unchanged)
+        pdf_path = os.path.join(output_dir, pdf_file) if pdf_file \
+                   else os.path.join(output_dir, f"summary_{safe_name}_{file_ts}.pdf")
+        summary_lines = [f"Ex {ex:>2}: {'PASS' if ok else 'FAIL'}" for (ex, _, _, ok) in rows]
+        footer = ["-" * 30, f"Score: {total} / {len(rows)} ({pct:.0f}%)"]
+        write_summary_pdf(pdf_path, "Python Debugging Interview - Summary", candidate_name, timestamp, summary_lines, footer)
+
+        # 2) NEW: Details PDF
+        details_pdf_path = os.path.join(output_dir, f"details_{safe_name}_{file_ts}.pdf")
+
+        # Build sections for multipage writer
+        sections = []
+        for row in detail_rows:
+            ex = row["exercise"]
+            desc = row["description"]
+            header = f"Exercise {ex}: {desc}  —  Choice: {row['chosen_label']}  ({'PASS' if row['chosen_ok']=='True' else 'FAIL'})"
+
+            lines = []
+            lines.append("Buggy code:")
+            lines.append(row["buggy_code"].rstrip("\n"))
+            lines.append("")
+            lines.append("Chosen code:")
+            lines.append(row["chosen_code"].rstrip("\n") if row["chosen_code"] else "(none)")
+            if row["chosen_ok"] != "True":
+                lines.append("")
+                lines.append(f"Correct code (since choice was wrong; correct option: {row['correct_label_if_wrong']}):")
+                lines.append(row["correct_code_if_wrong"].rstrip("\n") if row["correct_code_if_wrong"] else "(n/a)")
+            sections.append((header, lines))
+
+        write_text_pdf_multipage(
+            details_pdf_path,
+            title="Python Debugging Interview - Detailed Responses",
+            candidate_name=candidate_name,
+            timestamp=timestamp,
+            sections=sections,
+            max_chars_per_line=92,   # conservative wrap for A4 @ 12pt Helvetica
+            leading=14
+        )
+
+    if display_results:
+        _print_header("Session Summary")
+        print(f"Candidate: {candidate_name}")
+        print(f"Saved CSV: {csv_path}")
+        print(f"Saved details CSV: {details_path}")
+        if pdf and pdf_path:
+            print(f"Saved PDF: {pdf_path}")
+        if pdf and details_pdf_path:
+            print(f"Saved Details PDF: {details_pdf_path}")
+        print(f"Score: {total} / {len(rows)} ({pct:.0f}%)")
+    else:
+        print(f"Saved CSV: {csv_path}")
+        print(f"Saved details CSV: {details_path}")
+        if pdf and pdf_path:
+            print(f"Saved PDF: {pdf_path}")
+        if pdf and details_pdf_path:
+            print(f"Saved Details PDF: {details_pdf_path}")
+
+    return csv_path, (pdf_path, details_pdf_path)
+
+# ----------------------------
+# CLI
+# ----------------------------
+
+def main():
+    p = argparse.ArgumentParser(description="Python Debugging Interview - Candidate-Safe Runner")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--all", action="store_true", help="run all exercises (1..14)")
+    g.add_argument("--pick", nargs="+", type=int, help="specific exercises, e.g. --pick 3 7 10")
+    p.add_argument("--shuffle", action="store_true", help="shuffle exercise order")
+    p.add_argument("--limit", type=int, default=0, help="limit number of exercises (use with --all/--shuffle)")
+    p.add_argument("--time-limit", type=float, default=0.0, help="seconds allowed for entering a choice (0 disables timeout)")
+    p.add_argument("--pause", action="store_true", help="pause after each exercise and clear screen before next")
+    p.add_argument("--output-dir", type=str, default=".", help="directory to save result files")
+    p.add_argument("--results-file", type=str, default=None, help="explicit summary CSV filename")
+    p.add_argument("--details-file", type=str, default=None, help="explicit details CSV filename")
+    p.add_argument("--no-display-results", action="store_true", help="do not print final results on screen (still saved to files)")
+    p.add_argument("--name", type=str, default=None, help="candidate name (if omitted, will be prompted)")
+    p.add_argument("--pdf", action="store_true", help="also write an agency PDF summary + detailed responses PDF")
+    p.add_argument("--pdf-file", type=str, default=None, help="summary PDF filename (optional)")
+
+    args = p.parse_args()
+
+    candidate_name = args.name if args.name else (input("Candidate name: ").strip() or "candidate")
+
+    # Build exercise order
+    if args.all:
+        order = list(EXERCISES.keys())
+    elif args.pick:
+        order = [n for n in args.pick if n in EXERCISES]
+        if not order:
+            print("No valid exercises in --pick."); return
+    else:
+        print("Available exercises:", ", ".join(str(k) for k in sorted(EXERCISES.keys())))
+        while True:
+            s = input("Enter exercise number: ").strip()
+            if s.isdigit() and int(s) in EXERCISES:
+                order = [int(s)]
+                break
+            print("Please enter a valid number.")
+
+    if args.shuffle:
+        random.shuffle(order)
+    if args.limit and args.limit < len(order):
+        order = order[:args.limit]
+
+    # Clear screen before showing the first exercise
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+    try:
+        run_session(
+            order,
+            time_limit=args.time_limit,
+            args_pause=args.pause,
+            output_dir=args.output_dir,
+            results_file=args.results_file,
+            details_file=args.details_file,
+            display_results=not args.no_display_results,
+            candidate_name=candidate_name,
+            pdf=args.pdf,
+            pdf_file=args.pdf_file,
+        )
+    except KeyboardInterrupt:
+        print("\n[Session cancelled] Results (so far) have been written.")
+
+if __name__ == "__main__":
+    main()
