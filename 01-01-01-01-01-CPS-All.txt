@@ -1,167 +1,89 @@
-def run_single(ex_num: int, time_limit: float = 0.0, args_pause: bool = False):
-    spec = EXERCISES[ex_num]
-    _print_header(f"{spec['title']} - {spec.get('desc','Code')}")
-    print(spec['buggy'])
+1. Find the existing CSV writing block
 
-    _print_header(f"{spec['title']} - Options")
-    options = spec['options'][:]
-    random.shuffle(options)
-    labels = list("ABCDEF")[:len(options)]
-    label_map = dict(zip(labels, options))
-    for label, opt in label_map.items():
-        print(f"{label})\n{opt['code']}")
+Near the end of your script you should see a section that writes out the summary_rows and detail_rows to CSV files.
+It will look something like this (simplified):
 
-    choice, timed_out = timed_input(f"Enter choice ({'/'.join(labels)}): ", time_limit)
-    if timed_out or choice.upper() not in label_map:
-        chosen_label = "TIMEOUT" if timed_out else "INVALID"
-        ok = False
-    else:
-        chosen_label = choice.upper()
-        chosen = label_map[chosen_label]
-        ns = {}
-        try:
-            exec(chosen['code'], ns, ns)
-            fn = ns.get("main", lambda: None)
-            if not callable(fn):
-                fn = lambda: None
+with open(summary_path, "w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=["exercise", "result"])
+    writer.writeheader()
+    for row in summary_rows:
+        writer.writerow(row)
 
-            buf_out = io.StringIO()
-            buf_err = io.StringIO()
-            old_stdout, old_stderr = sys.stdout, sys.stderr
-            old_disable = logging.root.manager.disable
-            try:
-                sys.stdout, sys.stderr = buf_out, buf_err
-                logging.disable(logging.CRITICAL)   # 🔇 suppress logging
-                fn()
-            finally:
-                logging.disable(old_disable)
-                sys.stdout, sys.stderr = old_stdout, old_stderr
+with open(detail_path, "w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=[...])
+    writer.writeheader()
+    for row in detail_rows:
+        writer.writerow(row)
 
-            out = buf_out.getvalue()
-        except Exception:
-            ok = False
-        else:
-            if spec['kind'] == 'equals':
-                ok = (out == spec['expected'])
-            elif spec['kind'] == 'lines':
-                ok = (out.splitlines(keepends=True) == spec['expected'])
-            else:
-                ok = False
+2. Delete/replace that section
 
-    if args_pause:
-        input("Press Enter to continue...")
-        os.system('cls' if os.name == 'nt' else 'clear')
+Replace it with the new write_results function I provided:
 
-    return chosen_label, ok
+import csv
 
+def write_results(summary_rows, detail_rows, candidate_name, output_dir, results_file, details_file):
+    import os
+    from datetime import datetime
+
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    # --- Summary CSV ---
+    summary_path = os.path.join(output_dir, results_file or f"combined_summary_{candidate_name}_{datetime.now().strftime('%Y%m%d')}.csv")
+    with open(summary_path, "w", newline="", encoding="utf-8-sig") as f:   # UTF-8 BOM for Excel
+        writer = csv.DictWriter(f, fieldnames=["exercise", "result"])
+        writer.writeheader()
+        for row in summary_rows:
+            writer.writerow(row)
+
+    # --- Details CSV ---
+    detail_path = os.path.join(output_dir, details_file or f"combined_details_{candidate_name}_{datetime.now().strftime('%Y%m%d')}.csv")
+    with open(detail_path, "w", newline="", encoding="utf-8-sig") as f:
+        fieldnames = [
+            "exercise", "platform", "title", "description",
+            "chosen_label", "chosen_ok", "correct_label_if_wrong",
+            "buggy_code", "chosen_code", "correct_code_if_wrong",
+            "explanation"
+        ]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in detail_rows:
+            # add explanation if missing (for Python)
+            if not row.get("explanation"):
+                row["explanation"] = PY_EXPLANATIONS.get(row["exercise"], "")
+            writer.writerow(row)
 
 
-Wrap run_session loop
+# --- Python explanations mapping ---
+PY_EXPLANATIONS = {
+    1: "Indentation must be corrected",
+    2: "Fix NameError by using correct variable",
+    3: "Avoid mutable default arguments",
+    4: "Correct off-by-one in range()",
+    5: "Use f-string formatting",
+    6: "Convert list items to str before join",
+    7: "Sort tuples with correct key function",
+    8: "Use dict.get() for counting instead of append",
+    9: "Catch ZeroDivisionError properly",
+    10: "Use generator expression instead of slicing",
+    11: "Reverse string using slicing",
+    12: "Use asyncio.run() and await coroutines",
+    13: "Use json.loads() instead of eval",
+    14: "Use enumerate(..., start=1) for indices",
+}
 
-Find the main for ex in order: loop inside run_session and change it to:
-    try:
-        for ex in order:
-            try:
-                choice, ok = run_single(ex, time_limit=time_limit, args_pause=args_pause)
-            except KeyboardInterrupt:
-                print("\n[Session cancelled by interviewer]")
-                break
-            rows.append((ex, EXERCISES[ex].get('desc',''), choice, ok))
-            if ok:
-                total += 1
-    except KeyboardInterrupt:
-        print("\n[Session cancelled by interviewer]")
+3. Update your main call
 
+Wherever your script currently calls something like:
+# old
+save_results(summary_rows, detail_rows, candidate_name, args.output_dir, args.results_file, args.details_file)
 
-2. Wrap the top-level main()
-
-At the bottom of main(), where you call run_session(...), wrap it like this:
-
-    try:
-        run_session(
-            order,
-            time_limit=args.time_limit,
-            args_pause=args.pause,
-            output_dir=args.output_dir,
-            results_file=args.results_file,
-            display_results=not args.no_display_results,
-            candidate_name=candidate_name,
-            pdf=args.pdf,
-            pdf_file=args.pdf_file,
-        )
-    except KeyboardInterrupt:
-        # Final catch-all just in case; avoid traceback
-        print("\n[Session cancelled] Results (so far) have been written.")
+Change it to:
+# new
+write_results(summary_rows, detail_rows, candidate_name, args.output_dir, args.results_file, args.details_file)
 
 
 
-"""
-Python Debugging Interview — Candidate-Safe Runner
-==================================================
 
-This is the **candidate-facing** version of the interview tool.
-It **never reveals** correct answers, does **not** show per-question PASS/FAIL,
-and only writes results to files for the interviewer/agency.
 
-What the candidate sees
------------------------
-- Header: "Exercise N - <short description>"
-- Buggy code snippet
-- Three options (A/B/C) in random order
-- A prompt to enter A/B/C
 
-What is NOT shown
------------------
-- No PASS/FAIL after each question
-- No "correct answer was ..." reveal
-- No code execution outputs
-
-Outputs
--------
-- **CSV**: per-question PASS/FAIL, totals, percentage
-- **Optional PDF** (with `--pdf`): agency summary with only "Ex NN: PASS/FAIL",
-  candidate name, timestamp, and overall score. No code or question text.
-
-Command line
-------------
-Usage:
-  python interview_debug_showcode_candidate.py [--all | --pick N N ...] [options]
-
-Required (choose one):
-  --all                        Run all exercises.
-  --pick 2 5 8                 Run only the listed exercises.
-
-Common options:
-  --shuffle                    Shuffle exercise order.
-  --limit N                    Limit number of exercises after shuffle/filter.
-  --time-limit SECS            Seconds allowed for entering a choice (0 = no limit).
-  --pause                      Pause after each exercise and clear the screen.
-
-Output options:
-  --name "Candidate Name"      Name used in files (prompted if omitted).
-  --output-dir PATH            Directory for results (default: current directory).
-  --results-file NAME.csv      Exact CSV filename (overrides generated one).
-  --no-display-results         Do NOT print final summary on screen (still saved to files).
-
-Agency PDF:
-  --pdf                        Also write a one-page PDF summary (no question details).
-  --pdf-file NAME.pdf          Explicit PDF filename (overrides generated one).
-
-Examples
---------
-  # Run all, pause between exercises, and save PDF + CSV with no visiual display at end of test
-  python interview_debug_showcode_candidate.py \
-      --all --shuffle --pause \
-      --name "Jane Doe" \
-      --output-dir results \
-      ----no-display-results \
-      --pdf
-
-  # Pick specific questions, custom CSV/PDF filenames, hide on-screen summary
-  python interview_debug_showcode_candidate.py \
-      --pick 2 5 8 10 \
-      --name "John Smith" \
-      --results-file agency_submission.csv \
-      --pdf --pdf-file agency_summary.pdf \
-      --no-display-results
-"""
