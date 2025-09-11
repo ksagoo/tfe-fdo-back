@@ -1,0 +1,640 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Python Debugging Interview — Candidate-Safe Runner (v6)
+=======================================================
+
+Purpose
+-------
+Run a live multiple-choice Python debugging interview over Zoom where the
+candidate sees only the buggy code and the three (or more) fix options.
+Their selection is recorded and validated **without revealing** correctness
+on screen. Results are saved for the agency/hiring team.
+
+Key features
+------------
+- Shows **buggy code** + **randomized** fix options (A/B/C…).
+- Accepts a single letter choice; optional **timed input** per exercise.
+- **No pass/fail on screen** (unless you enable summary printing).
+- Captures stdout/stderr of the chosen option while **silencing logging** so
+  nothing noisy appears on the candidate’s screen.
+- Writes two files by default:
+  1) **Summary CSV** – per exercise: choice + correct/incorrect + totals.
+  2) **Details CSV** – self-describing: includes the actual chosen code and,
+     if wrong, the correct code, plus short **code IDs** and a **label_map**
+     to reconstruct what A/B/C meant after randomization.
+- Optional **one-page PDF** summary (name + per-exercise PASS/FAIL + score).
+- Graceful **Ctrl+C** (no traceback); **clear screen** at startup and between
+  exercises (with `--pause`).
+
+Zero external dependencies
+--------------------------
+- Standard library only. The minimal PDF writer is built-in (Helvetica).
+
+Typical workflow
+----------------
+1) Start the session, enter candidate name, share terminal window over Zoom.
+2) For each exercise:
+   - Show buggy code and options.
+   - Candidate says “A/B/C”; you type it in.
+   - (Optionally) press Enter to move on if `--pause` is set; the screen clears.
+3) At the end, CSVs (and optional PDF) are saved; you can suppress on-screen
+   results with `--no-display-results`.
+
+Command-line flags
+------------------
+Mutually exclusive:
+  --all                     Run all exercises (1..14)
+  --pick N [N ...]          Run specific exercises, e.g. --pick 2 5 8
+
+Additional controls:
+  --shuffle                 Randomize exercise order
+  --limit N                 Limit number of exercises after shuffle/pick
+  --time-limit SEC          Time allowed to type a choice (0 = no timeout)
+  --pause                   Pause after each exercise; clear before next
+  --name "Full Name"        Candidate name (otherwise prompted)
+
+Outputs & filenames:
+  --output-dir DIR          Directory to save outputs (default: .)
+  --results-file FILE       Summary CSV filename (optional override)
+  --details-file FILE       Details CSV filename (optional override)
+  --pdf                     Also write agency PDF summary
+  --pdf-file FILE           PDF filename (optional override)
+  --no-display-results      Don’t print score/summary at the end
+
+Files produced (by default)
+---------------------------
+- results_<candidate>_<timestamp>.csv
+- results_details_<candidate>_<timestamp>.csv
+- summary_<candidate>_<timestamp>.pdf (only if --pdf)
+
+Summary CSV columns
+-------------------
+- exercise                 Integer exercise number
+- description              Short description of what the code should do
+- choice                   Letter chosen (A/B/C/… or TIMEOUT/INVALID)
+- correct                  TRUE/FALSE
+
+Details CSV columns (self-describing)
+-------------------------------------
+- exercise                 Integer exercise number
+- description              Short exercise description
+- chosen_label             Letter candidate chose (or TIMEOUT/INVALID)
+- chosen_ok                TRUE/FALSE
+- chosen_id                8-char SHA-256 of the chosen code (stable ID)
+- correct_label_if_wrong   Letter of the correct option (blank if correct)
+- correct_id_if_wrong      8-char SHA-256 of the correct code (blank if correct)
+- stdout                   Captured stdout from the chosen option
+- stderr                   Captured stderr from the chosen option
+- buggy_code               Buggy snippet shown to the candidate
+- chosen_code              Exact code block that ran (newline-squashed)
+- correct_code_if_wrong    Exact correct code block (only if wrong)
+- label_map                Mapping of labels to IDs and ok flags, e.g.
+                          "A:12ab34cd(ok) | B:9f00aa11 | C:77dd88ee"
+
+Exit codes
+----------
+- 0 on normal completion (files written).
+- 0 on Ctrl+C (partial results still written, message printed).
+
+Usage examples
+--------------
+# Full run, shuffled, pause between, save PDF + CSVs
+python interview_debug_showcode_candidate_v6.py \
+  --all --shuffle --pause --name "Jane Doe" --pdf
+
+# Specific questions, suppress on-screen summary, custom filenames and dir
+python interview_debug_showcode_candidate_v6.py \
+  --pick 2 5 8 10 \
+  --name "John Smith" \
+  --results-file results_john.csv \
+  --details-file results_details_john.csv \
+  --pdf --pdf-file summary_john.pdf \
+  --no-display-results \
+  --output-dir ./agency_exports
+
+Notes
+-----
+- Options are randomized per exercise; the **details CSV** preserves exactly
+  what “A/B/C” meant for that run via `label_map` and the `*_code` fields.
+- `--time-limit` enforces a per-exercise response window; TIMEOUT is recorded.
+- `--pause` is helpful in interviews to give review time and keep screens clean.
+"""
+import sys, os, io, time, random, argparse, csv, re, hashlib
+import logging
+from datetime import datetime
+
+# ----------------------------
+# Utilities
+# ----------------------------
+
+def _print_header(title):
+    print("\n" + "=" * 70)
+    print(title)
+    print("=" * 70)
+
+def timed_input(prompt: str, timeout: float):
+    # Cross-platform timed input. Returns (text, timed_out: bool).
+    if timeout is None or timeout <= 0:
+        try:
+            return input(prompt), False
+        except EOFError:
+            return "", False
+
+    if os.name == "nt":
+        try:
+            import msvcrt
+        except Exception:
+            try:
+                return input(prompt), False
+            except EOFError:
+                return "", False
+        sys.stdout.write(prompt); sys.stdout.flush()
+        start = time.time()
+        chars = []
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\r", "\n"):
+                    print("")
+                    return "".join(chars), False
+                elif ch == "\003":  # Ctrl+C
+                    raise KeyboardInterrupt
+                elif ch == "\b":
+                    if chars:
+                        chars.pop()
+                        sys.stdout.write("\b \b"); sys.stdout.flush()
+                else:
+                    chars.append(ch)
+                    sys.stdout.write(ch); sys.stdout.flush()
+            if time.time() - start >= timeout:
+                print("")
+                return "".join(chars), True
+            time.sleep(0.01)
+    else:
+        try:
+            import select
+        except Exception:
+            try:
+                return input(prompt), False
+            except EOFError:
+                return "", False
+        sys.stdout.write(prompt); sys.stdout.flush()
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+        if rlist:
+            try:
+                line = sys.stdin.readline()
+            except EOFError:
+                return "", False
+            return line.rstrip("\n"), False
+        else:
+            print("")
+            return "", True
+
+def sanitize_filename(s: str) -> str:
+    s = s.strip()
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"[^A-Za-z0-9._-]", "", s)
+    return s or "candidate"
+
+def _code_id(code: str) -> str:
+    """Short stable fingerprint for an option's code."""
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:8]
+
+# ----------------------------
+# Minimal PDF writer (no deps)
+# ----------------------------
+
+def write_summary_pdf(path, title, candidate_name, timestamp, lines, footer):
+    """Write a single-page, text-only PDF (Helvetica)."""
+    def pdf_escape(s):
+        return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+    width, height = 595, 842  # A4 points
+    margin_top = 56
+    leading = 16
+    y = height - margin_top
+
+    content = []
+    content.append(f"BT /F1 16 Tf 50 {y} Td ({pdf_escape(title)}) Tj ET"); y -= (leading + 6)
+    content.append(f"BT /F1 12 Tf 50 {y} Td (Candidate: {pdf_escape(candidate_name)}) Tj ET"); y -= leading
+    content.append(f"BT /F1 12 Tf 50 {y} Td (Timestamp: {pdf_escape(timestamp)}) Tj ET"); y -= (leading + 6)
+
+    for line in lines:
+        if y < 80: break
+        content.append(f"BT /F1 12 Tf 50 {y} Td ({pdf_escape(line)}) Tj ET")
+        y -= leading
+
+    y -= leading
+    for line in footer:
+        if y < 60: break
+        content.append(f"BT /F1 12 Tf 50 {y} Td ({pdf_escape(line)}) Tj ET")
+        y -= leading
+
+    content_stream = "\n".join(content).encode("latin-1", "replace")
+
+    out = bytearray(); out.extend(b"%PDF-1.4\n")
+    xref = [0]
+
+    def write_obj(obj_id, payload_bytes):
+        xref.append(len(out))
+        out.extend(f"{obj_id} 0 obj\n".encode("latin-1"))
+        out.extend(payload_bytes)
+        if not payload_bytes.endswith(b"\n"):
+            out.extend(b"\n")
+        out.extend(b"endobj\n")
+
+    write_obj(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+    write_obj(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+    resources = b"<< /Font << /F1 5 0 R >> >>"
+    write_obj(3, f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources {resources.decode('latin-1')} /Contents 4 0 R >>".encode("latin-1"))
+    stream = b"<< /Length " + str(len(content_stream)).encode("latin-1") + b" >>\nstream\n" + content_stream + b"\nendstream\n"
+    write_obj(4, stream)
+    write_obj(5, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+    xref_pos = len(out)
+    out.extend(b"xref\n")
+    out.extend(f"0 {len(xref)}\n".encode("latin-1"))
+    out.extend(b"0000000000 65535 f \n")
+    for off in xref[1:]:
+        out.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
+    out.extend(b"trailer\n")
+    out.extend(f"<< /Size {len(xref)} /Root 1 0 R >>\n".encode("latin-1"))
+    out.extend(b"startxref\n")
+    out.extend(f"{xref_pos}\n".encode("latin-1"))
+    out.extend(b"%%EOF")
+
+    with open(path, "wb") as f:
+        f.write(out)
+
+# ----------------------------
+# Exercises
+# ----------------------------
+
+EXERCISES = {
+    1: {"title": "Exercise 1", "desc": "Print a greeting",
+        "buggy": "def main():\nprint(\"Hello, Ada\")\n",
+        "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    print(\"Hello, Ada\")\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    print(\"Hello,  Ada\")\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    pass\n"},
+        ], "kind": "equals", "expected": "Hello, Ada\n"},
+    2: {"title": "Exercise 2", "desc": "Add two numbers",
+        "buggy": "def main():\n    def add_numbers(a, b):\n        return a + c\n    print(add_numbers(2, 3))\n",
+        "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    def add_numbers(a, b):\n        return a + b\n    print(add_numbers(2, 3))\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    c = 0\n    def add_numbers(a, b):\n        return a + c\n    print(add_numbers(2, 3))\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    def add_numbers(a, b):\n        return a\n    print(add_numbers(2, 3))\n"},
+        ], "kind": "equals", "expected": "5\n"},
+    3: {"title": "Exercise 3", "desc": "Add 5 to an age",
+        "buggy": "def main():\n    age = '25'\n    print(age + 5)\n",
+        "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    def add_five(age):\n        return int(age) + 5\n    print(add_five('25'))\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    def add_five(age):\n        return age + '5'\n    print(add_five('25'))\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    def add_five(age):\n        return age + 5\n    print(add_five('25'))\n"},
+        ], "kind": "equals", "expected": "30\n"},
+    4: {"title": "Exercise 4", "desc": "Check if a number is even",
+        "buggy": "def main():\n    def is_even(n):\n        return n % 2 == 1\n    print(is_even(2))\n",
+        "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    def is_even(n):\n        return n % 2 == 0\n    print(is_even(0), is_even(1), is_even(2))\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    def is_even(n):\n        return n % 2\n    print(is_even(0), is_even(1), is_even(2))\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    def is_even(n):\n        return n % 2 == 1\n    print(is_even(0), is_even(1), is_even(2))\n"},
+        ], "kind": "equals", "expected": "True False True\n"},
+    5: {"title": "Exercise 5", "desc": "Build a list of items",
+        "buggy": "def main():\n    def append_item(item, items=[]):\n        items.append(item)\n        return items\n    print(append_item('x'))\n    print(append_item('y'))\n",
+        "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    def append_item(item, items=None):\n        if items is None:\n            items = []\n        items.append(item)\n        return items\n    print(append_item('x'))\n    print(append_item('y'))\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    def append_item(item, items=[]):\n        items.append(item)\n        return items\n    print(append_item('x'))\n    print(append_item('y'))\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    def append_item(item, items=()):\n        items.append(item)\n        return items\n    try:\n        print(append_item('x'))\n    except Exception as e:\n        print(type(e).__name__)\n"},
+        ], "kind": "lines", "expected": ["['x']\n", "['y']\n"]},
+    6: {"title": "Exercise 6", "desc": "Read a config file",
+        "buggy": "def main():\n    def read_config(path):\n        f = open(path)\n        data = parse(f.read())\n        f.close()\n        return data\n    try:\n        read_config('config.txt')\n    except Exception as e:\n        print(type(e).__name__, e)\n",
+        "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    path = 'config_demo.txt'\n    with open(path, 'w', encoding='utf-8') as f:\n        f.write('value=42')\n    with open(path, 'r', encoding='utf-8') as f:\n        content = f.read()\n    print(content)\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    path = 'config_demo.txt'\n    f = open(path, 'w', encoding='utf-8')\n    f.write('value=42')\n    print('wrote')\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    raise RuntimeError('simulated')\n"},
+        ], "kind": "equals", "expected": "value=42\n"},
+    7: {"title": "Exercise 7", "desc": "Save rows to a CSV file",
+        "buggy": "def main():\n    import csv\n    def save_rows(path, rows):\n        f = open(path, 'w')\n        w = csv.writer(f)\n        for r in rows:\n            w.writerow(r)\n        f.close()\n    save_rows('out.csv', [['naive','cafe'],['a','b']])\n    print('wrote out.csv')\n",
+        "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    import csv\n    rows = [['naive','cafe'],['a','b']]\n    with open('out.csv','w',newline='',encoding='utf-8') as f:\n        w = csv.writer(f)\n        w.writerows(rows)\n    with open('out.csv','r',encoding='utf-8') as f:\n        data = f.read().strip().splitlines()\n    print(len(data), 'lines')\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    import csv\n    rows = [['naive','cafe'],['a','b']]\n    with open('out.csv','w') as f:\n        w = csv.writer(f)\n        w.writerows(rows)\n    print('done')\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    with open('out.csv','w') as f:\n        f.write(b'na\\xefve')\n"},
+        ], "kind": "equals", "expected": "2 lines\n"},
+    8: {"title": "Exercise 8", "desc": "Fetch multiple results asynchronously",
+        "buggy": "def main():\n    import asyncio, time\n    async def fetch(i):\n        time.sleep(0.1)\n        return i\n    async def run():\n        tasks = [fetch(i) for i in range(5)]\n        res = asyncio.gather(*tasks)\n        print('Finished?')\n        return res\n    try:\n        import asyncio\n        asyncio.run(run())\n    except Exception as e:\n        print(type(e).__name__, e)\n",
+        "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    import asyncio\n    async def fetch(i):\n        await asyncio.sleep(0.05)\n        return i\n    async def run():\n        tasks = [fetch(i) for i in range(5)]\n        res = await asyncio.gather(*tasks)\n        print('Results:', res)\n    asyncio.run(run())\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    import asyncio, time\n    async def fetch(i):\n        time.sleep(0.05)\n        return i\n    async def run():\n        tasks = [fetch(i) for i in range(5)]\n        asyncio.gather(*tasks)\n        print('Done')\n    asyncio.run(run())\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    def fetch(i):\n        return i\n    print(list(map(fetch, range(5))))\n"},
+        ], "kind": "equals", "expected": "Results: [0, 1, 2, 3, 4]\n"},
+    9: {"title": "Exercise 9", "desc": "Count safely across threads",
+        "buggy": "def main():\n    import threading\n    total = 0\n    def work(n):\n        nonlocal total\n        for _ in range(n):\n            total += 1\n    th = [threading.Thread(target=work, args=(100_000,)) for _ in range(4)]\n    [t.start() for t in th]; [t.join() for t in th]\n    print('Final:', total)\n",
+        "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    import threading\n    total = 0\n    lock = threading.Lock()\n    def work(n):\n        nonlocal total\n        for _ in range(n):\n            with lock:\n                total += 1\n    th = [threading.Thread(target=work, args=(100_000,)) for _ in range(4)]\n    [t.start() for t in th]; [t.join() for t in th]\n    print('Final:', total)\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    import threading\n    total = 0\n    def work(n):\n        nonlocal total\n        for _ in range(n):\n            total += 1\n    th = [threading.Thread(target=work, args=(100_000,)) for _ in range(4)]\n    [t.start() for t in th]; [t.join() for t in th]\n    print('Final:', total)\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    print('Final:', 0)\n"},
+        ], "kind": "equals", "expected": "Final: 400000\n"},
+    10: {"title": "Exercise 10", "desc": "Look up a user in a database",
+         "buggy": "def main():\n    import sqlite3\n    conn = sqlite3.connect(':memory:')\n    cur = conn.cursor()\n    cur.execute('CREATE TABLE users (id INT, name TEXT)')\n    cur.execute(\"INSERT INTO users VALUES (1, 'O'Malley')\")\n    username = \"O'Malley\"\n    q = f\"SELECT id, name FROM users WHERE name = '{username}'\"\n    try:\n        cur.execute(q)\n        print(cur.fetchone())\n    except Exception as e:\n        print(type(e).__name__, e)\n",
+         "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    import sqlite3\n    with sqlite3.connect(':memory:') as conn:\n        cur = conn.cursor()\n        cur.execute('CREATE TABLE users (id INT, name TEXT)')\n        cur.execute('INSERT INTO users VALUES (?, ?)', (1, \"O'Malley\"))\n        username = \"O'Malley\"\n        cur.execute('SELECT id, name FROM users WHERE name = ?', (username,))\n        print(cur.fetchone())\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    import sqlite3\n    with sqlite3.connect(':memory:') as conn:\n        cur = conn.cursor()\n        cur.execute('CREATE TABLE users (id INT, name TEXT)')\n        cur.execute(\"INSERT INTO users VALUES (1, 'Bob')\")\n        username = \"O'Malley\"\n        q = \"SELECT id, name FROM users WHERE name = '\" + username + \"'\"\n        cur.execute(q)\n        print(cur.fetchone())\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    print('None')\n"},
+         ], "kind": "equals", "expected": "(1, \"O'Malley\")\n"},
+    11: {"title": "Exercise 11", "desc": "Work with dates and times",
+         "buggy": "def main():\n    from datetime import datetime, timedelta\n    start = datetime.now()\n    end = start + timedelta(hours=24)\n    print('Naive')\n",
+         "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    from datetime import datetime, timedelta\n    try:\n        from zoneinfo import ZoneInfo\n        tz = ZoneInfo('Europe/London')\n        now = datetime.now(tz)\n        _ = now + timedelta(hours=24)\n        print('TZ-aware')\n    except Exception:\n        print('TZ-aware')\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    from datetime import datetime, timedelta\n    now = datetime.utcnow()\n    _ = now + timedelta(hours=24)\n    print('Naive')\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    print('Unknown')\n"},
+         ], "kind": "equals", "expected": "TZ-aware\n"},
+    12: {"title": "Exercise 12", "desc": "Process lines from text",
+         "buggy": "def main():\n    def process(lines_iter):\n        return [s.strip() for s in lines_iter if s.strip()]\n    data = iter(['a\\n', '\\n', 'b\\n'])\n    first = process(data)\n    second = process(data)\n    print('first:', first, 'second:', second)\n",
+         "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    def process(lines_iterable):\n        items = list(lines_iterable)\n        return [s.strip() for s in items if s.strip()]\n    src = ['a\\n', '\\n', 'b\\n']\n    first = process(src)\n    second = process(src)\n    print('first:', first, 'second:', second)\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    def process(lines_iter):\n        return [s.strip() for s in lines_iter if s.strip()]\n    src_iter = iter(['a\\n', '\\n', 'b\\n'])\n    first = process(src_iter)\n    second = process(src_iter)\n    print('first:', first, 'second:', second)\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    print('first:', [], 'second:', [])\n"},
+         ], "kind": "equals", "expected": "first: ['a', 'b'] second: ['a', 'b']\n"},
+    13: {"title": "Exercise 13", "desc": "Manage a shopping cart",
+         "buggy": "def main():\n    from dataclasses import dataclass\n    @dataclass\n    class Cart:\n        items: list = []\n    c1 = Cart(); c2 = Cart()\n    c1.items.append('x')\n    print('c2.items:', c2.items)\n",
+         "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    from dataclasses import dataclass, field\n    @dataclass\n    class Cart:\n        items: list = field(default_factory=list)\n    c1 = Cart(); c2 = Cart()\n    c1.items.append('x')\n    print('c2.items:', c2.items)\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    from dataclasses import dataclass\n    @dataclass\n    class Cart:\n        items: list = []\n    c1 = Cart(); c2 = Cart()\n    c1.items.append('x')\n    print('c2.items:', c2.items)\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    from dataclasses import dataclass, field\n    @dataclass\n    class Cart:\n        items: tuple = field(default_factory=tuple)\n    c1 = Cart(); c2 = Cart()\n    try:\n        c1.items += ('x',)\n        print('c2.items:', c2.items)\n    except Exception as e:\n        print(type(e).__name__)\n"},
+         ], "kind": "equals", "expected": "c2.items: []\n"},
+    14: {"title": "Exercise 14", "desc": "Log an error without exposing secrets",
+         "buggy": "def main():\n    import logging\n    API_KEY = 'sk_live_example_secret_value'\n    try:\n        raise TimeoutError('simulated')\n    except Exception as e:\n        logging.error('Charge failed for key=%s err=%r', API_KEY, e)\n        print('logged')\n",
+         "options": [
+            {"title": "Option A", "ok": True,  "code": "def main():\n    import logging\n    try:\n        raise TimeoutError('simulated')\n    except TimeoutError as e:\n        logging.error('Charge failed; err=%s', e)\n        print('logged')\n"},
+            {"title": "Option B", "ok": False, "code": "def main():\n    import logging\n    API_KEY = 'sk_live_example_secret_value'\n    try:\n        raise TimeoutError('simulated')\n    except Exception as e:\n        logging.error('Charge failed; api=%s; err=%s', API_KEY, e)\n        print('logged', API_KEY)\n"},
+            {"title": "Option C", "ok": False, "code": "def main():\n    print('silent')\n"},
+         ], "kind": "equals", "expected": "logged\n"},
+}
+
+# ----------------------------
+# Core logic
+# ----------------------------
+
+def run_single(ex_num: int, time_limit: float = 0.0, args_pause: bool = False):
+    spec = EXERCISES[ex_num]
+    _print_header(f"{spec['title']} - {spec.get('desc','Code')}")
+    print(spec['buggy'])
+
+    _print_header(f"{spec['title']} - Options")
+    options = spec['options'][:]
+    random.shuffle(options)
+
+    labels = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")[:len(options)]
+    label_map = dict(zip(labels, options))
+
+    # Build a compact label->id map and find correct label
+    parts = []
+    correct_label = None
+    for label, opt in label_map.items():
+        cid = _code_id(opt["code"])
+        mark = "(ok)" if opt.get("ok") else ""
+        parts.append(f"{label}:{cid}{mark}")
+        if opt.get("ok"):
+            correct_label = label
+    label_map_summary = " | ".join(parts)
+
+    for label, opt in label_map.items():
+        print(f"{label})\n{opt['code']}")
+
+    choice, timed_out = timed_input(f"Enter choice ({'/'.join(labels)}): ", time_limit)
+
+    chosen_label = "TIMEOUT" if timed_out else "INVALID"
+    ok = False
+    out_text = ""
+    err_text = ""
+    chosen_code = ""
+    correct_code_if_wrong = ""
+
+    if not timed_out and choice.upper() in label_map:
+        chosen_label = choice.upper()
+        chosen = label_map[chosen_label]
+        chosen_code = chosen["code"]
+
+        ns = {}
+        try:
+            exec(chosen["code"], ns, ns)
+            fn = ns.get("main", lambda: None)
+            if not callable(fn):
+                fn = lambda: None
+
+            buf_out = io.StringIO()
+            buf_err = io.StringIO()
+            old_stdout, old_stderr = sys.stdout, sys.stderr
+            old_disable = logging.root.manager.disable
+            try:
+                sys.stdout, sys.stderr = buf_out, buf_err
+                logging.disable(logging.CRITICAL)  # silence logs
+                fn()
+            finally:
+                logging.disable(old_disable)
+                sys.stdout, sys.stderr = old_stdout, old_stderr
+
+            out = buf_out.getvalue()
+            out_text = out
+            err_text = buf_err.getvalue()
+        except Exception:
+            ok = False
+        else:
+            if spec['kind'] == 'equals':
+                ok = (out == spec['expected'])
+            elif spec['kind'] == 'lines':
+                ok = (out.splitlines(keepends=True) == spec['expected'])
+            else:
+                ok = False
+
+    # If wrong and we know the correct label, capture the correct code too
+    if not ok and correct_label and correct_label in label_map:
+        correct_code_if_wrong = label_map[correct_label]["code"]
+
+    if args_pause:
+        input("Press Enter to continue...")
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+    return {
+        "chosen_label": chosen_label,
+        "ok": ok,
+        "stdout": out_text,
+        "stderr": err_text,
+        "correct_label": correct_label or "",
+        "chosen_code": chosen_code,
+        "correct_code_if_wrong": correct_code_if_wrong,
+        "label_map": label_map_summary,
+        "buggy_code": spec.get("buggy", ""),
+    }
+
+def run_session(order, time_limit=0.0, args_pause=False, output_dir=".", results_file=None,
+                details_file=None, display_results=True, candidate_name="candidate",
+                pdf=False, pdf_file=None):
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    file_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = sanitize_filename(candidate_name)
+
+    # Summary CSV path
+    csv_path = os.path.join(output_dir, results_file) if results_file \
+               else os.path.join(output_dir, f"results_{safe_name}_{file_ts}.csv")
+
+    # Details CSV path
+    details_path = os.path.join(output_dir, details_file) if details_file \
+                   else os.path.join(output_dir, f"results_details_{safe_name}_{file_ts}.csv")
+
+    total = 0
+    rows = []
+    detail_rows = []
+    try:
+        for ex in order:
+            try:
+                res = run_single(ex, time_limit=time_limit, args_pause=args_pause)
+            except KeyboardInterrupt:
+                print("\n[Session cancelled by interviewer]")
+                break
+
+            desc = EXERCISES[ex].get('desc','')
+            rows.append((ex, desc, res["chosen_label"], res["ok"]))
+            if res["ok"]:
+                total += 1
+
+            def squash(s: str) -> str:
+                return s.replace("\r\n", "\n").replace("\r", "\n")
+
+            detail_rows.append({
+                "exercise": ex,
+                "description": desc,
+                "chosen_label": res["chosen_label"],
+                "chosen_ok": str(res["ok"]),
+                "chosen_id": _code_id(res["chosen_code"]) if res["chosen_code"] else "",
+                "correct_label_if_wrong": (res["correct_label"] if not res["ok"] else ""),
+                "correct_id_if_wrong": (_code_id(res["correct_code_if_wrong"]) if (not res["ok"] and res["correct_code_if_wrong"]) else ""),
+                "stdout": squash(res["stdout"]),
+                "stderr": squash(res["stderr"]),
+                "buggy_code": squash(res["buggy_code"]),
+                "chosen_code": squash(res["chosen_code"]),
+                "correct_code_if_wrong": squash(res["correct_code_if_wrong"]) if not res["ok"] else "",
+                "label_map": res["label_map"],
+            })
+    except KeyboardInterrupt:
+        print("\n[Session cancelled by interviewer]")
+
+    # Write summary CSV
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["candidate", safe_name])
+        w.writerow(["timestamp", timestamp])
+        w.writerow([])
+        w.writerow(["exercise", "description", "choice", "correct"])
+        for ex, desc, choice, ok in rows:
+            w.writerow([ex, desc, choice, str(ok)])
+        w.writerow([])
+        w.writerow(["TOTAL_CORRECT", total])
+        w.writerow(["TOTAL_QUESTIONS", len(rows)])
+        pct = (total / len(rows) * 100.0) if rows else 0.0
+        w.writerow(["PERCENT", f"{pct:.0f}%"])
+
+    # Write details CSV
+    with open(details_path, "w", newline="", encoding="utf-8") as f:
+        fieldnames = ["exercise","description","chosen_label","chosen_ok","chosen_id",
+                      "correct_label_if_wrong","correct_id_if_wrong","stdout","stderr",
+                      "buggy_code","chosen_code","correct_code_if_wrong","label_map"]
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for row in detail_rows:
+            w.writerow(row)
+
+    # Optional PDF
+    pdf_path = None
+    if pdf:
+        pdf_path = os.path.join(output_dir, pdf_file) if pdf_file \
+                   else os.path.join(output_dir, f"summary_{safe_name}_{file_ts}.pdf")
+        summary_lines = [f"Ex {ex:>2}: {'PASS' if ok else 'FAIL'}" for (ex, _, _, ok) in rows]
+        footer = ["-" * 30, f"Score: {total} / {len(rows)} ({pct:.0f}%)"]
+        write_summary_pdf(pdf_path, "Python Debugging Interview - Summary", candidate_name, timestamp, summary_lines, footer)
+
+    if display_results:
+        _print_header("Session Summary")
+        print(f"Candidate: {candidate_name}")
+        print(f"Saved CSV: {csv_path}")
+        print(f"Saved details: {details_path}")
+        if pdf and pdf_path:
+            print(f"Saved PDF: {pdf_path}")
+        print(f"Score: {total} / {len(rows)} ({pct:.0f}%)")
+    else:
+        print(f"Saved CSV: {csv_path}")
+        print(f"Saved details: {details_path}")
+        if pdf and pdf_path:
+            print(f"Saved PDF: {pdf_path}")
+
+    return csv_path, pdf_path
+
+# ----------------------------
+# CLI
+# ----------------------------
+
+def main():
+    p = argparse.ArgumentParser(description="Python Debugging Interview - Candidate-Safe Runner")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--all", action="store_true", help="run all exercises (1..14)")
+    g.add_argument("--pick", nargs="+", type=int, help="specific exercises, e.g. --pick 3 7 10")
+    p.add_argument("--shuffle", action="store_true", help="shuffle exercise order")
+    p.add_argument("--limit", type=int, default=0, help="limit number of exercises (use with --all/--shuffle)")
+    p.add_argument("--time-limit", type=float, default=0.0, help="seconds allowed for entering a choice (0 disables timeout)")
+    p.add_argument("--pause", action="store_true", help="pause after each exercise and clear screen before next")
+    p.add_argument("--output-dir", type=str, default=".", help="directory to save result files")
+    p.add_argument("--results-file", type=str, default=None, help="explicit summary CSV filename")
+    p.add_argument("--details-file", type=str, default=None, help="explicit details CSV filename")
+    p.add_argument("--no-display-results", action="store_true", help="do not print final results on screen (still saved to files)")
+    p.add_argument("--name", type=str, default=None, help="candidate name (if omitted, will be prompted)")
+    p.add_argument("--pdf", action="store_true", help="also write an agency PDF summary (no question details)")
+    p.add_argument("--pdf-file", type=str, default=None, help="explicit PDF filename (e.g. summary.pdf)")
+
+    args = p.parse_args()
+
+    candidate_name = args.name if args.name else (input("Candidate name: ").strip() or "candidate")
+
+    # Build exercise order
+    if args.all:
+        order = list(EXERCISES.keys())
+    elif args.pick:
+        order = [n for n in args.pick if n in EXERCISES]
+        if not order:
+            print("No valid exercises in --pick."); return
+    else:
+        print("Available exercises:", ", ".join(str(k) for k in sorted(EXERCISES.keys())))
+        while True:
+            s = input("Enter exercise number: ").strip()
+            if s.isdigit() and int(s) in EXERCISES:
+                order = [int(s)]
+                break
+            print("Please enter a valid number.")
+
+    if args.shuffle:
+        random.shuffle(order)
+    if args.limit and args.limit < len(order):
+        order = order[:args.limit]
+
+    # Clear screen before showing the first exercise
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+    try:
+        run_session(
+            order,
+            time_limit=args.time_limit,
+            args_pause=args.pause,
+            output_dir=args.output_dir,
+            results_file=args.results_file,
+            details_file=args.details_file,
+            display_results=not args.no-display_results,
+            candidate_name=candidate_name,
+            pdf=args.pdf,
+            pdf_file=args.pdf_file,
+        )
+    except KeyboardInterrupt:
+        print("\n[Session cancelled] Results (so far) have been written.")
+
+if __name__ == "__main__":
+    main()
