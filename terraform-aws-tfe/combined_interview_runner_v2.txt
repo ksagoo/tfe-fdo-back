@@ -1,0 +1,955 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Combined Debugging Interview — Python + CI/CD (v1)
+==================================================
+
+What this does
+--------------
+One runner for BOTH interview sections:
+  • Python debugging (buggy snippet + randomized fix options; validates by output)
+  • CI/CD (GitLab/GitHub/Jenkins) snippet troubleshooting (metadata-driven)
+
+Candidate sees buggy code + options only; no pass/fail shown on screen unless you
+choose to print a final summary. Results are saved to CSVs (summary + details)
+and an optional one-page PDF (no question details).
+
+Sections & filtering
+--------------------
+--section python|cicd|both   (default: both)
+--tool gitlab|github|jenkins (CI/CD filter; can pass multiple)
+--all                        Select all in chosen sections
+--pick-python N [N ...]      Choose specific Python items
+--pick-cicd N [N ...]        Choose specific CI/CD items
+--shuffle                    Shuffle the final combined order
+--limit N                    Cap total number of questions after selection
+
+Other flags (same as your other tools)
+--------------------------------------
+--time-limit SEC             Timed input per exercise (0 = off)
+--pause                      Pause & clear screen between exercises
+--output-dir DIR             Where to write files (default: .)
+--results-file FILE          Summary CSV filename (optional)
+--details-file FILE          Details CSV filename (optional)
+--pdf                        Also write one-page summary PDF
+--pdf-file FILE              Explicit summary PDF filename
+--name "Full Name"           Candidate name (prompted if omitted)
+--no-display-results         Suppress end-of-run printout
+
+Dependencies
+------------
+Pure Python 3 stdlib. No external packages required.
+"""
+
+import sys, os, io, time, random, argparse, csv, re, logging
+from datetime import datetime
+
+# ==========
+# Utilities
+# ==========
+def _print_header(title):
+    print("\n" + "="*70)
+    print(title)
+    print("="*70)
+
+def timed_input(prompt, timeout=0.0):
+    if not timeout or timeout <= 0:
+        try:
+            return input(prompt), False
+        except EOFError:
+            return "", False
+    if os.name == "nt":
+        import msvcrt, time as _t
+        sys.stdout.write(prompt); sys.stdout.flush()
+        chars, t0 = [], _t.time()
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\r","\n"):
+                    print(); return "".join(chars), False
+                if ch == "\003": raise KeyboardInterrupt
+                if ch == "\b":
+                    if chars:
+                        chars.pop(); sys.stdout.write("\b \b"); sys.stdout.flush()
+                else:
+                    chars.append(ch); sys.stdout.write(ch); sys.stdout.flush()
+            if _t.time()-t0 >= timeout:
+                print(); return "".join(chars), True
+            _t.sleep(0.01)
+    else:
+        import select
+        sys.stdout.write(prompt); sys.stdout.flush()
+        r,_,_ = select.select([sys.stdin],[],[],timeout)
+        if r:
+            try:
+                return sys.stdin.readline().rstrip("\n"), False
+            except EOFError:
+                return "", False
+        print(); return "", True
+
+def sanitize_filename(s):
+    s = re.sub(r"\s+","_", s.strip())
+    return re.sub(r"[^A-Za-z0-9._-]","", s) or "candidate"
+
+# ==========================
+# Minimal one-page PDF (txt)
+# ==========================
+def _esc(s): return s.replace("\\","\\\\").replace("(","\\(").replace(")","\\)")
+def write_summary_pdf(path, title, name, ts, lines, footer):
+    width, height = 595, 842; y = height-56; leading=16
+    out = bytearray(b"%PDF-1.4\n"); xref=[0]
+    lines_out=[]
+    def add(sz, text):
+        nonlocal y
+        lines_out.append(f"BT /F1 {sz} Tf 50 {y} Td ({_esc(text)}) Tj ET"); y -= leading
+    add(16, title); y -= 6
+    add(12, f"Candidate: {name}")
+    add(12, f"Timestamp: {ts}"); y -= 6
+    for ln in lines:
+        if y < 80: break
+        add(12, ln)
+    y -= leading
+    for ln in footer:
+        if y < 60: break
+        add(12, ln)
+    stream = "\n".join(lines_out).encode("latin-1","replace")
+    def obj(payload):
+        xref.append(len(out))
+        if not payload.endswith(b"\n"): payload += b"\n"
+        out.extend(payload); out.extend(b"endobj\n")
+    obj(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>")
+    obj(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+    obj(f"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".encode())
+    obj(b"4 0 obj\n<< /Length "+str(len(stream)).encode()+b" >>\nstream\n"+stream+b"\nendstream")
+    obj(b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    xref_pos=len(out)
+    out.extend(b"xref\n"); out.extend(f"0 {len(xref)}\n".encode())
+    out.extend(b"0000000000 65535 f \n")
+    for off in xref[1:]:
+        out.extend(f"{off:010d} 00000 n \n".encode())
+    out.extend(b"trailer\n"); out.extend(f"<< /Size {len(xref)} /Root 1 0 R >>\n".encode())
+    out.extend(b"startxref\n"); out.extend(f"{xref_pos}\n".encode()); out.extend(b"%%EOF")
+    with open(path,"wb") as f: f.write(out)
+
+# =============================
+# Python Exercise Bank (14 full)
+# =============================
+PY_EX = {
+  1: {"title":"Python — Snippet 1", "desc":"Fix indentation so greeting prints",
+      "buggy": "def main():\nprint('Hello, Ada')\n",
+      "options": [
+          {"ok":True,  "code": "def main():\n    print('Hello, Ada')\n"},
+          {"ok":False, "code": "def main():\n\tprint('Hello,  Ada')\n"},
+          {"ok":False, "code": "def main():\n    pass\n"},
+      ],
+      "kind":"equals", "expected":"Hello, Ada\n"},
+
+  2: {"title":"Python — Snippet 2", "desc":"Fix NameError and add correctly",
+      "buggy":"def main():\n    def add_numbers(a,b):\n        return a + c\n    print(add_numbers(2,3))\n",
+      "options": [
+          {"ok":True,  "code":"def main():\n    def add_numbers(a,b):\n        return a + b\n    print(add_numbers(2,3))\n"},
+          {"ok":False, "code":"def main():\n    c=0\n    def add_numbers(a,b):\n        return a + c\n    print(add_numbers(2,3))\n"},
+          {"ok":False, "code":"def main():\n    def add_numbers(a,b):\n        return a\n    print(add_numbers(2,3))\n"},
+      ],
+      "kind":"equals", "expected":"5\n"},
+
+  3: {"title":"Python — Snippet 3", "desc":"Avoid mutable default argument",
+      "buggy":"def main():\n    def add(x, arr=[]):\n        arr.append(x)\n        return arr\n    print(add(1))\n    print(add(2))\n",
+      "options":[
+          {"ok":True, "code":"def main():\n    def add(x, arr=None):\n        arr = [] if arr is None else arr\n        arr.append(x)\n        return arr\n    print(add(1))\n    print(add(2))\n"},
+          {"ok":False,"code":"def main():\n    def add(x, arr=[]):\n        arr.append(x)\n        return arr\n    print(add(1))\n    print(add(2))\n"},
+          {"ok":False,"code":"def main():\n    def add(x, arr=()):\n        arr.append(x)\n    print('done')\n"},
+      ],
+      "kind":"lines", "expected":["[1]\n","[2]\n"]},
+
+  4: {"title":"Python — Snippet 4", "desc":"Fix off-by-one in summation 1..5",
+      "buggy":"def main():\n    s=sum(range(1,5))\n    print(s)\n",
+      "options":[
+          {"ok":True, "code":"def main():\n    s=sum(range(1,6))\n    print(s)\n"},
+          {"ok":False,"code":"def main():\n    s=sum(range(0,5))\n    print(s)\n"},
+          {"ok":False,"code":"def main():\n    s=sum(range(1,5,2))\n    print(s)\n"},
+      ],
+      "kind":"equals", "expected":"15\n"},
+
+  5: {"title":"Python — Snippet 5", "desc":"Use f-string to format name",
+      "buggy":"def main():\n    name='Bob'\n    print('Hello, {name}')\n",
+      "options":[
+          {"ok":True, "code":"def main():\n    name='Bob'\n    print(f'Hello, {name}')\n"},
+          {"ok":False,"code":"def main():\n    name='Bob'\n    print('Hello, ' + {name})\n"},
+          {"ok":False,"code":"def main():\n    name='Bob'\n    print('Hello, ' + name + '!')\n"},
+      ],
+      "kind":"equals", "expected":"Hello, Bob\n"},
+
+  6: {"title":"Python — Snippet 6", "desc":"Join numbers properly into CSV",
+      "buggy":"def main():\n    nums=[1,2,3]\n    print(','.join(nums))\n",
+      "options":[
+          {"ok":True, "code":"def main():\n    nums=[1,2,3]\n    print(','.join(str(n) for n in nums))\n"},
+          {"ok":False,"code":"def main():\n    nums=[1,2,3]\n    print(','.join(map(int, nums)))\n"},
+          {"ok":False,"code":"def main():\n    nums=[1,2,3]\n    print(','.join([1,2,3]))\n"},
+      ],
+      "kind":"equals", "expected":"1,2,3\n"},
+
+  7: {"title":"Python — Snippet 7", "desc":"Sort tuples by second element",
+      "buggy":"def main():\n    pairs=[('b',2),('a',1),('c',3)]\n    pairs.sort()\n    for p in pairs:\n        print(p)\n",
+      "options":[
+          {"ok":True, "code":"def main():\n    pairs=[('b',2),('a',1),('c',3)]\n    pairs.sort(key=lambda x: x[1])\n    for p in pairs:\n        print(p)\n"},
+          {"ok":False,"code":"def main():\n    pairs=[('b',2),('a',1),('c',3)]\n    pairs.sort(key=lambda x: x[0])\n    for p in pairs:\n        print(p)\n"},
+          {"ok":False,"code":"def main():\n    pairs=[('b',2),('a',1),('c',3)]\n    for p in sorted(pairs):\n        print(p)\n"},
+      ],
+      "kind":"lines", "expected":["('a', 1)\n","('b', 2)\n","('c', 3)\n"]},
+
+  8: {"title":"Python — Snippet 8", "desc":"Count letters without mutation issues",
+      "buggy":"def main():\n    s='aba'\n    d={}\n    for ch in s:\n        d[ch]=d.get(ch,[])+[1]\n    print(d)\n",
+      "options":[
+          {"ok":True, "code":"def main():\n    s='aba'\n    d={}\n    for ch in s:\n        d[ch]=d.get(ch,0)+1\n    print(dict(sorted(d.items())))\n"},
+          {"ok":False,"code":"def main():\n    s='aba'\n    d={}\n    for ch in s:\n        d[ch].append(1)\n    print(d)\n"},
+          {"ok":False,"code":"def main():\n    s='aba'\n    d={}\n    for ch in s:\n        d[ch]=1\n    print(d)\n"},
+      ],
+      "kind":"equals", "expected":"{'a': 2, 'b': 1}\n"},
+
+  9: {"title":"Python — Snippet 9", "desc":"Handle ZeroDivisionError and print inf",
+      "buggy":"def main():\n    def divide(a,b):\n        return a/b\n    print(divide(1,0))\n",
+      "options":[
+          {"ok":True, "code":"def main():\n    def divide(a,b):\n        try:\n            return a/b\n        except ZeroDivisionError:\n            return float('inf')\n    print(divide(1,0))\n"},
+          {"ok":False,"code":"def main():\n    def divide(a,b):\n        if b==0: raise ValueError('bad')\n        return a/b\n    print(divide(1,0))\n"},
+          {"ok":False,"code":"def main():\n    def divide(a,b):\n        try:\n            a/b\n        except ZeroDivisionError:\n            return 0\n    print(divide(1,0))\n"},
+      ],
+      "kind":"equals", "expected":"inf\n"},
+
+ 10: {"title":"Python — Snippet 10", "desc":"Use generator expression for sum of squares",
+      "buggy":"def main():\n    squares=[i*i for i in range(6)]\n    print(sum(squares[:5]))\n",
+      "options":[
+          {"ok":True, "code":"def main():\n    print(sum(i*i for i in range(5)))\n"},
+          {"ok":False,"code":"def main():\n    print(sum([i*i for i in range(5)]))\n"},
+          {"ok":False,"code":"def main():\n    print(sum(i*i for i in range(6)))\n"},
+      ],
+      "kind":"equals", "expected":"30\n"},
+
+ 11: {"title":"Python — Snippet 11", "desc":"Reverse a string correctly",
+      "buggy":"def main():\n    s='abc'\n    print(reversed(s))\n",
+      "options":[
+          {"ok":True, "code":"def main():\n    s='abc'\n    print(s[::-1])\n"},
+          {"ok":False,"code":"def main():\n    s='abc'\n    print(list(reversed(s)))\n"},
+          {"ok":False,"code":"def main():\n    s='abc'\n    print(''.join(reversed))\n"},
+      ],
+      "kind":"equals", "expected":"cba\n"},
+
+ 12: {"title":"Python — Snippet 12", "desc":"Properly await an async function",
+      "buggy":"async def do_work():\n    print('done')\n\ndef main():\n    do_work()\n",
+      "options":[
+          {"ok":True, "code":"import asyncio\nasync def do_work():\n    print('done')\n\ndef main():\n    asyncio.run(do_work())\n"},
+          {"ok":False,"code":"async def do_work():\n    print('done')\n\ndef main():\n    await do_work()\n"},
+          {"ok":False,"code":"def do_work():\n    print('done')\n\ndef main():\n    asyncio.run(do_work())\n"},
+      ],
+      "kind":"equals", "expected":"done\n"},
+
+ 13: {"title":"Python — Snippet 13", "desc":"Parse JSON from string",
+      "buggy":"def main():\n    data='{\"value\": 42}'\n    print(json.loads(data)['Value'])\n",
+      "options":[
+          {"ok":True, "code":"import json\n\ndef main():\n    data='{\"value\": 42}'\n    obj=json.loads(data)\n    print(obj['value'])\n"},
+          {"ok":False,"code":"def main():\n    data='{\"value\": 42}'\n    print(eval(data)['value'])\n"},
+          {"ok":False,"code":"import json\n\ndef main():\n    data='{\"value\": 42}'\n    obj=json.loads(data)\n    print(obj.get('value', '42'))\n"},
+      ],
+      "kind":"equals", "expected":"42\n"},
+
+ 14: {"title":"Python — Snippet 14", "desc":"Use enumerate with correct start index",
+      "buggy":"def main():\n    items=['a','b']\n    for i,x in enumerate(items):\n        print(f\"{i}:{x}\")\n",
+      "options":[
+          {"ok":True, "code":"def main():\n    items=['a','b']\n    for i,x in enumerate(items, start=1):\n        print(f\"{i}:{x}\")\n"},
+          {"ok":False,"code":"def main():\n    items=['a','b']\n    for i,x in enumerate(items, start=0):\n        print(f\"{i+1}:{x}\")\n"},
+          {"ok":False,"code":"def main():\n    items=['a','b']\n    for i,x in enumerate(items, start=2):\n        print(f\"{i-1}:{x}\")\n"},
+      ],
+      "kind":"lines", "expected":["1:a\n","2:b\n"]},
+}
+
+# Short interviewer explanations per Python exercise (used in details CSV)
+PY_EXPLANATIONS = {
+    1: "Indentation must be corrected",
+    2: "Fix NameError by using correct variable",
+    3: "Avoid mutable default arguments",
+    4: "Correct off-by-one in range()",
+    5: "Use f-string formatting",
+    6: "Convert list items to str before join()",
+    7: "Sort tuples with a key function (value not key)",
+    8: "Use dict.get() to count occurrences",
+    9: "Catch ZeroDivisionError and handle gracefully",
+    10: "Use generator expression for sum of squares",
+    11: "Reverse string with slicing, not reversed() object",
+    12: "Properly await coroutine (asyncio.run())",
+    13: "Use json.loads() instead of eval",
+    14: "Use enumerate(..., start=1) for 1-based labels",
+}
+
+# ==================================
+# CI/CD Exercise Bank (full)
+# ==================================
+EX_CICD = {
+# ---------- GitLab CI ----------
+1: {"platform":"gitlab",
+    "title":"GitLab CI – Snippet 1", "desc":"Review and choose the correct version.",
+    "buggy": """# .gitlab-ci.yml
+build-job:
+  script:
+    - echo "Running tests"
+""",
+    "options":[
+        {"ok":True,"code":"""build-job:
+  stage: build
+  script:
+    - echo "Running tests"
+""","explanation":"Jobs typically declare a stage (or rely on defaults)."},
+        {"ok":False,"code":"""build-job:
+  only: [ master ]
+  script:
+    - echo "Running tests"
+"""},
+        {"ok":False,"code":"""stage: build
+script:
+  - echo "Running tests"
+"""},
+    ]},
+
+2: {"platform":"gitlab",
+    "title":"GitLab CI – Snippet 2", "desc":"Review and choose the correct version.",
+    "buggy": """# .gitlab-ci.yml
+test-job:
+  stage: test
+  script: echo "Hello"
+""",
+    "options":[
+        {"ok":True,"code":"""test-job:
+  stage: test
+  script:
+    - echo "Hello"
+""","explanation":"`script` must be a YAML sequence (dashed list)."},
+        {"ok":False,"code":"""test-job:
+  stage: test
+  script:
+    echo "Hello"
+"""},
+        {"ok":False,"code":"""test-job:
+  stage: test
+  run:
+    - echo "Hello"
+"""},
+    ]},
+
+3: {"platform":"gitlab",
+    "title":"GitLab CI – Snippet 3", "desc":"Review and choose the correct version.",
+    "buggy": """# .gitlab-ci.yml
+image-job:
+  image: ubuntu:latest:extra
+  script:
+    - echo "Using image"
+""",
+    "options":[
+        {"ok":True,"code":"""image-job:
+  image: ubuntu:latest
+  script:
+    - echo "Using image"
+""","explanation":"Docker tag must be `name:tag` (single colon)."},
+        {"ok":False,"code":"""image-job:
+  image: latest/ubuntu
+  script:
+    - echo "Using image"
+"""},
+        {"ok":False,"code":"""image-job:
+  image:
+    name: ubuntu
+    tag: latest:foo
+  script:
+    - echo "Using image"
+"""},
+    ]},
+
+4: {"platform":"gitlab",
+    "title":"GitLab CI – Snippet 4", "desc":"Review and choose the correct version.",
+    "buggy": """# .gitlab-ci.yml
+job-with-var:
+  stage: build
+  script:
+    - echo VAR
+""",
+    "options":[
+        {"ok":True,"code":"""job-with-var:
+  stage: build
+  script:
+    - echo $VAR
+""","explanation":"Use shell variable expansion `$VAR` (or `${VAR}`)."},
+        {"ok":False,"code":"""job-with-var:
+  stage: build
+  script:
+    - echo ${VAR}
+    - set -u
+"""},
+        {"ok":False,"code":"""job-with-var:
+  stage: build
+  script:
+    - echo "$(VAR)"
+"""},
+    ]},
+
+# ---------- GitHub Actions ----------
+5: {"platform":"github",
+    "title":"GitHub Actions – Snippet 5", "desc":"Review and choose the correct version.",
+    "buggy": """# .github/workflows/main.yml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Test"
+onn:
+  push:
+    branches: [ main ]
+""",
+    "options":[
+        {"ok":True,"code":"""on:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Test"
+""","explanation":"Top-level trigger key is `on`, not `onn`. Keys must be correct."},
+        {"ok":False,"code":"""trigger:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Test"
+"""},
+        {"ok":False,"code":"""on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Test"
+"""},
+    ]},
+
+6: {"platform":"github",
+    "title":"GitHub Actions – Snippet 6", "desc":"Review and choose the correct version.",
+    "buggy": """# .github/workflows/main.yml
+on: [ push ]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    - run: echo "Hello"
+""",
+    "options":[
+        {"ok":True,"code":"""on: [ push ]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Hello"
+""","explanation":"Each job needs a `steps:` sequence; list items belong under it."},
+        {"ok":False,"code":"""on: [ push ]
+jobs:
+  test:
+    steps:
+      - run: echo "Hello"
+"""},
+        {"ok":False,"code":"""on: [ push ]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    scripts:
+      - run: echo "Hello"
+"""},
+    ]},
+
+7: {"platform":"github",
+    "title":"GitHub Actions – Snippet 7", "desc":"Review and choose the correct version.",
+    "buggy": """# .github/workflows/main.yml
+on: [ push ]
+jobs:
+  matrix-job:
+    runs-on: ubuntu-latest
+  strategy:
+    matrix:
+      node-version: [12, 14, 16]
+    steps:
+      - run: node --version
+""",
+    "options":[
+        {"ok":True,"code":"""on: [ push ]
+jobs:
+  matrix-job:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [12, 14, 16]
+    steps:
+      - run: node --version
+""","explanation":"`strategy` must be inside the job (same level as `runs-on`/`steps`)."},
+        {"ok":False,"code":"""on: [ push ]
+strategy:
+  matrix:
+    node-version: [12, 14, 16]
+jobs:
+  matrix-job:
+    runs-on: ubuntu-latest
+    steps:
+      - run: node --version
+"""},
+        {"ok":False,"code":"""on: [ push ]
+jobs:
+  matrix-job:
+    runs-on: ubuntu-latest
+    steps:
+      - strategy:
+          matrix:
+            node-version: [12, 14, 16]
+      - run: node --version
+"""},
+    ]},
+
+8: {"platform":"github",
+    "title":"GitHub Actions – Snippet 8", "desc":"Review and choose the correct version.",
+    "buggy": """# .github/workflows/main.yml
+on: [ push, workflow_dispatch ]
+jobs:
+  conditional:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Conditional"
+        if: github.event_name == push
+""",
+    "options":[
+        {"ok":True,"code":"""on: [ push, workflow_dispatch ]
+jobs:
+  conditional:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Conditional"
+        if: github.event_name == 'push'
+""","explanation":"Compare against a quoted string in expressions: `'push'`."},
+        {"ok":False,"code":"""on: [ push, workflow_dispatch ]
+jobs:
+  conditional:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Conditional"
+        if: github.event == 'push'
+"""},
+        {"ok":False,"code":"""on: [ push, workflow_dispatch ]
+jobs:
+  conditional:
+    runs-on: ubuntu-latest
+    steps:
+      - if: github.event_name == 'push'
+        run: echo "Conditional"
+        when: true
+"""},
+    ]},
+
+# ---------- Jenkins ----------
+9: {"platform":"jenkins",
+    "title":"Jenkins – Snippet 9", "desc":"Review and choose the correct version.",
+    "buggy": """// Jenkinsfile
+pipeline {
+  agent any
+}
+""",
+    "options":[
+        {"ok":True,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Build') {
+      steps { echo 'Build' }
+    }
+  }
+}
+""","explanation":"Declarative pipelines require a `stages { ... }` block with at least one stage."},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  steps { echo 'Build' }
+}
+"""},
+        {"ok":False,"code":"""pipeline {
+  agent none
+}
+"""},
+    ]},
+
+10: {"platform":"jenkins",
+     "title":"Jenkins – Snippet 10", "desc":"Review and choose the correct version.",
+     "buggy": """pipeline {
+  agent any
+  stags {
+    stage('Build') { steps { echo 'Building...' } }
+  }
+}
+""",
+     "options":[
+        {"ok":True,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Build') { steps { echo 'Building...' } }
+  }
+}
+""","explanation":"Key must be `stages` (not `stags`)."},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  stage {
+    steps { echo 'Building...' }
+  }
+}
+"""},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  stages:
+    stage('Build') { steps { echo 'Building...' } }
+}
+"""},
+     ]},
+
+11: {"platform":"jenkins",
+     "title":"Jenkins – Snippet 11", "desc":"Review and choose the correct version.",
+     "buggy": """pipeline {
+  agent any
+  stages {
+    stage('Deploy') {
+      steps { echo "$VAR()" }
+    }
+  }
+}
+""",
+     "options":[
+        {"ok":True,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Deploy') {
+      steps { echo "${VAR}" }
+    }
+  }
+}
+""","explanation":"Use Groovy interpolation `${VAR}` (or `env.VAR`)."},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Deploy') {
+      steps { echo "$VAR" }
+    }
+  }
+}
+"""},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  environment { VAR = 'value' }
+  stages {
+    stage('Deploy') {
+      steps { echo "$(VAR)" }
+    }
+  }
+}
+"""},
+     ]},
+
+12: {"platform":"jenkins",
+     "title":"Jenkins – Snippet 12", "desc":"Review and choose the correct version.",
+     "buggy": """pipeline {
+  agent any
+  stages {
+    stage('Build') { steps { echo 'First' } }
+    stage('Build') { steps { echo 'Second' } }
+  }
+}
+""",
+     "options":[
+        {"ok":True,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Build')  { steps { echo 'First' } }
+    stage('Test')   { steps { echo 'Second' } }
+  }
+}
+""","explanation":"Stage names should be unique to avoid confusing the UI/graph."},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Build') { steps { echo 'First' } }
+    stage('Build') { steps { echo 'Second' } }
+  }
+}
+"""},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  stage('Build') { steps { echo 'First' } }
+  stage('Test')  { steps { echo 'Second' } }
+}
+"""},
+     ]},
+}
+
+# ==========================================
+# Runners (Python executes; CI/CD uses meta)
+# ==========================================
+def run_single_python(idx, time_limit=0.0, pause=False):
+    spec = PY_EX[idx]
+    _print_header(f"{spec['title']} - {spec.get('desc','Code')}")
+    print(spec["buggy"])
+    _print_header(f"{spec['title']} - Options")
+    opts = spec["options"][:]; random.shuffle(opts)
+    labels = list("ABC")[:len(opts)]
+    mapping = dict(zip(labels, opts))
+    for lab, opt in mapping.items(): print(f"{lab})\n{opt['code']}")
+    ans, to = timed_input(f"Enter choice ({'/'.join(labels)}): ", time_limit)
+    chosen = "TIMEOUT" if to else (ans.strip().upper() if ans.strip().upper() in mapping else "INVALID")
+
+    ok = False; chosen_code=""; correct_label=None; correct_code=""
+    for lab,opt in mapping.items():
+        if opt.get("ok"): correct_label=lab; break
+    if chosen in mapping:
+        chosen_code = mapping[chosen]["code"]
+        ns = {}
+        try:
+            exec(chosen_code, ns, ns)
+            fn = ns.get("main", lambda: None)
+            if not callable(fn): fn = lambda: None
+            # silence I/O during execution
+            buf_out = io.StringIO(); buf_err = io.StringIO()
+            old_out, old_err = sys.stdout, sys.stderr
+            old_level = logging.root.manager.disable
+            try:
+                sys.stdout, sys.stderr = buf_out, buf_err
+                logging.disable(logging.CRITICAL)
+                fn()
+            finally:
+                logging.disable(old_level)
+                sys.stdout, sys.stderr = old_out, old_err
+            out = buf_out.getvalue()
+            if spec["kind"] == "equals":
+                ok = (out == spec["expected"])
+            elif spec["kind"] == "lines":
+                ok = (out.splitlines(keepends=True) == spec["expected"])
+            else:
+                ok = False
+        except Exception:
+            ok = False
+    if not ok and correct_label:
+        correct_code = mapping[correct_label]["code"]
+
+    if pause:
+        input("Press Enter to continue..."); os.system('cls' if os.name=='nt' else 'clear')
+
+    return {
+        "section": "python",
+        "exercise": idx,
+        "title": spec["title"],
+        "description": spec.get("desc",""),
+        "chosen_label": chosen,
+        "ok": ok,
+        "correct_label": correct_label or "",
+        "buggy_code": spec["buggy"],
+        "chosen_code": chosen_code,
+        "correct_code_if_wrong": ("" if ok else correct_code),
+        "platform": "",
+        "explanation": PY_EXPLANATIONS.get(idx, ""),
+    }
+
+def run_single_cicd(idx, time_limit=0.0, pause=False):
+    spec = EX_CICD[idx]
+    _print_header(f"{spec['title']} - {spec['desc']}")
+    print(spec["buggy"])
+    _print_header(f"{spec['title']} - Options")
+    opts = spec["options"][:]; random.shuffle(opts)
+    labels = list("ABC")[:len(opts)]
+    mapping = dict(zip(labels, opts))
+    for lab, opt in mapping.items(): print(f"{lab})\n{opt['code']}")
+    ans, to = timed_input(f"Enter choice ({'/'.join(labels)}): ", time_limit)
+    chosen = "TIMEOUT" if to else (ans.strip().upper() if ans.strip().upper() in mapping else "INVALID")
+    ok = (mapping.get(chosen, {"ok":False})["ok"] if chosen in mapping else False)
+    correct_label = next((lab for lab,opt in mapping.items() if opt.get("ok")), "")
+    chosen_code = mapping.get(chosen,{}).get("code","")
+    correct_code = "" if ok else mapping.get(correct_label,{}).get("code","")
+    explanation = "" if ok else next((opt.get("explanation","") for opt in mapping.values() if opt.get("ok")), "")
+    if pause:
+        input("Press Enter to continue..."); os.system('cls' if os.name=='nt' else 'clear')
+    return {
+        "section": "cicd",
+        "exercise": idx,
+        "title": spec["title"],
+        "description": spec["desc"],
+        "chosen_label": chosen,
+        "ok": ok,
+        "correct_label": correct_label,
+        "buggy_code": spec["buggy"],
+        "chosen_code": chosen_code,
+        "correct_code_if_wrong": correct_code,
+        "platform": spec["platform"],
+        "explanation": explanation,
+    }
+
+# ===================
+# Session & CLI glue
+# ===================
+def run_session(order_items, time_limit, pause, out_dir, results_file, details_file,
+                display_results, name, pdf, pdf_file):
+    os.makedirs(out_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ts_fn = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe = sanitize_filename(name)
+
+    sum_csv = os.path.join(out_dir, results_file) if results_file else os.path.join(out_dir, f"combined_results_{safe}_{ts_fn}.csv")
+    det_csv = os.path.join(out_dir, details_file) if details_file else os.path.join(out_dir, f"combined_details_{safe}_{ts_fn}.csv")
+
+    total=0; rows=[]; details=[]
+    try:
+        for (section, idx) in order_items:
+            if section == "python":
+                r = run_single_python(idx, time_limit, pause)
+            else:
+                r = run_single_cicd(idx, time_limit, pause)
+            rows.append((section, idx, r["description"], r["chosen_label"], r["ok"]))
+            if r["ok"]: total += 1
+            details.append(r)
+    except KeyboardInterrupt:
+        print("\n[Session cancelled by interviewer]")
+
+    # Summary CSV (UTF-8 BOM for Excel)
+    with open(sum_csv, "w", newline="", encoding="utf-8-sig") as f:
+        w=csv.writer(f)
+        w.writerow(["candidate", safe]); w.writerow(["timestamp", ts]); w.writerow([])
+        w.writerow(["section","exercise","description","choice","correct"])
+        for section, idx, desc, choice, ok in rows:
+            w.writerow([section, idx, desc, choice, str(ok)])
+        w.writerow([]); w.writerow(["TOTAL_CORRECT", total]); w.writerow(["TOTAL_QUESTIONS", len(rows)])
+        pct = (total/len(rows)*100.0) if rows else 0.0
+        w.writerow(["PERCENT", f"{pct:.0f}%"])
+
+    # Details CSV (UTF-8 BOM + explanations)
+    with open(det_csv, "w", newline="", encoding="utf-8-sig") as f:
+        cols=["section","exercise","platform","title","description","chosen_label","chosen_ok","correct_label_if_wrong","buggy_code","chosen_code","correct_code_if_wrong","explanation"]
+        w=csv.DictWriter(f, fieldnames=cols); w.writeheader()
+        for d in details:
+            w.writerow({
+                "section": d["section"],
+                "exercise": d["exercise"],
+                "platform": d.get("platform",""),
+                "title": d["title"],
+                "description": d["description"],
+                "chosen_label": d["chosen_label"],
+                "chosen_ok": str(d["ok"]),
+                "correct_label_if_wrong": (d["correct_label"] if not d["ok"] else ""),
+                "buggy_code": d["buggy_code"],
+                "chosen_code": d["chosen_code"],
+                "correct_code_if_wrong": d["correct_code_if_wrong"],
+                "explanation": d.get("explanation",""),
+            })
+
+    pdf_path=None
+    if pdf:
+        pdf_path = os.path.join(out_dir, pdf_file) if pdf_file else os.path.join(out_dir, f"combined_summary_{safe}_{ts_fn}.pdf")
+        lines=[f"{sec[:6].upper()} {i:>2}: {'PASS' if ok else 'FAIL'}" for (sec,i,_,_,ok) in rows]
+        pct = (total/len(rows)*100.0) if rows else 0.0
+        footer=["-"*30, f"Score: {total} / {len(rows)} ({pct:.0f}%)"]
+        write_summary_pdf(pdf_path, "Combined Interview - Summary", name, ts, lines, footer)
+
+    if display_results:
+        _print_header("Session Summary")
+        print(f"Candidate: {name}")
+        print(f"Saved CSV: {sum_csv}")
+        print(f"Saved details: {det_csv}")
+        if pdf and pdf_path: print(f"Saved PDF: {pdf_path}")
+        pct = (total/len(rows)*100.0) if rows else 0.0
+        print(f"Score: {total} / {len(rows)} ({pct:.0f}%)")
+    else:
+        print(f"Saved CSV: {sum_csv}")
+        print(f"Saved details: {det_csv}")
+        if pdf and pdf_path: print(f"Saved PDF: {pdf_path}")
+
+# -----------
+# CLI
+# -----------
+def main():
+    p = argparse.ArgumentParser(description="Combined Debugging Interview — Python + CI/CD")
+    p.add_argument("--section", nargs="+", choices=["python","cicd","both"], default=["both"],
+                   help="which section(s) to include (default: both)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--all", action="store_true", help="select all in chosen section(s)")
+    g.add_argument("--pick-python", nargs="+", type=int, help="specific Python items")
+    g.add_argument("--pick-cicd", nargs="+", type=int, help="specific CI/CD items")
+    # CI/CD filter
+    p.add_argument("--tool", nargs="+", choices=["gitlab","github","jenkins"], help="filter CI/CD by platform(s)")
+    # General controls
+    p.add_argument("--shuffle", action="store_true", help="shuffle final combined order")
+    p.add_argument("--limit", type=int, default=0, help="cap total questions after selection/shuffle")
+    p.add_argument("--time-limit", type=float, default=0.0, help="seconds allowed to enter a choice (0=off)")
+    p.add_argument("--pause", action="store_true", help="pause after each exercise and clear the screen")
+    p.add_argument("--output-dir", type=str, default=".", help="directory to save results")
+    p.add_argument("--results-file", type=str, default=None, help="explicit summary CSV filename")
+    p.add_argument("--details-file", type=str, default=None, help="explicit details CSV filename")
+    p.add_argument("--no-display-results", action="store_true", help="suppress final results printout")
+    p.add_argument("--name", type=str, default=None, help="candidate name (if omitted, you will be prompted)")
+    p.add_argument("--pdf", action="store_true", help="also write one-page PDF summary")
+    p.add_argument("--pdf-file", type=str, default=None, help="explicit PDF filename")
+    args = p.parse_args()
+
+    name = args.name if args.name else (input("Candidate name: ").strip() or "candidate")
+
+    want_python = ("python" in args.section) or ("both" in args.section)
+    want_cicd   = ("cicd"   in args.section) or ("both" in args.section)
+
+    pool = []  # list of tuples (section, idx)
+
+    if args.all:
+        if want_python: pool += [("python", i) for i in sorted(PY_EX.keys())]
+        if want_cicd:
+            cicd_keys = sorted(EX_CICD.keys())
+            if args.tool:
+                wanted = set(args.tool)
+                cicd_keys = [k for k in cicd_keys if EX_CICD[k]["platform"] in wanted]
+            pool += [("cicd", i) for i in cicd_keys]
+    elif args.pick_python or args.pick_cicd:
+        if want_python and args.pick_python:
+            pool += [("python", i) for i in args.pick_python if i in PY_EX]
+        if want_cicd and args.pick_cicd:
+            cicd_sel = [i for i in args.pick_cicd if i in EX_CICD]
+            if args.tool:
+                wanted = set(args.tool)
+                cicd_sel = [i for i in cicd_sel if EX_CICD[i]["platform"] in wanted]
+            pool += [("cicd", i) for i in cicd_sel]
+        if not pool:
+            print("No valid selections in --pick-*"); return
+    else:
+        # Interactive single-pick per section requested
+        if want_python:
+            print("Available Python items:", ", ".join(str(k) for k in sorted(PY_EX.keys())))
+            while True:
+                s = input("Enter Python exercise number: ").strip()
+                if s.isdigit() and int(s) in PY_EX:
+                    pool.append(("python", int(s))); break
+                print("Please enter a valid number.")
+        if want_cicd:
+            cicd_keys = sorted(EX_CICD.keys())
+            if args.tool:
+                wanted = set(args.tool)
+                cicd_keys = [k for k in cicd_keys if EX_CICD[k]["platform"] in wanted]
+            print("Available CI/CD items:", ", ".join(str(k) for k in cicd_keys))
+            while True:
+                s = input("Enter CI/CD exercise number: ").strip()
+                if s.isdigit() and int(s) in cicd_keys:
+                    pool.append(("cicd", int(s))); break
+                print("Please enter a valid number.")
+
+    if args.shuffle:
+        random.shuffle(pool)
+    if args.limit and args.limit < len(pool):
+        pool = pool[:args.limit]
+
+    os.system('cls' if os.name=='nt' else 'clear')
+
+    try:
+        run_session(pool, args.time_limit, args.pause, args.output_dir,
+                    args.results_file, args.details_file,
+                    not args.no_display_results, name, args.pdf, args.pdf_file)
+    except KeyboardInterrupt:
+        print("\n[Session cancelled] Results (so far) have been written.")
+
+if __name__ == "__main__":
+    main()
