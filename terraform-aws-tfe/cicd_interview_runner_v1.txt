@@ -1,0 +1,678 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+CI/CD Debugging Interview — Candidate-Safe Runner (v1)
+=====================================================
+
+Overview
+--------
+This script runs a candidate-friendly CI/CD debugging interview session.
+It presents buggy CI/CD snippets (GitLab CI, GitHub Actions, Jenkinsfile),
+plus randomized fix options (A/B/C). The candidate sees only the code and
+chooses an option. Correctness is not revealed on screen. All results are
+recorded to files for the interviewer/agency.
+
+Outputs
+-------
+- **Summary CSV**: one row per exercise (choice, pass/fail, totals, percentage).
+- **Details CSV**: full record including buggy snippet, chosen option, correct option (if wrong), and explanation.
+- **PDF Summary** (optional): one-page summary of candidate name, timestamp, per-exercise PASS/FAIL, and score.
+
+Usage Examples
+--------------
+# Run *all* exercises, shuffle order, pause after each, candidate name preset
+python cicd_interview_runner_v1.py --all --shuffle --pause --name "Jane Doe"
+
+# Run a subset of exercises (2, 5, and 9), without showing results on screen
+python cicd_interview_runner_v1.py --pick 2 5 9 --name "John Smith" --no-display-results
+
+# Full run with PDF summary exported
+python cicd_interview_runner_v1.py --all --name "Alice Jones" --pdf
+
+Key Flags
+---------
+--all                 Run all exercises (default is interactive pick).
+--pick N N ...        Choose specific exercises by number.
+--shuffle             Shuffle order of chosen exercises.
+--limit N             Limit number of exercises after shuffle/pick.
+--pause               Pause after each exercise and clear screen.
+--time-limit SEC      Seconds allowed to enter a choice (0 = unlimited).
+--output-dir DIR      Directory to save results (default: current dir).
+--results-file FILE   Explicit summary CSV filename.
+--details-file FILE   Explicit details CSV filename.
+--name NAME           Candidate name (otherwise prompted).
+--pdf                 Write one-page PDF summary.
+--pdf-file FILE       Explicit PDF filename for summary.
+--no-display-results  Suppress final results printout (only save files).
+
+Dependencies
+------------
+- Pure Python standard library. No external packages required.
+"""
+
+import sys, os, time, random, argparse, csv, re
+from datetime import datetime
+
+# ----------------------------
+# utilities
+# ----------------------------
+def _print_header(title): print("\n" + "="*70 + f"\n{title}\n" + "="*70)
+
+def timed_input(prompt, timeout=0.0):
+    if not timeout or timeout <= 0:
+        return input(prompt), False
+    if os.name == "nt":
+        import msvcrt, time as _t
+        sys.stdout.write(prompt); sys.stdout.flush()
+        chars, t0 = [], _t.time()
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\r","\n"): print(); return "".join(chars), False
+                if ch == "\003": raise KeyboardInterrupt
+                if ch == "\b":
+                    if chars: chars.pop(); sys.stdout.write("\b \b"); sys.stdout.flush()
+                else:
+                    chars.append(ch); sys.stdout.write(ch); sys.stdout.flush()
+            if _t.time()-t0 >= timeout: print(); return "".join(chars), True
+            _t.sleep(0.01)
+    else:
+        import select
+        sys.stdout.write(prompt); sys.stdout.flush()
+        r,_,_ = select.select([sys.stdin],[],[],timeout)
+        if r: return sys.stdin.readline().rstrip("\n"), False
+        print(); return "", True
+
+def sanitize_filename(s):
+    s = re.sub(r"\s+","_", s.strip())
+    return re.sub(r"[^A-Za-z0-9._-]","", s) or "candidate"
+
+# ----------------------------
+# tiny PDF (single page, text only)
+# ----------------------------
+def _esc(s): return s.replace("\\","\\\\").replace("(","\\(").replace(")","\\)")
+def write_summary_pdf(path, title, name, ts, lines, footer):
+    width, height = 595, 842; y = height-56; leading=16
+    out = bytearray(b"%PDF-1.4\n"); xref=[0]
+    def obj(payload):
+        xref.append(len(out)); out.extend(payload if payload.endswith(b"\n") else payload+b"\n"); out.extend(b"endobj\n")
+    def hdr(s, sz): 
+        nonlocal y
+        out_lines.append(f"BT /F1 {sz} Tf 50 {y} Td ({_esc(s)}) Tj ET"); y-=leading
+    out_lines=[]
+    hdr(title,16); y-=6
+    hdr(f"Candidate: {name}",12)
+    hdr(f"Timestamp: {ts}",12); y-=6
+    for ln in lines:
+        if y<80: break
+        hdr(ln,12)
+    y-=leading
+    for ln in footer:
+        if y<60: break
+        hdr(ln,12)
+    stream="\n".join(out_lines).encode("latin-1","replace")
+    # catalog/pages/page/font/contents
+    obj(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>")
+    obj(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+    obj(f"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".encode())
+    obj(b"4 0 obj\n<< /Length "+str(len(stream)).encode()+b" >>\nstream\n"+stream+b"\nendstream")
+    obj(b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    xref_pos=len(out); out.extend(b"xref\n"); out.extend(f"0 {len(xref)}\n".encode())
+    out.extend(b"0000000000 65535 f \n")
+    for off in xref[1:]: out.extend(f"{off:010d} 00000 n \n".encode())
+    out.extend(b"trailer\n"); out.extend(f"<< /Size {len(xref)} /Root 1 0 R >>\n".encode())
+    out.extend(b"startxref\n"); out.extend(f"{xref_pos}\n".encode()); out.extend(b"%%EOF")
+    with open(path,"wb") as f: f.write(out)
+
+# ----------------------------
+# exercises (12 total)
+# ----------------------------
+EX = {
+# ---------- GitLab CI ----------
+1: {"title":"GitLab CI – missing stage",
+     "desc":"Job omits mandatory 'stage'",
+     "buggy": """# .gitlab-ci.yml
+build-job:
+  script:
+    - echo "Running tests"
+""",
+     "options":[
+        {"ok":True,"code":"""build-job:
+  stage: build
+  script:
+    - echo "Running tests"
+""", "explanation":"In GitLab CI every job must belong to a stage (default stages exist, but explicit stage avoids implicit behavior)."},
+        {"ok":False,"code":"""build-job:
+  only: [ master ]
+  script:
+    - echo "Running tests"
+"""},
+        {"ok":False,"code":"""stage: build
+script:
+  - echo "Running tests"
+"""},
+     ]},
+
+2: {"title":"GitLab CI – script list dashes",
+     "desc":"Command not in a YAML list",
+     "buggy": """# .gitlab-ci.yml
+test-job:
+  stage: test
+  script: echo "Hello"
+""",
+     "options":[
+        {"ok":True,"code":"""test-job:
+  stage: test
+  script:
+    - echo "Hello"
+""", "explanation":"script must be a sequence; each command item is prefixed with '-'."},
+        {"ok":False,"code":"""test-job:
+  stage: test
+  script:
+    echo "Hello"
+"""},
+        {"ok":False,"code":"""test-job:
+  stage: test
+  run:
+    - echo "Hello"
+"""},
+     ]},
+
+3: {"title":"GitLab CI – invalid image value",
+     "desc":"Image name malformed",
+     "buggy": """# .gitlab-ci.yml
+image-job:
+  image: ubuntu:latest:extra
+  script:
+    - echo "Using image"
+""",
+     "options":[
+        {"ok":True,"code":"""image-job:
+  image: ubuntu:latest
+  script:
+    - echo "Using image"
+""", "explanation":"Valid Docker tag is 'ubuntu:latest'; extra ':' makes it invalid."},
+        {"ok":False,"code":"""image-job:
+  image: latest/ubuntu
+  script:
+    - echo "Using image"
+"""},
+        {"ok":False,"code":"""image-job:
+  image:
+    name: ubuntu
+    tag: latest:foo
+  script:
+    - echo "Using image"
+"""},
+     ]},
+
+4: {"title":"GitLab CI – variable reference",
+     "desc":"Shell variable not expanded",
+     "buggy": """# .gitlab-ci.yml
+job-with-var:
+  stage: build
+  script:
+    - echo VAR
+""",
+     "options":[
+        {"ok":True,"code":"""job-with-var:
+  stage: build
+  script:
+    - echo $VAR
+""", "explanation":"To print env var use $VAR (or ${VAR}) inside the shell."},
+        {"ok":False,"code":"""job-with-var:
+  stage: build
+  script:
+    - echo ${VAR}
+    - set -u
+"""},
+        {"ok":False,"code":"""job-with-var:
+  stage: build
+  script:
+    - echo "$(VAR)"
+"""},
+     ]},
+
+# ---------- GitHub Actions ----------
+5: {"title":"GitHub Actions – 'on' key misspelled",
+    "desc":"Workflow trigger key is wrong",
+    "buggy": """# .github/workflows/main.yml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Test"
+onn:
+  push:
+    branches: [ main ]
+""",
+    "options":[
+        {"ok":True,"code":"""on:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Test"
+""", "explanation":"Workflow must define 'on' (not 'onn') before/alongside 'jobs'."},
+        {"ok":False,"code":"""trigger:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Test"
+"""},
+        {"ok":False,"code":"""on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Test"
+"""},
+    ]},
+
+6: {"title":"GitHub Actions – missing steps",
+    "desc":"Job lacks the 'steps' collection",
+    "buggy": """# .github/workflows/main.yml
+on: [ push ]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    - run: echo "Hello"
+""",
+    "options":[
+        {"ok":True,"code":"""on: [ push ]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Hello"
+""", "explanation":"'steps' is required under each job; list items live under it."},
+        {"ok":False,"code":"""on: [ push ]
+jobs:
+  test:
+    steps:
+      - run: echo "Hello"
+"""},
+        {"ok":False,"code":"""on: [ push ]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    scripts:
+      - run: echo "Hello"
+"""},
+    ]},
+
+7: {"title":"GitHub Actions – matrix strategy indentation",
+    "desc":"Matrix defined at wrong level",
+    "buggy": """# .github/workflows/main.yml
+on: [ push ]
+jobs:
+  matrix-job:
+    runs-on: ubuntu-latest
+  strategy:
+    matrix:
+      node-version: [12, 14, 16]
+    steps:
+      - run: node --version
+""",
+    "options":[
+        {"ok":True,"code":"""on: [ push ]
+jobs:
+  matrix-job:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [12, 14, 16]
+    steps:
+      - run: node --version
+""", "explanation":"'strategy' must be inside the job (same level as runs-on/steps)."},
+        {"ok":False,"code":"""on: [ push ]
+strategy:
+  matrix:
+    node-version: [12, 14, 16]
+jobs:
+  matrix-job:
+    runs-on: ubuntu-latest
+    steps:
+      - run: node --version
+"""},
+        {"ok":False,"code":"""on: [ push ]
+jobs:
+  matrix-job:
+    runs-on: ubuntu-latest
+    steps:
+      - strategy:
+          matrix:
+            node-version: [12, 14, 16]
+      - run: node --version
+"""},
+    ]},
+
+8: {"title":"GitHub Actions – if expression string",
+    "desc":"Comparison to string not quoted",
+    "buggy": """# .github/workflows/main.yml
+on: [ push, workflow_dispatch ]
+jobs:
+  conditional:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Conditional"
+        if: github.event_name == push
+""",
+    "options":[
+        {"ok":True,"code":"""on: [ push, workflow_dispatch ]
+jobs:
+  conditional:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Conditional"
+        if: github.event_name == 'push'
+""", "explanation":"In expressions, compare against a quoted string (single quotes)."},
+        {"ok":False,"code":"""on: [ push, workflow_dispatch ]
+jobs:
+  conditional:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Conditional"
+        if: github.event == 'push'
+"""},
+        {"ok":False,"code":"""on: [ push, workflow_dispatch ]
+jobs:
+  conditional:
+    runs-on: ubuntu-latest
+    steps:
+      - if: github.event_name == 'push'
+        run: echo "Conditional"
+        when: true
+"""},
+    ]},
+
+# ---------- Jenkins Pipeline (Declarative) ----------
+9: {"title":"Jenkinsfile – missing stages block",
+    "desc":"Declarative pipeline must contain stages",
+    "buggy": """// Jenkinsfile
+pipeline {
+  agent any
+}
+""",
+    "options":[
+        {"ok":True,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Build') {
+      steps { echo 'Build' }
+    }
+  }
+}
+""", "explanation":"Declarative syntax requires 'stages { ... }' with at least one stage."},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  steps { echo 'Build' }
+}
+"""},
+        {"ok":False,"code":"""pipeline {
+  agent none
+}
+"""},
+    ]},
+
+10: {"title":"Jenkinsfile – 'stages' misspelled",
+     "desc":"Typo prevents the block from being recognized",
+     "buggy": """pipeline {
+  agent any
+  stags {
+    stage('Build') { steps { echo 'Building...' } }
+  }
+}
+""",
+     "options":[
+        {"ok":True,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Build') { steps { echo 'Building...' } }
+  }
+}
+""", "explanation":"Correct key is 'stages'."},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  stage {
+    steps { echo 'Building...' }
+  }
+}
+"""},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  stages:
+    stage('Build') { steps { echo 'Building...' } }
+}
+"""},
+     ]},
+
+11: {"title":"Jenkinsfile – env var syntax",
+     "desc":"Groovy interpolation for environment variable",
+     "buggy": """pipeline {
+  agent any
+  stages {
+    stage('Deploy') {
+      steps { echo "$VAR()" }
+    }
+  }
+}
+""",
+     "options":[
+        {"ok":True,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Deploy') {
+      steps { echo "${VAR}" }
+    }
+  }
+}
+""", "explanation":"Use Groovy interpolation '${VAR}' (or env.VAR). '$VAR()' is wrong."},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Deploy') {
+      steps { echo "$VAR" }
+    }
+  }
+}
+"""},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  environment { VAR = 'value' }
+  stages {
+    stage('Deploy') {
+      steps { echo "$(VAR)" }
+    }
+  }
+}
+"""},
+     ]},
+
+12: {"title":"Jenkinsfile – duplicate stage name",
+     "desc":"Two stages share same name",
+     "buggy": """pipeline {
+  agent any
+  stages {
+    stage('Build') { steps { echo 'First' } }
+    stage('Build') { steps { echo 'Second' } }
+  }
+}
+""",
+     "options":[
+        {"ok":True,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Build')  { steps { echo 'First' } }
+    stage('Test')   { steps { echo 'Second' } }
+  }
+}
+""", "explanation":"Stage names should be unique to avoid UI/graph conflicts."},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  stages {
+    stage('Build') { steps { echo 'First' } }
+    stage('Build') { steps { echo 'Second' } }
+  }
+}
+"""},
+        {"ok":False,"code":"""pipeline {
+  agent any
+  stage('Build') { steps { echo 'First' } }
+  stage('Test')  { steps { echo 'Second' } }
+}
+"""},
+     ]},
+}
+
+# ----------------------------
+# runner (no execution, correctness from metadata)
+# ----------------------------
+def run_single(idx, time_limit=0.0, pause=False):
+    spec = EX[idx]
+    _print_header(f"{spec['title']} - {spec['desc']}")
+    print(spec["buggy"])
+    _print_header(f"{spec['title']} - Options")
+    opts = spec["options"][:]; random.shuffle(opts)
+    labels = list("ABC")[:len(opts)]
+    mapping = dict(zip(labels, opts))
+    for lab, opt in mapping.items():
+        print(f"{lab})\n{opt['code']}")
+    ans, to = timed_input(f"Enter choice ({'/'.join(labels)}): ", time_limit)
+    chosen = "TIMEOUT" if to else (ans.strip().upper() if ans.strip().upper() in mapping else "INVALID")
+    ok = (mapping.get(chosen, {"ok":False})["ok"] if chosen in mapping else False)
+    correct_label = next((lab for lab,opt in mapping.items() if opt["ok"]), "")
+    chosen_code = mapping.get(chosen, {}).get("code","")
+    correct_code = "" if ok else mapping.get(correct_label,{}).get("code","")
+    explanation = "" if ok else next((opt.get("explanation","") for opt in mapping.values() if opt.get("ok")), "")
+    if pause:
+        input("Press Enter to continue...")
+        os.system('cls' if os.name=='nt' else 'clear')
+    return {
+        "chosen_label": chosen,
+        "ok": ok,
+        "correct_label": correct_label,
+        "buggy_code": spec["buggy"],
+        "chosen_code": chosen_code,
+        "correct_code_if_wrong": correct_code,
+        "explanation": explanation
+    }
+
+def run_session(order, time_limit, pause, out_dir, results_file, details_file,
+                display_results, name, pdf, pdf_file):
+    os.makedirs(out_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ts_fn = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe = sanitize_filename(name)
+
+    sum_csv = os.path.join(out_dir, results_file) if results_file else os.path.join(out_dir, f"cicd_results_{safe}_{ts_fn}.csv")
+    det_csv = os.path.join(out_dir, details_file) if details_file else os.path.join(out_dir, f"cicd_results_details_{safe}_{ts_fn}.csv")
+
+    total=0; rows=[]; details=[]
+    try:
+        for i in order:
+            r = run_single(i, time_limit, pause)
+            rows.append((i, EX[i]["desc"], r["chosen_label"], r["ok"]))
+            if r["ok"]: total+=1
+            details.append({
+                "exercise": i,
+                "title": EX[i]["title"],
+                "description": EX[i]["desc"],
+                "chosen_label": r["chosen_label"],
+                "chosen_ok": str(r["ok"]),
+                "correct_label_if_wrong": (r["correct_label"] if not r["ok"] else ""),
+                "buggy_code": r["buggy_code"],
+                "chosen_code": r["chosen_code"],
+                "correct_code_if_wrong": r["correct_code_if_wrong"],
+                "explanation": r["explanation"],
+            })
+    except KeyboardInterrupt:
+        print("\n[Session cancelled by interviewer]")
+
+    with open(sum_csv,"w",newline="",encoding="utf-8") as f:
+        w=csv.writer(f)
+        w.writerow(["candidate", safe]); w.writerow(["timestamp", ts]); w.writerow([])
+        w.writerow(["exercise","description","choice","correct"])
+        for i,desc,choice,ok in rows: w.writerow([i,desc,choice,str(ok)])
+        w.writerow([]); w.writerow(["TOTAL_CORRECT", total]); w.writerow(["TOTAL_QUESTIONS", len(rows)])
+        pct = (total/len(rows)*100.0) if rows else 0.0
+        w.writerow(["PERCENT", f"{pct:.0f}%"])
+
+    with open(det_csv,"w",newline="",encoding="utf-8") as f:
+        cols=["exercise","title","description","chosen_label","chosen_ok","correct_label_if_wrong","buggy_code","chosen_code","correct_code_if_wrong","explanation"]
+        w=csv.DictWriter(f, fieldnames=cols); w.writeheader()
+        for d in details: w.writerow(d)
+
+    pdf_path=None
+    if pdf:
+        pdf_path = os.path.join(out_dir, pdf_file) if pdf_file else os.path.join(out_dir, f"cicd_summary_{safe}_{ts_fn}.pdf")
+        lines=[f"Ex {i:>2}: {'PASS' if ok else 'FAIL'}" for (i,_,_,ok) in rows]
+        pct = (total/len(rows)*100.0) if rows else 0.0
+        footer=["-"*30, f"Score: {total} / {len(rows)} ({pct:.0f}%)"]
+        write_summary_pdf(pdf_path, "CI/CD Debugging Interview - Summary", name, ts, lines, footer)
+
+    if display_results:
+        _print_header("Session Summary")
+        print(f"Candidate: {name}")
+        print(f"Saved CSV: {sum_csv}")
+        print(f"Saved details: {det_csv}")
+        if pdf and pdf_path: print(f"Saved PDF: {pdf_path}")
+        pct = (total/len(rows)*100.0) if rows else 0.0
+        print(f"Score: {total} / {len(rows)} ({pct:.0f}%)")
+    else:
+        print(f"Saved CSV: {sum_csv}")
+        print(f"Saved details: {det_csv}")
+        if pdf and pdf_path: print(f"Saved PDF: {pdf_path}")
+
+# ----------------------------
+# CLI
+# ----------------------------
+def main():
+    p=argparse.ArgumentParser(description="CI/CD Debugging Interview - Candidate-Safe Runner")
+    g=p.add_mutually_exclusive_group()
+    g.add_argument("--all", action="store_true", help="run all exercises")
+    g.add_argument("--pick", nargs="+", type=int, help="specific exercises, e.g. --pick 2 5 9")
+    p.add_argument("--shuffle", action="store_true", help="shuffle exercise order")
+    p.add_argument("--limit", type=int, default=0, help="limit number after shuffle/pick")
+    p.add_argument("--time-limit", type=float, default=0.0, help="seconds allowed to enter a choice (0=off)")
+    p.add_argument("--pause", action="store_true", help="pause after each exercise and clear the screen")
+    p.add_argument("--output-dir", type=str, default=".", help="directory to save results")
+    p.add_argument("--results-file", type=str, default=None, help="explicit summary CSV filename")
+    p.add_argument("--details-file", type=str, default=None, help="explicit details CSV filename")
+    p.add_argument("--no-display-results", action="store_true", help="do not print final results at the end")
+    p.add_argument("--name", type=str, default=None, help="candidate name (if omitted, you will be prompted)")
+    p.add_argument("--pdf", action="store_true", help="also write a one-page PDF summary")
+    p.add_argument("--pdf-file", type=str, default=None, help="explicit PDF filename for the summary")
+    args=p.parse_args()
+
+    name = args.name if args.name else (input("Candidate name: ").strip() or "candidate")
+
+    if args.all: order=list(EX.keys())
+    elif args.pick:
+        order=[i for i in args.pick if i in EX]
+        if not order: print("No valid exercises in --pick."); return
+    else:
+        print("Available exercises:", ", ".join(str(k) for k in sorted(EX.keys())))
+        while True:
+            s=input("Enter exercise number: ").strip()
+            if s.isdigit() and int(s) in EX: order=[int(s)]; break
+            print("Please enter a valid number.")
+
+    if args.shuffle: random.shuffle(order)
+    if args.limit and args.limit<len(order): order=order[:args.limit]
+    os.system('cls' if os.name=='nt' else 'clear')
+
+    try:
+        run_session(order, args.time_limit, args.pause, args.output_dir,
+                    args.results_file, args.details_file,
+                    not args.no_display_results, name, args.pdf, args.pdf_file)
+    except KeyboardInterrupt:
+        print("\n[Session cancelled] Results (so far) have been written.")
+
+if __name__=="__main__":
+    main()
