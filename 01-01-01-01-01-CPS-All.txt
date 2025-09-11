@@ -1,3 +1,42 @@
+Wrap run_session loop
+
+Find the main for ex in order: loop inside run_session and change it to:
+    try:
+        for ex in order:
+            try:
+                choice, ok = run_single(ex, time_limit=time_limit, args_pause=args_pause)
+            except KeyboardInterrupt:
+                print("\n[Session cancelled by interviewer]")
+                break
+            rows.append((ex, EXERCISES[ex].get('desc',''), choice, ok))
+            if ok:
+                total += 1
+    except KeyboardInterrupt:
+        print("\n[Session cancelled by interviewer]")
+
+
+2. Wrap the top-level main()
+
+At the bottom of main(), where you call run_session(...), wrap it like this:
+
+    try:
+        run_session(
+            order,
+            time_limit=args.time_limit,
+            args_pause=args.pause,
+            output_dir=args.output_dir,
+            results_file=args.results_file,
+            display_results=not args.no_display_results,
+            candidate_name=candidate_name,
+            pdf=args.pdf,
+            pdf_file=args.pdf_file,
+        )
+    except KeyboardInterrupt:
+        # Final catch-all just in case; avoid traceback
+        print("\n[Session cancelled] Results (so far) have been written.")
+
+
+
 """
 Python Debugging Interview — Candidate-Safe Runner
 ==================================================
