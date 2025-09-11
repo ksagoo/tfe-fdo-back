@@ -1,3 +1,61 @@
+def run_single(ex_num: int, time_limit: float = 0.0, args_pause: bool = False):
+    spec = EXERCISES[ex_num]
+    _print_header(f"{spec['title']} - {spec.get('desc','Code')}")
+    print(spec['buggy'])
+
+    _print_header(f"{spec['title']} - Options")
+    options = spec['options'][:]
+    random.shuffle(options)
+    labels = list("ABCDEF")[:len(options)]
+    label_map = dict(zip(labels, options))
+    for label, opt in label_map.items():
+        print(f"{label})\n{opt['code']}")
+
+    choice, timed_out = timed_input(f"Enter choice ({'/'.join(labels)}): ", time_limit)
+    if timed_out or choice.upper() not in label_map:
+        chosen_label = "TIMEOUT" if timed_out else "INVALID"
+        ok = False
+    else:
+        chosen_label = choice.upper()
+        chosen = label_map[chosen_label]
+        ns = {}
+        try:
+            exec(chosen['code'], ns, ns)
+            fn = ns.get("main", lambda: None)
+            if not callable(fn):
+                fn = lambda: None
+
+            buf_out = io.StringIO()
+            buf_err = io.StringIO()
+            old_stdout, old_stderr = sys.stdout, sys.stderr
+            old_disable = logging.root.manager.disable
+            try:
+                sys.stdout, sys.stderr = buf_out, buf_err
+                logging.disable(logging.CRITICAL)   # 🔇 suppress logging
+                fn()
+            finally:
+                logging.disable(old_disable)
+                sys.stdout, sys.stderr = old_stdout, old_stderr
+
+            out = buf_out.getvalue()
+        except Exception:
+            ok = False
+        else:
+            if spec['kind'] == 'equals':
+                ok = (out == spec['expected'])
+            elif spec['kind'] == 'lines':
+                ok = (out.splitlines(keepends=True) == spec['expected'])
+            else:
+                ok = False
+
+    if args_pause:
+        input("Press Enter to continue...")
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+    return chosen_label, ok
+
+
+
 Wrap run_session loop
 
 Find the main for ex in order: loop inside run_session and change it to:
