@@ -1,52 +1,87 @@
-5: {
-    "platform": "terraform",
-    "title": "Terraform – Snippet 5",
-    "desc": "Ensure unique resource names for multiple instances",
-    "buggy": """resource "aws_instance" "web" {
-  ami           = "ami-123456"
-  instance_type = "t2.micro"
-}
+def write_summary_pdf(path, title, name, ts, lines, footer):
+    """
+    Minimal, stdlib-only PDF writer (single page) that *always* prints the footer.
+    If body text would overflow the page, it truncates and adds a '... (+N more)' line.
+    """
+    # Page geometry
+    width, height = 595, 842          # A4-ish in points (approx)
+    margin_top = 56
+    margin_bottom = 56
+    leading = 16
 
-resource "aws_instance" "web" {
-  ami           = "ami-789012"
-  instance_type = "t2.micro"
-}
-""",
-    "options": [
-        {
-            "ok": True,
-            "code": """resource "aws_instance" "web1" {
-  ami           = "ami-123456"
-  instance_type = "t2.micro"
-}
+    # Build text stream (Type1 Helvetica)
+    def _esc(s):  # local escape (kept here so function is standalone)
+        return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
-resource "aws_instance" "web2" {
-  ami           = "ami-789012"
-  instance_type = "t2.micro"
-}
-""",
-            "explanation": "Each resource needs a unique local name (web1, web2), or use count/for_each."
-        },
-        {
-            "ok": False,
-            "code": """resource "aws_instance" "web" {
-  ami           = "ami-123456"
-  instance_type = "t2.micro"
-}
+    y = height - margin_top
+    text_chunks = []
 
-resource "aws_instance" "web" {
-  ami           = "ami-123456"
-  instance_type = "t2.micro"
-}
-""",
-        },
-        {
-            "ok": False,
-            "code": """resource "aws_instance" "web" {
-  ami           = ["ami-123456","ami-789012"]
-  instance_type = "t2.micro"
-}
-""",
-        },
-    ]
-},
+    def put_line(sz, text):
+        nonlocal y
+        text_chunks.append(f"BT /F1 {sz} Tf 50 {y} Td ({_esc(text)}) Tj ET")
+        y -= leading
+
+    # Header
+    put_line(16, title); y -= 6
+    put_line(12, f"Candidate: {name}")
+    put_line(12, f"Timestamp: {ts}"); y -= 6
+
+    # --- Reserve space for footer ---
+    # We need space for each footer line + a small spacer line
+    reserved = leading * (len(footer) + 2)
+    usable_height = y - margin_bottom - reserved
+    max_body_lines = max(0, int(usable_height // leading))
+
+    body = list(lines)
+    if len(body) > max_body_lines:
+        overflow = len(body) - max_body_lines
+        # Keep space for one extra summary line if possible
+        if max_body_lines >= 1:
+            body = body[:max_body_lines - 1] + [f"... (+{overflow} more)"]
+        else:
+            body = []  # no room; footer will still print
+
+    for ln in body:
+        put_line(12, ln)
+
+    # Small spacer before footer
+    y -= leading
+
+    # Footer (guaranteed to fit)
+    for ln in footer:
+        put_line(12, ln)
+
+    # Assemble PDF
+    stream = "\n".join(text_chunks).encode("latin-1", "replace")
+    out = bytearray(b"%PDF-1.4\n")
+    xref = [0]
+
+    def obj(payload: bytes):
+        xref.append(len(out))
+        if not payload.endswith(b"\n"):
+            payload += b"\n"
+        out.extend(payload)
+        out.extend(b"endobj\n")
+
+    # 1) Catalog, 2) Pages, 3) Page, 4) Contents, 5) Font
+    obj(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>")
+    obj(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+    obj(f"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".encode())
+    obj(b"4 0 obj\n<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream")
+    obj(b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+    # XRef
+    xref_pos = len(out)
+    out.extend(b"xref\n")
+    out.extend(f"0 {len(xref)}\n".encode())
+    out.extend(b"0000000000 65535 f \n")
+    for off in xref[1:]:
+        out.extend(f"{off:010d} 00000 n \n".encode())
+    out.extend(b"trailer\n")
+    out.extend(f"<< /Size {len(xref)} /Root 1 0 R >>\n".encode())
+    out.extend(b"startxref\n")
+    out.extend(f"{xref_pos}\n".encode())
+    out.extend(b"%%EOF")
+
+    with open(path, "wb") as f:
+        f.write(out)
