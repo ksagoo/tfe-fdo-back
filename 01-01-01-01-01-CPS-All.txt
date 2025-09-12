@@ -1,58 +1,101 @@
-def write_summary_pdf(path, title, name, ts, lines, footer):
-    """
-    Minimal, stdlib-only PDF writer (single page) that *always* prints the footer.
-    If body text would overflow the page, it truncates and adds a '... (+N more)' line.
-    """
-    # Page geometry
-    width, height = 595, 842          # A4-ish in points (approx)
-    margin_top = 56
-    margin_bottom = 56
-    leading = 16
+pct = (total/len(rows)*100.0) if rows else 0.0
+footer = ["-"*30, f"Score: {total} / {len(rows)} ({pct:.0f}%)"]
+write_summary_pdf(pdf_path, "Combined Interview - Summary", name, ts, lines, footer)  # now two columns by default
+#write_summary_pdf(pdf_path, "Combined Interview - Summary", name, ts, lines, footer, columns=1)
 
-    # Build text stream (Type1 Helvetica)
-    def _esc(s):  # local escape (kept here so function is standalone)
+
+
+
+
+def write_summary_pdf(path, title, name, ts, lines, footer, columns=2):
+    """
+    Minimal, stdlib-only PDF writer (single page) with multi-column body.
+    - Always reserves room for the footer (so totals/percent are guaranteed to print).
+    - If body overflows total capacity, appends a '... (+N more)' line at the end.
+    - 'columns' controls number of columns for the body (default 2).
+    """
+
+    # ---- Page geometry ----
+    width, height = 595, 842             # A4-ish (points)
+    margin_left, margin_right = 50, 50
+    margin_top, margin_bottom = 56, 56
+    leading = 16
+    gutter = 24  # space between columns
+
+    # ---- Local text escaper ----
+    def _esc(s):
         return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
+    # ---- Collect page text ops ----
+    text_ops = []
+    def put_line(x, y, sz, text):
+        text_ops.append(f"BT /F1 {sz} Tf {x} {y} Td ({_esc(text)}) Tj ET")
+
+    # ---- Header ----
     y = height - margin_top
-    text_chunks = []
+    put_line(margin_left, y, 16, title); y -= (leading + 6)
+    put_line(margin_left, y, 12, f"Candidate: {name}"); y -= leading
+    put_line(margin_left, y, 12, f"Timestamp: {ts}"); y -= (leading + 6)
 
-    def put_line(sz, text):
-        nonlocal y
-        text_chunks.append(f"BT /F1 {sz} Tf 50 {y} Td ({_esc(text)}) Tj ET")
-        y -= leading
+    # ---- Compute body+footer geometry ----
+    # Reserve vertical space for footer (each footer line + a spacer line)
+    reserved_footer_h = leading * (len(footer) + 2)
+    top_y_for_body = y
+    bottom_limit = margin_bottom + reserved_footer_h
+    usable_height = max(0, top_y_for_body - bottom_limit)
+    max_lines_per_col = int(usable_height // leading)
 
-    # Header
-    put_line(16, title); y -= 6
-    put_line(12, f"Candidate: {name}")
-    put_line(12, f"Timestamp: {ts}"); y -= 6
+    # ---- Compute columns X positions ----
+    col_width_total = width - margin_left - margin_right
+    if columns < 1:
+        columns = 1
+    col_width = (col_width_total - gutter * (columns - 1)) / columns
+    col_x = [margin_left + i * (col_width + gutter) for i in range(columns)]
 
-    # --- Reserve space for footer ---
-    # We need space for each footer line + a small spacer line
-    reserved = leading * (len(footer) + 2)
-    usable_height = y - margin_bottom - reserved
-    max_body_lines = max(0, int(usable_height // leading))
-
+    # ---- Split body into columns ----
+    # Capacity across all columns:
+    capacity = max_lines_per_col * columns
     body = list(lines)
-    if len(body) > max_body_lines:
-        overflow = len(body) - max_body_lines
-        # Keep space for one extra summary line if possible
-        if max_body_lines >= 1:
-            body = body[:max_body_lines - 1] + [f"... (+{overflow} more)"]
+
+    overflow = 0
+    if len(body) > capacity:
+        overflow = len(body) - capacity
+        # Reserve last slot for overflow marker if at least one line can print
+        if capacity >= 1:
+            body = body[:capacity - 1] + [f"... (+{overflow} more)"]
         else:
-            body = []  # no room; footer will still print
+            body = []  # no space at all; footer will still appear
 
-    for ln in body:
-        put_line(12, ln)
+    # Render body column by column
+    # Layout: fill col 0 top->bottom, then col 1, etc.
+    idx = 0
+    for c in range(columns):
+        y_col = top_y_for_body
+        for _ in range(max_lines_per_col):
+            if idx >= len(body):
+                break
+            put_line(col_x[c], y_col, 12, body[idx])
+            y_col -= leading
+            idx += 1
+        if idx >= len(body):
+            break
 
-    # Small spacer before footer
-    y -= leading
+    # ---- Footer (guaranteed to fit) ----
+    y_footer_start = margin_bottom + (leading * len(footer)) + leading  # include spacer
+    y_footer = y_footer_start
+    # small spacer
+    y_footer = margin_bottom + (leading * (len(footer) + 1))
+    # Print footer flush left, single column
+    y_footer = margin_bottom + (leading * (len(footer)))
+    # Draw a spacer line above footer
+    put_line(margin_left, margin_bottom + (leading * (len(footer) + 1)), 12, " ")
+    # Now draw footer lines (bottom-up or top-down? We'll do top-down from bottom margin upward)
+    yf = margin_bottom + (leading * (len(footer)))
+    for i, ln in enumerate(footer[::-1]):  # reverse so the last footer line sits at margin_bottom + leading
+        put_line(margin_left, margin_bottom + (leading * (i + 1)), 12, ln)
 
-    # Footer (guaranteed to fit)
-    for ln in footer:
-        put_line(12, ln)
-
-    # Assemble PDF
-    stream = "\n".join(text_chunks).encode("latin-1", "replace")
+    # ---- Assemble PDF ----
+    stream = "\n".join(text_ops).encode("latin-1", "replace")
     out = bytearray(b"%PDF-1.4\n")
     xref = [0]
 
@@ -66,7 +109,12 @@ def write_summary_pdf(path, title, name, ts, lines, footer):
     # 1) Catalog, 2) Pages, 3) Page, 4) Contents, 5) Font
     obj(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>")
     obj(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-    obj(f"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".encode())
+    obj(
+        f"3 0 obj\n<< /Type /Page /Parent 2 0 R "
+        f"/MediaBox [0 0 {width} {height}] "
+        f"/Resources << /Font << /F1 5 0 R >> >> "
+        f"/Contents 4 0 R >>".encode()
+    )
     obj(b"4 0 obj\n<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream")
     obj(b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
 
