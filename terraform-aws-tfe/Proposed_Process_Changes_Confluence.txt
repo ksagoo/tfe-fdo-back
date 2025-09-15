@@ -1,0 +1,60 @@
+h1. Proposed Process Changes – Review & Backlog Preparation
+
+This page captures all proposed changes across modules. The intent is to review feasibility, agree on scope, and create Jira backlog tickets for implementation.
+
+h2. Module: Access Group
+
+|| # || Requirement || Priority (High / Medium / Low) || Status (Proposed / In Review / Approved / Backlogged) || Target Release / Sprint || Notes / Discussion || Decision || Jira Ticket ||
+| 1 | Review and update User Guide with latest Front Door Process changes | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 2 | Add previously recorded demo link to Confluence User Guide | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 3 | Update Front Door Form to include additional comments for Region & Country selection | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 4 | Implement logic to select 'Global' if consumer base spans multiple regions | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 5 | Add section in Front Door Form for Requester (ITSO) and Approval (Akamai L7 team) details | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 6 | Customize approval workflow to include L7 Team for verification/approval | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 7 | Restrict use of Standard Change to L7 team only in the Front Door Process | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 8 | Enable Normal Change option for ITSO in the Front Door Process | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 9 | Review and update templates to support Normal Change for ITSO | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 10 | Document the updated process and communicate changes to stakeholders | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+
+h2. Module: Security Configuration Activations
+
+|| # || Requirement || Priority (High / Medium / Low) || Status (Proposed / In Review / Approved / Backlogged) || Target Release / Sprint || Notes / Discussion || Decision || Jira Ticket ||
+| 1 | Test Akamai Security Configuration Activation Module process using Normal Change (assigned to PB/KS) | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 2 | Restrict process usage during incidents for ITSO users | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 3 | Update process to restrict change type as per requirements | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 4 | Remove L7 Team approval/deny step from process for production handover to ITSO | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 5 | Obtain and provide a valid Normal Change for DEV account testing (assigned to Sai) | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 6 | Migrate current Confluence pages from EPS to new CyberWASp umbrella | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 7 | Compile and provide list of users requiring access to new Confluence CyberWASp to Mike | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 8 | Add initial membership to Confluence CyberWASp as per provided list | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 9 | Update documentation to reflect new process and Confluence location | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+
+h2. Module: Onboarding Front Door Process
+
+|| # || Requirement || Priority (High / Medium / Low) || Status (Proposed / In Review / Approved / Backlogged) || Target Release / Sprint || Notes / Discussion || Decision || Jira Ticket ||
+| 1 | Add cost legend/comment to onboarding form to guide ITSO’s on SAN certificate usage | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 2 | Update onboarding form to assist ITSO’s who may not know the Access Group Name | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 3 | Integrate Akamai Access Group Creation Front Door form as a prerequisite for onboarding | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 4 | Ensure CPS module checks prevent duplicate certificate creation | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 5 | Add guidance for ITSO’s to create Normal Change tickets at least 2 days in advance for cert creation | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 6 | Implement Change Ticket validation as part of certificate creation process | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 7 | Align Cert Creation and Access Group Creation to use the same Change Ticket where possible | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 8 | Maintain two Change Request process for onboarding: one for cert creation, one for property activation | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 9 | Limit Security Config creation to prevent duplicates | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 10 | Send approval emails to L7 Team to confirm Security Config or derivative does not already exist | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 11 | Update process to ensure both Non-Prod and Prod Site Delivery/Security Config are created before activation | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 12 | Update User Guide and Front Door Form to clarify Non-Prod and Prod configs must be created before activation | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 13 | Ensure CNAME updates only trigger traffic flow after activation | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 14 | Send DNS notification email after activation, not before contacting DNS Team | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 15 | Update process to require ITSO’s to create change ticket before contacting DNS Team | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 16 | Document and integrate Site Shield Activation as a manual process post-DNS cutover | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 17 | Add Site Shield Activation to process documentation | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+| 18 | Does not include Version Notes & Activation Notes, these elements are critical in Audit Trails (Both Site Delivery & Security Config) | High / Medium / Low | Proposed / In Review / Approved / Backlogged |  |  |  |  |
+
+h2. Next Steps
+
+* During review, select the correct *Priority* and *Status* for each requirement.
+* Assign a *Target Release / Sprint* to approved items.
+* Capture feasibility notes and assign ownership.
+* Create Jira backlog tickets for all approved requirements.
+* Track decisions and progress directly in this page.
