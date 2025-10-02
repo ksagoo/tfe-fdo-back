@@ -138,4 +138,166 @@ update_config_hostnames_with_fqdns(session, base_url, config_id, version, fqdn_l
 That’s it. With these two calls, the “Hostnames currently associated with this configuration” panel will always show the union of Non-Prod and Prod FQDNs, regardless of creation order or UI auto-updates.
 
 
+---------------------------------------------------------------------------
+Updated Bypass lists DoS function
+Perfect—here’s a drop-in replacement for your original reassign_dos_protection_rate_policies that keeps all the cloning logic and fixes the DoS “NetworkListCondition” to use the cloned SC-<access_group> … bypass lists (instead of the template list). It also scrubs read-only fields before PUT.
+
+def reassign_dos_protection_rate_policies(
+    session,
+    base_url,
+    config_id,
+    version,
+    access_group,
+    template_policy_name_prefix="Security Policy Template",
+    target_policy_id: str | None = None,   # optional: only fix policies attached to this security policy
+    activate_clones: bool = True,          # keep your staging activation behavior
+):
+    """
+    1) For every DoS rate policy attached to this config/version:
+       - If its name starts with the template prefix, clone it to 'SC-<access_group> <suffix>'.
+       - Otherwise keep the existing policy id.
+    2) For each kept/cloned policy, rewrite additionalMatchOptions/NetworkListCondition
+       values so that any template client list names/ids are replaced by the
+       corresponding 'SC-<access_group> …' client list (if found).
+    3) PUT the cleaned policy back, then update the config's dos-rates assignment list.
+    """
+    list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/dos-rates"
+    clone_url = f"{base_url}/appsec/v1/rate-policies/clone"
+    policy_url_template = f"{base_url}/appsec/v1/rate-policies/{{policy_id}}"
+
+    summary = {"processed": 0, "successful": 0, "failed": 0, "fixed_conditions": 0, "details": []}
+
+    # helper: resolve the cloned client-list id from either a template-like name or any name fragment
+    def _resolve_client_list_id_from_name(name: str) -> str | None:
+        # if it looks like a template list name, derive the expected SC- name
+        expected = name
+        if "Security Policy Template" in name:
+            suffix = name.split("Security Policy Template", 1)[-1].strip()
+            expected = f"SC-{access_group} {suffix}".strip()
+
+        # try to find a client list whose *name* contains/equals the expected
+        matches = search_client_lists_by_name(session, base_url, expected)
+        return matches[0][0] if matches else None  # (listId, name) -> listId
+
+    try:
+        # 1) Read the assignment list
+        resp = session.get(list_url)
+        resp.raise_for_status()
+        policies = resp.json().get("ratePolicies", [])
+        updated_assignments: list[str] = []
+
+        for p in policies:
+            summary["processed"] += 1
+            orig_name = p.get("name", "")
+            orig_id = p.get("id")
+
+            # decide which policy id we will keep (clone or original)
+            kept_id = orig_id
+            kept_name = orig_name
+
+            # clone if it looks like a template copy
+            if orig_name.startswith(template_policy_name_prefix):
+                suffix = orig_name.replace(template_policy_name_prefix, "").strip()
+                clone_name = f"SC-{access_group} {suffix}".strip()
+
+                # if a policy with clone_name already exists in the assignment list, reuse it
+                existing = next((rp for rp in policies if rp.get("name") == clone_name), None)
+                if existing:
+                    kept_id = existing.get("id")
+                    kept_name = clone_name
+                else:
+                    try:
+                        clone_payload = {
+                            "cloneFromRatePolicyId": orig_id,
+                            "name": clone_name,
+                            "description": f"Cloned from {orig_name}",
+                            "matchType": p.get("matchType"),
+                        }
+                        c = session.post(clone_url, json=clone_payload)
+                        c.raise_for_status()
+                        kept_id = c.json().get("id")
+                        kept_name = clone_name
+
+                        if activate_clones and kept_id:
+                            act = session.post(policy_url_template.format(policy_id=kept_id) + "/activate",
+                                               json={"network": "STAGING"})
+                            # don't fail build on activation errors; it's best-effort
+                        summary["successful"] += 1
+                        summary["details"].append({"template": orig_name, "clone": kept_name, "status": "success"})
+                    except Exception as clone_err:
+                        # fallback to the original template policy id
+                        kept_id = orig_id
+                        kept_name = orig_name
+                        summary["failed"] += 1
+                        summary["details"].append(
+                            {"template": orig_name, "status": "clone_failed", "error": str(clone_err)}
+                        )
+
+            # 2) Fix NetworkListCondition for the kept policy (cloned or original)
+            try:
+                # fetch full policy
+                d = session.get(policy_url_template.format(policy_id=kept_id))
+                d.raise_for_status()
+                full = d.json()
+
+                # optional: only touch policies attached to a specific security policy
+                if target_policy_id and full.get("policyId") != target_policy_id:
+                    updated_assignments.append(kept_id)
+                    continue
+
+                changed = False
+                for opt in full.get("additionalMatchOptions", []):
+                    if opt.get("type") != "NetworkListCondition":
+                        continue
+                    new_vals = []
+                    for v in opt.get("values", []):
+                        v_str = str(v)
+
+                        # if appears numeric (already an id), keep as-is
+                        if v_str.isdigit():
+                            new_vals.append(v)
+                            continue
+
+                        # treat as a name and try to resolve it to the SC- list id
+                        resolved = _resolve_client_list_id_from_name(v_str)
+                        new_vals.append(resolved if resolved else v)  # fall back to original if not found
+                        if resolved and resolved != v:
+                            changed = True
+
+                    if changed:
+                        opt["values"] = new_vals
+
+                # scrub read-only fields before PUT
+                for ro in ("id", "updateDate", "used"):
+                    full.pop(ro, None)
+
+                if changed:
+                    u = session.put(policy_url_template.format(policy_id=kept_id), json=full)
+                    u.raise_for_status()
+                    summary["fixed_conditions"] += 1
+
+                updated_assignments.append(kept_id)
+
+            except Exception as fix_err:
+                summary["failed"] += 1
+                summary["details"].append(
+                    {"id": kept_id, "name": kept_name, "status": "update_failed", "error": str(fix_err)}
+                )
+                # still keep this policy in the assignment list to avoid breaking the config
+                updated_assignments.append(kept_id)
+
+        # 3) Replace the assignment list in the config
+        try:
+            put_resp = session.put(list_url, json={"ratePolicies": updated_assignments})
+            put_resp.raise_for_status()
+        except Exception as assign_err:
+            summary["failed"] += 1
+            summary["details"].append({"status": "assign_failed", "error": str(assign_err)})
+
+    except Exception as e:
+        summary["failed"] += 1
+        summary["details"].append({"status": "failed", "error": str(e)})
+
+    return summary
+
 
