@@ -1,1 +1,71 @@
 test
+parser.add_argument(
+    "--version-notes",
+    dest="version_notes",
+    required=False,
+    help="Optional Jira issue reference for version notes. Example: --version-notes ABC-123"
+)
+
+def set_config_version_notes(session, base_url, config_id, version, jira_issue=None, is_prod=False):
+    """
+    Writes version notes at the CONFIG VERSION level (not policy).
+    If jira_issue is provided, uses: 'Jira Ticket Ref for <Env>: <jira_issue>'
+    Otherwise uses default: 'Automatically created for <Env> onboarding'
+    """
+    env_label = "Prod" if is_prod else "NonProd"
+    note = (
+        f"Jira Ticket Ref for {env_label}: {jira_issue}"
+        if jira_issue else
+        f"Automatically created for {env_label} onboarding"
+    )
+
+    url = urljoin(base_url, f"/appsec/v1/configs/{config_id}/versions/{version}/version-notes")
+    payload = {"notes": note}
+
+    try:
+        resp = session.put(url, json=payload)
+        resp.raise_for_status()
+        print(f"[SUCCESS] Version notes set for v{version} ({env_label}): {note}")
+        return True
+    except Exception as e:
+        print(f"[WARN] Failed to set version notes for v{version} ({env_label}): {e}")
+        return False
+
+3) Call it from main()
+A) When you create NonProd (new config path)
+
+Right after you’ve created the NonProd policy (i.e., after policy_id = create_default_policy(...)), add:
+
+# Set version notes for NonProd (v1)
+set_config_version_notes(
+    session=session,
+    base_url=base_url,
+    config_id=config_id,
+    version=1,
+    jira_issue=args.version_notes,
+    is_prod=False
+)
+
+
+B) When you onboard Prod on an existing config
+
+Inside your if existing_config_id and args.isProd: branch, after the PROD policy is created by onboard_prod_policy(...), add:
+
+# Belt & braces: ensure version notes for Prod (v1) on existing config
+set_config_version_notes(
+    session=session,
+    base_url=base_url,
+    config_id=existing_config_id,
+    version=1,
+    jira_issue=args.version_notes,
+    is_prod=True
+)
+
+That’s it. This will:
+
+Use the Jira issue if Jenkins passes --version-notes ${params.JIRA_ISSUE}
+
+Fall back to the default “Automatically created for … onboarding” if not provided
+
+Write notes at the config version level for both NonProd and (later) Prod creations.
+
