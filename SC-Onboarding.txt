@@ -1,393 +1,109 @@
-test
-parser.add_argument(
-    "--version-notes",
-    dest="version_notes",
-    required=False,
-    help="Optional Jira issue reference for version notes. Example: --version-notes ABC-123"
-)
-
-def set_config_version_notes(session, base_url, config_id, version, jira_issue=None, is_prod=False):
+def ensure_config_hostnames(session, base_url, config_id, version, fqdn_list, strict=False):
     """
-    Writes version notes at the CONFIG VERSION level (not policy).
-    If jira_issue is provided, uses: 'Jira Ticket Ref for <Env>: <jira_issue>'
-    Otherwise uses default: 'Automatically created for <Env> onboarding'
+    Ensure that all specified FQDNs (for Non-Prod and Prod) are associated
+    with the given security configuration version.
+
+    Behavior:
+      - Fetches currently selected hostnames.
+      - Fetches selectable hostnames (what Akamai allows).
+      - Merges new FQDNs with existing ones.
+      - Sends PUT /selected-hostnames with full combined list.
     """
-    env_label = "Prod" if is_prod else "NonProd"
-    note = (
-        f"Jira Ticket Ref for {env_label}: {jira_issue}"
-        if jira_issue else
-        f"Automatically created for {env_label} onboarding"
-    )
+    import requests
 
-    url = urljoin(base_url, f"/appsec/v1/configs/{config_id}/versions/{version}/version-notes")
-    payload = {"notes": note}
+    sel_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selected-hostnames"
+    selectable_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selectable-hostnames"
 
+    def _norm(hosts):
+        return {h.strip().lower() for h in (hosts or []) if h and h.strip()}
+
+    # Fetch selectable hostnames
     try:
-        resp = session.put(url, json=payload)
+        resp = session.get(selectable_url)
         resp.raise_for_status()
-        print(f"[SUCCESS] Version notes set for v{version} ({env_label}): {note}")
-        return True
+        selectable = _norm(resp.json().get("hostnames", []))
     except Exception as e:
-        print(f"[WARN] Failed to set version notes for v{version} ({env_label}): {e}")
-        return False
+        print(f"[ERROR] Unable to fetch selectable hostnames: {e}")
+        return {"before": [], "added": [], "skipped": fqdn_list, "final": []}
 
-3) Call it from main()
-A) When you create NonProd (new config path)
-
-Right after you’ve created the NonProd policy (i.e., after policy_id = create_default_policy(...)), add:
-
-# Set version notes for NonProd (v1)
-set_config_version_notes(
-    session=session,
-    base_url=base_url,
-    config_id=config_id,
-    version=1,
-    jira_issue=args.version_notes,
-    is_prod=False
-)
-
-
-B) When you onboard Prod on an existing config
-
-Inside your if existing_config_id and args.isProd: branch, after the PROD policy is created by onboard_prod_policy(...), add:
-
-# Belt & braces: ensure version notes for Prod (v1) on existing config
-set_config_version_notes(
-    session=session,
-    base_url=base_url,
-    config_id=existing_config_id,
-    version=1,
-    jira_issue=args.version_notes,
-    is_prod=True
-)
-
-That’s it. This will:
-
-Use the Jira issue if Jenkins passes --version-notes ${params.JIRA_ISSUE}
-
-Fall back to the default “Automatically created for … onboarding” if not provided
-
-Write notes at the config version level for both NonProd and (later) Prod creations.
-
-
-def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
-    """
-    Ensure the security config's 'hostnames' includes all entries in fqdn_list.
-    Tries the config-level hostnames endpoint first, then falls back to the
-    versioned endpoint (some accounts expose one or the other).
-    """
-    wanted = set([h.strip().lower() for h in fqdn_list if h and h.strip()])
-
-    def _get(url):
-        resp = session.get(url)
-        if resp.status_code == 404:
-            return None, 404
-        resp.raise_for_status()
-        data = resp.json() if resp.text else {}
-        current = set([h.strip().lower() for h in data.get("hostnames", [])])
-        return current, resp.status_code
-
-    def _put(url, all_hosts):
-        payload = {"hostnames": sorted(all_hosts)}
-        r = session.put(url, json=payload)
-        r.raise_for_status()
-        return True
-
-    # Preferred (config-level) endpoint
-    cfg_url = f"{base_url}/appsec/v1/configs/{config_id}/hostnames"
-    # Fallback (some tenants expose hostnames per version)
-    ver_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/1/hostnames"
-
-    # Try config-level GET
-    current, code = _get(cfg_url)
-    if code != 404:
-        all_hosts = (current or set()) | wanted
-        if all_hosts != (current or set()):
-            _put(cfg_url, all_hosts)
-        return {"where": "config", "before": sorted(current or []), "after": sorted(all_hosts)}
-
-    # Fallback: version-level GET/PUT
-    current, _ = _get(ver_url)
-    all_hosts = (current or set()) | wanted
-    if all_hosts != (current or set()):
-        _put(ver_url, all_hosts)
-    return {"where": "version", "before": sorted(current or []), "after": sorted(all_hosts)}
-
-2) Call it from main()
-A) When you’re doing Prod onboarding on an existing config
-
-Immediately after onboard_prod_policy(...) returns (that’s the spot you just added the version-notes “belt & braces”), add:
-
-# Also make sure the config’s 'Hostnames currently associated with this configuration'
-# includes the PROD FQDNs we just onboarded.
-ensure_config_hostnames(session, base_url, existing_config_id, args.fqdn)
-return None
-
-
-
-(Place it right before your return None in that Prod branch—i.e., just after the call to onboard_prod_policy(...) and after set_config_version_notes(..., is_prod=True).)
-
-B) When you’re creating Non-Prod from scratch
-
-After you create the config/policy (your current flow: create_security_config(...), then create_default_policy(...), then reassignments), add:
-
-You can put this right after the create_default_policy(...) call (it’s harmless if the hostnames already match because the function will no-op).
-
-# Belt & braces: make sure the config carries these Non-Prod FQDNs
-ensure_config_hostnames(session, base_url, config_id, fqdn_list)
-
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-
-def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
-    """
-    Ensure the security config's 'hostnames' includes all entries in fqdn_list.
-    Handles both /configs/{id}/hostnames (preferred) and /configs/{id}/versions/1/hostnames (fallback).
-    """
-    wanted = set([h.strip().lower() for h in fqdn_list if h and h.strip()])
-
-    def _get(url):
-        resp = session.get(url)
-        if resp.status_code == 404:
-            return None, 404
-        resp.raise_for_status()
-        data = resp.json() if resp.text else {}
-        current = set([h.strip().lower() for h in data.get("hostnames", [])])
-        return current, resp.status_code
-
-    def _put(url, all_hosts):
-        payload = {"hostnames": sorted(all_hosts)}
-        print(f"[INFO] Updating hostnames via {url} -> {payload}")
-        r = session.put(url, json=payload)
-        if r.status_code == 404:
-            print("[WARN] 404 on PUT, endpoint may not be supported.")
-            return False
-        r.raise_for_status()
-        return True
-
-    # Try config-level first (preferred)
-    cfg_url = f"{base_url}/appsec/v1/configs/{config_id}/hostnames"
-    current, code = _get(cfg_url)
-    if code != 404:
-        all_hosts = (current or set()) | wanted
-        if all_hosts != (current or set()):
-            _put(cfg_url, all_hosts)
-        print(f"[INFO] Hostnames updated on config {config_id}: {sorted(all_hosts)}")
-        return
-
-    # Fallback: version-level
-    ver_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/1/hostnames"
-    current, _ = _get(ver_url)
-    all_hosts = (current or set()) | wanted
-    if all_hosts != (current or set()):
-        _put(ver_url, all_hosts)
-    print(f"[INFO] Hostnames updated on version 1 of config {config_id}: {sorted(all_hosts)}")
-
-
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-
-def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
-    """
-    Ensures that the given FQDNs are explicitly associated with the Web Security Config.
-    This uses the config-level hostnames endpoint so updates reflect in the GUI.
-    """
-    fqdn_list = sorted(set([f.strip().lower() for f in fqdn_list if f.strip()]))
-    url = f"{base_url}/appsec/v1/configs/{config_id}/hostnames"
-
-    # Retrieve existing hostnames
-    resp = session.get(url)
-    if resp.status_code == 404:
-        print(f"[WARN] Hostnames endpoint not found for config {config_id}.")
-        return
-    resp.raise_for_status()
-    existing = sorted(set(resp.json().get("hostnames", [])))
-
-    # Merge and update if needed
-    merged = sorted(set(existing) | set(fqdn_list))
-    if merged != existing:
-        payload = {"hostnames": merged}
-        print(f"[INFO] Updating config-level hostnames: {payload}")
-        put_resp = session.put(url, json=payload)
-        put_resp.raise_for_status()
-        print(f"[SUCCESS] Config {config_id} hostnames updated to: {merged}")
-    else:
-        print(f"[INFO] No hostname changes needed for config {config_id}. Current: {merged}")
-#################################################################################################################
-
-def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
-    fqdn_list = sorted(set([f.strip().lower() for f in fqdn_list if f.strip()]))
-
-    # Try config-level endpoint first (GUI-level association)
-    config_url = f"{base_url}/appsec/v1/configs/{config_id}/hostnames"
-    version_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/1/hostnames"
-
-    for url in [config_url, version_url]:
-        try:
-            resp = session.get(url)
-            if resp.status_code == 404:
-                continue  # try the next endpoint
-            resp.raise_for_status()
-            existing = sorted(set(resp.json().get("hostnames", [])))
-            merged = sorted(set(existing) | set(fqdn_list))
-            if merged != existing:
-                payload = {"hostnames": merged}
-                print(f"[INFO] Updating hostnames via {url} -> {payload}")
-                put_resp = session.put(url, json=payload)
-                put_resp.raise_for_status()
-                print(f"[SUCCESS] Hostnames updated on {url}: {merged}")
-            else:
-                print(f"[INFO] No hostname changes needed on {url}. Current: {merged}")
-            return  # stop after first successful endpoint
-        except Exception as e:
-            print(f"[WARN] Hostnames update failed on {url}: {e}")
-
-    print(f"[ERROR] No supported hostnames endpoint found for config {config_id}.")
-
-
-***************************************************************************************************************************************************
-
-
-def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
-    """
-    Ensures that the given FQDNs are explicitly associated with the Web Security Config.
-    Tries the versioned endpoint first, then falls back to the config-level endpoint.
-    Merges with any existing hostnames (idempotent).
-    """
-    want = sorted(set([h.strip().lower() for h in fqdn_list if h and h.strip()]))
-    if not want:
-        print(f"[INFO] No FQDNs provided to associate with config {config_id}. Skipping.")
-        return
-
-    # Preferred (and observed working) endpoint: versions/1/hostnames
-    url_versioned_get = f"{base_url}/appsec/v1/configs/{config_id}/versions/1/hostnames"
-    url_versioned_put = url_versioned_get
-
-    # Fallback: config-level hostnames endpoint
-    url_cfg_get  = f"{base_url}/appsec/v1/configs/{config_id}/hostnames"
-    url_cfg_post = url_cfg_get  # POST on the config-level endpoint
-
-    def _merge_and_equal(existing, desired):
-        existing_norm = sorted(set([h.strip().lower() for h in existing if h and h.strip()]))
-        merged = sorted(set(existing_norm) | set(desired))
-        return existing_norm, merged, (existing_norm == merged)
-
-    # 1) Try versioned endpoint
+    # Fetch already selected hostnames
+    selected_before = set()
     try:
-        r = session.get(url_versioned_get)
-        if r.ok:
-            existing = r.json().get("hostnames", [])
-            existing_norm, merged, no_change = _merge_and_equal(existing, want)
-
-            if no_change:
-                print(f"[INFO] Hostnames already up to date for version 1 of config {config_id}.")
-                print(f"[INFO] Total hostnames associated with config {config_id}: {len(merged)} -> {merged}")
-                return
-
-            put = session.put(url_versioned_put, json={"hostnames": merged})
-            put.raise_for_status()
-            print(f"[SUCCESS] Hostnames updated on version 1 of config {config_id}.")
-            print(f"[INFO] Total hostnames associated with config {config_id}: {len(merged)} -> {merged}")
-            return
+        resp = session.get(sel_url)
+        if resp.status_code == 404:
+            selected_before = set()
         else:
-            # If GET isn't supported, continue to fallback
-            pass
-    except requests.exceptions.HTTPError as e:
-        # Some tenants don’t support the versioned endpoint for PUT/GET
-        print(f"[WARN] Versioned hostnames endpoint not supported or failed for config {config_id}: {e}")
-
-    # 2) Fallback to config-level endpoint
-    try:
-        existing = []
-        r2 = session.get(url_cfg_get)
-        if r2.ok:
-            existing = r2.json().get("hostnames", [])
-
-        existing_norm, merged, no_change = _merge_and_equal(existing, want)
-        if no_change:
-            print(f"[INFO] Hostnames already up to date on config-level endpoint for config {config_id}.")
-            print(f"[INFO] Total hostnames associated with config {config_id}: {len(merged)} -> {merged}")
-            return
-
-        # Config-level endpoint typically uses POST
-        post = session.post(url_cfg_post, json={"hostnames": merged})
-        post.raise_for_status()
-        print(f"[SUCCESS] Hostnames updated on config {config_id} (config-level endpoint).")
-        print(f"[INFO] Total hostnames associated with config {config_id}: {len(merged)} -> {merged}")
-        return
-    except requests.exceptions.HTTPError as e:
-        print(f"[INFO] No supported hostnames endpoint found for config {config_id}. Details: {e}")
-
-###########################################################################################################################
-
-def ensure_config_hostnames(session, base_url, config_id, version, fqdn_list):
-    """
-    Ensure the given FQDNs are explicitly associated with the Web Security Configuration.
-    Follows Akamai techdocs: PUT Selected Hostnames.
-
-    Tries the version-scoped endpoint first (GUI-equivalent):
-      /appsec/v1/configs/{configId}/versions/{version}/hostnames
-    Falls back to the non-versioned endpoint if 404:
-      /appsec/v1/configs/{configId}/hostnames
-
-    Returns: list of hostnames that are now set on the config.
-    """
-    def _normalize_hostnames(fqdns):
-        # Deduplicate, case-insensitive; GUI displays lowercase
-        return sorted({h.strip().lower() for h in fqdns if h and h.strip()})
-
-    versioned_path = f"/appsec/v1/configs/{config_id}/versions/{version}/hostnames"
-    unversioned_path = f"/appsec/v1/configs/{config_id}/hostnames"
-
-    # Try versioned first (recommended / GUI uses this)
-    try_paths = [versioned_path, unversioned_path]
-
-    last_err = None
-    for path in try_paths:
-        url = urljoin(base_url, path)
-
-        # Discover current set
-        try:
-            resp = session.get(url)
-            if resp.status_code == 404:
-                # try next path silently
-                last_err = resp
-                continue
             resp.raise_for_status()
-            payload = resp.json() if resp.text else {}
-            current = payload.get("hostnames", [])
-        except requests.exceptions.HTTPError as e:
-            # For non-404s, surface and stop
-            print(f"[ERROR] Failed to fetch hostnames via {path}: {e}")
-            return None
-        except Exception as e:
-            print(f"[ERROR] Unexpected error fetching hostnames via {path}: {e}")
-            return None
+            data = resp.json()
+            if "hostnameList" in data:
+                selected_before = _norm([item.get("hostname") for item in data.get("hostnameList", [])])
+            else:
+                selected_before = _norm(data.get("hostnames", []))
+    except Exception as e:
+        print(f"[WARN] Could not fetch existing selected hostnames (assuming none): {e}")
 
-        # Merge and normalize
-        merged = _normalize_hostnames(list(current) + list(fqdn_list))
+    # Merge current + desired
+    desired = _norm(fqdn_list)
+    not_selectable = sorted(desired - selectable)
+    desired_usable = desired & selectable
 
-        # Short-circuit if nothing to change
-        if _normalize_hostnames(current) == merged:
-            print(f"[INFO] Hostnames already up to date on {('version ' + str(version)) if path == versioned_path else 'config'}: {merged}")
-            return merged
+    if not_selectable:
+        msg = f"[WARN] The following FQDNs are not selectable and will be skipped: {not_selectable}"
+        if strict:
+            raise ValueError(msg)
+        else:
+            print(msg)
 
-        put_body = {"hostnames": merged}
-        try:
-            put_resp = session.put(url, json=put_body)
-            put_resp.raise_for_status()
-            print(f"[INFO] Hostnames updated on {('version ' + str(version)) if path == versioned_path else 'config'} -> {merged}")
-            return merged
-        except requests.exceptions.HTTPError as e:
-            # If this was the versioned path and we get a 404, we’ll try the fallback next loop.
-            if put_resp.status_code == 404 and path == versioned_path:
-                last_err = e
-                continue
-            # Validation / conflict errors are shown clearly
-            msg = getattr(e.response, "text", str(e))
-            print(f"[ERROR] Failed to update hostnames via {path}: {msg}")
-            return None
+    final_set = sorted(selected_before | desired_usable)
 
-    # If we got here, both endpoints were 404 or otherwise missing
-    if last_err is not None:
-        print("[WARN] No supported Selected Hostnames endpoint found for this config/tenant "
-              f"(tried: {versioned_path} and {unversioned_path}).")
-    return None
+    # Preferred payload format (per Akamai techdocs)
+    preferred_payload = {"hostnameList": [{"hostname": h} for h in final_set]}
+
+    def _put(payload):
+        put_resp = session.put(sel_url, json=payload)
+        put_resp.raise_for_status()
+        return put_resp
+
+    # PUT with fallback to legacy shape
+    try:
+        _put(preferred_payload)
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code in (400, 415, 422):
+            print("[INFO] Retrying with legacy payload shape { 'hostnames': [...] }")
+            legacy_payload = {"hostnames": final_set}
+            _put(legacy_payload)
+        else:
+            print(f"[ERROR] PUT selected-hostnames failed: {e}")
+            return {"before": sorted(selected_before), "added": [], "skipped": not_selectable, "final": sorted(selected_before)}
+
+    # Print results
+    added = sorted(list(desired_usable - selected_before))
+    print("\n[INFO] Final selected hostnames now set on the config:")
+    for h in final_set:
+        print(f"  - {h}")
+
+    return {
+        "before": sorted(selected_before),
+        "added": added,
+        "skipped": not_selectable,
+        "final": final_set
+    }
+
+print("\n[INFO] Updating selected hostnames for Non-Prod configuration.")
+ensure_config_hostnames(
+    session=session,
+    base_url=base_url,
+    config_id=config_id,         # newly created config ID
+    version=1,                   # onboarding always starts at version 1
+    fqdn_list=nonprod_fqdns      # list of FQDNs for Non-Prod policy
+)
+
+
+print("\n[INFO] Updating selected hostnames for Prod configuration.")
+ensure_config_hostnames(
+    session=session,
+    base_url=base_url,
+    config_id=existing_config_id,  # same security config ID as Non-Prod
+    version=1,                     # still version 1 (shared config)
+    fqdn_list=prod_fqdns           # list of FQDNs for Prod policy
+)
