@@ -183,6 +183,33 @@ def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
     print(f"[INFO] Hostnames updated on version 1 of config {config_id}: {sorted(all_hosts)}")
 
 
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
+def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
+    """
+    Ensures that the given FQDNs are explicitly associated with the Web Security Config.
+    This uses the config-level hostnames endpoint so updates reflect in the GUI.
+    """
+    fqdn_list = sorted(set([f.strip().lower() for f in fqdn_list if f.strip()]))
+    url = f"{base_url}/appsec/v1/configs/{config_id}/hostnames"
+
+    # Retrieve existing hostnames
+    resp = session.get(url)
+    if resp.status_code == 404:
+        print(f"[WARN] Hostnames endpoint not found for config {config_id}.")
+        return
+    resp.raise_for_status()
+    existing = sorted(set(resp.json().get("hostnames", [])))
+
+    # Merge and update if needed
+    merged = sorted(set(existing) | set(fqdn_list))
+    if merged != existing:
+        payload = {"hostnames": merged}
+        print(f"[INFO] Updating config-level hostnames: {payload}")
+        put_resp = session.put(url, json=payload)
+        put_resp.raise_for_status()
+        print(f"[SUCCESS] Config {config_id} hostnames updated to: {merged}")
+    else:
+        print(f"[INFO] No hostname changes needed for config {config_id}. Current: {merged}")
 
 
