@@ -241,3 +241,78 @@ def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
             print(f"[WARN] Hostnames update failed on {url}: {e}")
 
     print(f"[ERROR] No supported hostnames endpoint found for config {config_id}.")
+
+
+***************************************************************************************************************************************************
+
+
+def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
+    """
+    Ensures that the given FQDNs are explicitly associated with the Web Security Config.
+    Tries the versioned endpoint first, then falls back to the config-level endpoint.
+    Merges with any existing hostnames (idempotent).
+    """
+    want = sorted(set([h.strip().lower() for h in fqdn_list if h and h.strip()]))
+    if not want:
+        print(f"[INFO] No FQDNs provided to associate with config {config_id}. Skipping.")
+        return
+
+    # Preferred (and observed working) endpoint: versions/1/hostnames
+    url_versioned_get = f"{base_url}/appsec/v1/configs/{config_id}/versions/1/hostnames"
+    url_versioned_put = url_versioned_get
+
+    # Fallback: config-level hostnames endpoint
+    url_cfg_get  = f"{base_url}/appsec/v1/configs/{config_id}/hostnames"
+    url_cfg_post = url_cfg_get  # POST on the config-level endpoint
+
+    def _merge_and_equal(existing, desired):
+        existing_norm = sorted(set([h.strip().lower() for h in existing if h and h.strip()]))
+        merged = sorted(set(existing_norm) | set(desired))
+        return existing_norm, merged, (existing_norm == merged)
+
+    # 1) Try versioned endpoint
+    try:
+        r = session.get(url_versioned_get)
+        if r.ok:
+            existing = r.json().get("hostnames", [])
+            existing_norm, merged, no_change = _merge_and_equal(existing, want)
+
+            if no_change:
+                print(f"[INFO] Hostnames already up to date for version 1 of config {config_id}.")
+                print(f"[INFO] Total hostnames associated with config {config_id}: {len(merged)} -> {merged}")
+                return
+
+            put = session.put(url_versioned_put, json={"hostnames": merged})
+            put.raise_for_status()
+            print(f"[SUCCESS] Hostnames updated on version 1 of config {config_id}.")
+            print(f"[INFO] Total hostnames associated with config {config_id}: {len(merged)} -> {merged}")
+            return
+        else:
+            # If GET isn't supported, continue to fallback
+            pass
+    except requests.exceptions.HTTPError as e:
+        # Some tenants don’t support the versioned endpoint for PUT/GET
+        print(f"[WARN] Versioned hostnames endpoint not supported or failed for config {config_id}: {e}")
+
+    # 2) Fallback to config-level endpoint
+    try:
+        existing = []
+        r2 = session.get(url_cfg_get)
+        if r2.ok:
+            existing = r2.json().get("hostnames", [])
+
+        existing_norm, merged, no_change = _merge_and_equal(existing, want)
+        if no_change:
+            print(f"[INFO] Hostnames already up to date on config-level endpoint for config {config_id}.")
+            print(f"[INFO] Total hostnames associated with config {config_id}: {len(merged)} -> {merged}")
+            return
+
+        # Config-level endpoint typically uses POST
+        post = session.post(url_cfg_post, json={"hostnames": merged})
+        post.raise_for_status()
+        print(f"[SUCCESS] Hostnames updated on config {config_id} (config-level endpoint).")
+        print(f"[INFO] Total hostnames associated with config {config_id}: {len(merged)} -> {merged}")
+        return
+    except requests.exceptions.HTTPError as e:
+        print(f"[INFO] No supported hostnames endpoint found for config {config_id}. Details: {e}")
+
