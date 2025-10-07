@@ -211,5 +211,3 @@ def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
         print(f"[SUCCESS] Config {config_id} hostnames updated to: {merged}")
     else:
         print(f"[INFO] No hostname changes needed for config {config_id}. Current: {merged}")
-
-
