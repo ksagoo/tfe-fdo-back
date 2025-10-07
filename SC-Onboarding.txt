@@ -316,3 +316,78 @@ def ensure_config_hostnames(session, base_url, config_id, fqdn_list):
     except requests.exceptions.HTTPError as e:
         print(f"[INFO] No supported hostnames endpoint found for config {config_id}. Details: {e}")
 
+###########################################################################################################################
+
+def ensure_config_hostnames(session, base_url, config_id, version, fqdn_list):
+    """
+    Ensure the given FQDNs are explicitly associated with the Web Security Configuration.
+    Follows Akamai techdocs: PUT Selected Hostnames.
+
+    Tries the version-scoped endpoint first (GUI-equivalent):
+      /appsec/v1/configs/{configId}/versions/{version}/hostnames
+    Falls back to the non-versioned endpoint if 404:
+      /appsec/v1/configs/{configId}/hostnames
+
+    Returns: list of hostnames that are now set on the config.
+    """
+    def _normalize_hostnames(fqdns):
+        # Deduplicate, case-insensitive; GUI displays lowercase
+        return sorted({h.strip().lower() for h in fqdns if h and h.strip()})
+
+    versioned_path = f"/appsec/v1/configs/{config_id}/versions/{version}/hostnames"
+    unversioned_path = f"/appsec/v1/configs/{config_id}/hostnames"
+
+    # Try versioned first (recommended / GUI uses this)
+    try_paths = [versioned_path, unversioned_path]
+
+    last_err = None
+    for path in try_paths:
+        url = urljoin(base_url, path)
+
+        # Discover current set
+        try:
+            resp = session.get(url)
+            if resp.status_code == 404:
+                # try next path silently
+                last_err = resp
+                continue
+            resp.raise_for_status()
+            payload = resp.json() if resp.text else {}
+            current = payload.get("hostnames", [])
+        except requests.exceptions.HTTPError as e:
+            # For non-404s, surface and stop
+            print(f"[ERROR] Failed to fetch hostnames via {path}: {e}")
+            return None
+        except Exception as e:
+            print(f"[ERROR] Unexpected error fetching hostnames via {path}: {e}")
+            return None
+
+        # Merge and normalize
+        merged = _normalize_hostnames(list(current) + list(fqdn_list))
+
+        # Short-circuit if nothing to change
+        if _normalize_hostnames(current) == merged:
+            print(f"[INFO] Hostnames already up to date on {('version ' + str(version)) if path == versioned_path else 'config'}: {merged}")
+            return merged
+
+        put_body = {"hostnames": merged}
+        try:
+            put_resp = session.put(url, json=put_body)
+            put_resp.raise_for_status()
+            print(f"[INFO] Hostnames updated on {('version ' + str(version)) if path == versioned_path else 'config'} -> {merged}")
+            return merged
+        except requests.exceptions.HTTPError as e:
+            # If this was the versioned path and we get a 404, we’ll try the fallback next loop.
+            if put_resp.status_code == 404 and path == versioned_path:
+                last_err = e
+                continue
+            # Validation / conflict errors are shown clearly
+            msg = getattr(e.response, "text", str(e))
+            print(f"[ERROR] Failed to update hostnames via {path}: {msg}")
+            return None
+
+    # If we got here, both endpoints were 404 or otherwise missing
+    if last_err is not None:
+        print("[WARN] No supported Selected Hostnames endpoint found for this config/tenant "
+              f"(tried: {versioned_path} and {unversioned_path}).")
+    return None
