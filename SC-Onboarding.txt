@@ -1,62 +1,68 @@
-def ensure_config_hostnames(session, base_url, config_id, version, fqdn_list, strict=False):
+def ensure_config_hostnames(session, base_url, config_id, version, fqdn_list, strict=True):
     """
-    Ensure that all specified FQDNs (for Non-Prod and Prod) are associated
-    with the given security configuration version.
-
+    Ensure all given FQDNs (Non-Prod + Prod) are explicitly associated with this security config version.
+    
     Behavior:
-      - Fetches currently selected hostnames.
-      - Fetches selectable hostnames (what Akamai allows).
-      - Merges new FQDNs with existing ones.
-      - Sends PUT /selected-hostnames with full combined list.
+    - Fetches selectable-hostnames (what Akamai currently allows for this config).
+    - Fetches already selected-hostnames.
+    - Merges current + desired.
+    - PUTs updated combined list using /selected-hostnames.
+    - If strict=True, raises error if any FQDNs not selectable yet.
+      If strict=False, logs a clear warning and continues.
     """
+
     import requests
 
     sel_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selected-hostnames"
     selectable_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selectable-hostnames"
 
-    def _norm(hosts):
+    def _norm_list(hosts):
         return {h.strip().lower() for h in (hosts or []) if h and h.strip()}
 
-    # Fetch selectable hostnames
+    #  Fetch selectable-hostnames
     try:
-        resp = session.get(selectable_url)
-        resp.raise_for_status()
-        selectable = _norm(resp.json().get("hostnames", []))
+        r = session.get(selectable_url)
+        r.raise_for_status()
+        selectable = _norm_list(r.json().get("hostnames", []))
     except Exception as e:
-        print(f"[ERROR] Unable to fetch selectable hostnames: {e}")
-        return {"before": [], "added": [], "skipped": fqdn_list, "final": []}
+        raise RuntimeError(f"Failed to fetch selectable hostnames for config {config_id} v{version}: {e}")
 
-    # Fetch already selected hostnames
+    #  Fetch currently selected-hostnames
     selected_before = set()
     try:
-        resp = session.get(sel_url)
-        if resp.status_code == 404:
-            selected_before = set()
-        else:
-            resp.raise_for_status()
-            data = resp.json()
+        r = session.get(sel_url)
+        if r.status_code != 404:
+            r.raise_for_status()
+            data = r.json()
             if "hostnameList" in data:
-                selected_before = _norm([item.get("hostname") for item in data.get("hostnameList", [])])
+                selected_before = _norm_list([i.get("hostname", "") for i in data.get("hostnameList", [])])
             else:
-                selected_before = _norm(data.get("hostnames", []))
+                selected_before = _norm_list(data.get("hostnames", []))
     except Exception as e:
-        print(f"[WARN] Could not fetch existing selected hostnames (assuming none): {e}")
+        selected_before = set()
 
-    # Merge current + desired
-    desired = _norm(fqdn_list)
+    # Determine usable + unselectable FQDNs
+    desired = _norm_list(fqdn_list)
     not_selectable = sorted(desired - selectable)
     desired_usable = desired & selectable
-
-    if not_selectable:
-        msg = f"[WARN] The following FQDNs are not selectable and will be skipped: {not_selectable}"
-        if strict:
-            raise ValueError(msg)
-        else:
-            print(msg)
-
     final_set = sorted(selected_before | desired_usable)
 
-    # Preferred payload format (per Akamai techdocs)
+    #  Handle non-selectable logic
+    if not_selectable:
+        reason_msg = (
+            "\n[WARN] Some requested FQDNs cannot yet be associated with this configuration.\n"
+            "       Common causes:\n"
+            "       • The corresponding Property version is not yet active in STAGING.\n"
+            "       • The hostname has not propagated to Akamai Edge for this contract/group.\n"
+            "       • The hostname belongs to a different property or account.\n\n"
+            f"       Skipped FQDNs: {not_selectable}\n"
+        )
+        if strict:
+            raise ValueError(reason_msg)
+        else:
+            print(reason_msg)
+
+    #  Build payload per Akamai TechDocs
     preferred_payload = {"hostnameList": [{"hostname": h} for h in final_set]}
 
     def _put(payload):
@@ -64,46 +70,101 @@ def ensure_config_hostnames(session, base_url, config_id, version, fqdn_list, st
         put_resp.raise_for_status()
         return put_resp
 
-    # PUT with fallback to legacy shape
+    # PUT (fallback to legacy format if required)
     try:
         _put(preferred_payload)
     except requests.exceptions.HTTPError as e:
         if e.response is not None and e.response.status_code in (400, 415, 422):
-            print("[INFO] Retrying with legacy payload shape { 'hostnames': [...] }")
             legacy_payload = {"hostnames": final_set}
             _put(legacy_payload)
         else:
-            print(f"[ERROR] PUT selected-hostnames failed: {e}")
-            return {"before": sorted(selected_before), "added": [], "skipped": not_selectable, "final": sorted(selected_before)}
+            raise
 
-    # Print results
-    added = sorted(list(desired_usable - selected_before))
+    # Summary Output
     print("\n[INFO] Final selected hostnames now set on the config:")
     for h in final_set:
-        print(f"  - {h}")
+        print(f" - {h}")
 
     return {
         "before": sorted(selected_before),
-        "added": added,
+        "added": sorted((desired_usable - selected_before)),
         "skipped": not_selectable,
-        "final": final_set
+        "final": final_set,
     }
 
-print("\n[INFO] Updating selected hostnames for Non-Prod configuration.")
-ensure_config_hostnames(
+# Debug what the API says before we try to update
+dump_config_hostname_state(
     session=session,
     base_url=base_url,
-    config_id=config_id,         # newly created config ID
-    version=1,                   # onboarding always starts at version 1
-    fqdn_list=nonprod_fqdns      # list of FQDNs for Non-Prod policy
+    config_id=existing_config_id,  # or config_id for non-prod branch
+    version="1",
+    desired_fqdns=args.fqdn
 )
 
 
-print("\n[INFO] Updating selected hostnames for Prod configuration.")
 ensure_config_hostnames(
     session=session,
     base_url=base_url,
-    config_id=existing_config_id,  # same security config ID as Non-Prod
-    version=1,                     # still version 1 (shared config)
-    fqdn_list=prod_fqdns           # list of FQDNs for Prod policy
+    config_id=config_id,
+    version="1",
+    fqdn_list=args.fqdn,  # Non-Prod hostnames
+    strict=True            # enforce staging activation check
 )
+
+def dump_config_hostname_state(session, base_url, config_id, version, desired_fqdns):
+    """
+    Prints out:
+      - API selectable hostnames for this config/version
+      - Already selected hostnames
+      - Desired (from args)
+      - What would be added and what would be skipped (with normalization)
+    """
+    import json
+
+    sel_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selected-hostnames"
+    selectable_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selectable-hostnames"
+
+    def _norm_list(hosts):
+        return { (h or "").strip().lower().rstrip(".") for h in (hosts or []) if (h or "").strip() }
+
+    # fetch selectable
+    try:
+        r = session.get(selectable_url); r.raise_for_status()
+        selectable_raw = r.json().get("hostnames", [])
+    except Exception as e:
+        print(f"[DEBUG] selectable-hostnames fetch FAILED: {e}")
+        selectable_raw = []
+
+    # fetch selected
+    selected_raw = []
+    try:
+        r = session.get(sel_url)
+        if r.status_code != 404:
+            r.raise_for_status()
+            data = r.json()
+            if "hostnameList" in data:
+                selected_raw = [i.get("hostname","") for i in data.get("hostnameList", [])]
+            else:
+                selected_raw = data.get("hostnames", [])
+    except Exception as e:
+        print(f"[DEBUG] selected-hostnames fetch FAILED: {e}")
+
+    desired_norm    = _norm_list(desired_fqdns)
+    selectable_norm = _norm_list(selectable_raw)
+    selected_norm   = _norm_list(selected_raw)
+
+    not_selectable  = sorted(desired_norm - selectable_norm)
+    would_add       = sorted((desired_norm & selectable_norm) - selected_norm)
+    final_preview   = sorted(selected_norm | (desired_norm & selectable_norm))
+
+    print("\n[DEBUG] ===== Hostname State (API) =====")
+    print(f"[DEBUG] Config: {config_id} v{version}")
+    print(f"[DEBUG] Desired (args): {sorted(desired_norm)}")
+    print(f"[DEBUG] Selectable     : {sorted(selectable_norm)}")
+    print(f"[DEBUG] Selected       : {sorted(selected_norm)}")
+    print(f"[DEBUG] Would add      : {would_add}")
+    print(f"[DEBUG] NOT selectable : {not_selectable}")
+    print(f"[DEBUG] Final (preview): {final_preview}")
+    print("[DEBUG] =================================\n")
+
+
