@@ -1,170 +1,112 @@
-def ensure_config_hostnames(session, base_url, config_id, version, fqdn_list, strict=True):
+def ensure_config_hostnames(session, base_url, config_id, version, fqdn_list,
+                            strict=False, max_wait_seconds=180, poll_interval=10):
     """
-    Ensure all given FQDNs (Non-Prod + Prod) are explicitly associated with this security config version.
-    
-    Behavior:
-    - Fetches selectable-hostnames (what Akamai currently allows for this config).
-    - Fetches already selected-hostnames.
-    - Merges current + desired.
-    - PUTs updated combined list using /selected-hostnames.
-    - If strict=True, raises error if any FQDNs not selectable yet.
-      If strict=False, logs a clear warning and continues.
+    Ensures all specified FQDNs (for NonProd or Prod) are associated with the given config version.
+    Uses 'hostnameList' + 'mode: append' payload format per Akamai TechDocs.
+
+    - Polls selectable-hostnames until all are available (to avoid race after activation)
+    - PUTs with mode=append (non-destructive)
+    - Prints before/added/skipped/final summary
     """
+    import time, requests
 
-    import requests
-
-    sel_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selected-hostnames"
+    sel_url        = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selected-hostnames"
     selectable_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selectable-hostnames"
 
-    def _norm_list(hosts):
+    def _norm(hosts):
         return {h.strip().lower() for h in (hosts or []) if h and h.strip()}
 
-    #  Fetch selectable-hostnames
-    try:
-        r = session.get(selectable_url)
-        r.raise_for_status()
-        selectable = _norm_list(r.json().get("hostnames", []))
-    except Exception as e:
-        raise RuntimeError(f"Failed to fetch selectable hostnames for config {config_id} v{version}: {e}")
+    desired = _norm(fqdn_list)
+    if not desired:
+        print("[INFO] No FQDNs requested for association; skipping hostname update.")
+        return {"before": [], "added": [], "skipped": [], "final": []}
 
-    #  Fetch currently selected-hostnames
+    # --- Poll selectable-hostnames until all desired appear
+    print(f"[DEBUG] Polling selectable-hostnames until all desired FQDNs become selectable...")
+    deadline = time.time() + max_wait_seconds
+    selectable = set()
+    while True:
+        try:
+            resp = session.get(selectable_url, headers={"accept": "application/json"})
+            resp.raise_for_status()
+            selectable = _norm(resp.json().get("hostnames", []))
+        except Exception as e:
+            print(f"[WARN] Unable to fetch selectable hostnames: {e}")
+            selectable = set()
+
+        missing = sorted(desired - selectable)
+        if not missing:
+            break
+
+        if time.time() >= deadline:
+            print(f"[WARN] Timeout waiting for selectable hostnames. Skipping: {missing}")
+            break
+
+        time.sleep(poll_interval)
+
+    # --- Fetch already-selected hostnames
     selected_before = set()
     try:
-        r = session.get(sel_url)
-        if r.status_code != 404:
-            r.raise_for_status()
-            data = r.json()
+        resp = session.get(sel_url, headers={"accept": "application/json"})
+        if resp.status_code == 404:
+            selected_before = set()
+        else:
+            resp.raise_for_status()
+            data = resp.json()
             if "hostnameList" in data:
-                selected_before = _norm_list([i.get("hostname", "") for i in data.get("hostnameList", [])])
+                selected_before = _norm([item.get("hostname") for item in data["hostnameList"]])
             else:
-                selected_before = _norm_list(data.get("hostnames", []))
+                selected_before = _norm(data.get("hostnames", []))
     except Exception as e:
-        selected_before = set()
+        print(f"[WARN] Could not fetch existing selected hostnames (assuming none): {e}")
 
-    # Determine usable + unselectable FQDNs
-    desired = _norm_list(fqdn_list)
-    not_selectable = sorted(desired - selectable)
     desired_usable = desired & selectable
+    not_allowed = sorted(desired - selectable)
     final_set = sorted(selected_before | desired_usable)
 
-    #  Handle non-selectable logic
-    if not_selectable:
-        reason_msg = (
-            "\n[WARN] Some requested FQDNs cannot yet be associated with this configuration.\n"
-            "       Common causes:\n"
-            "       • The corresponding Property version is not yet active in STAGING.\n"
-            "       • The hostname has not propagated to Akamai Edge for this contract/group.\n"
-            "       • The hostname belongs to a different property or account.\n\n"
-            f"       Skipped FQDNs: {not_selectable}\n"
-        )
+    if not_allowed:
+        msg = f"[WARN] These FQDNs are not selectable and will be skipped: {not_allowed}"
         if strict:
-            raise ValueError(reason_msg)
+            raise ValueError(msg)
         else:
-            print(reason_msg)
+            print(msg)
 
-    #  Build payload per Akamai TechDocs
-    preferred_payload = {"hostnameList": [{"hostname": h} for h in final_set]}
+    # --- PUT with preferred payload per Akamai TechDocs
+    payload = {
+        "hostnameList": [{"hostname": h} for h in final_set],
+        "mode": "append"
+    }
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
+    }
 
-    def _put(payload):
-        put_resp = session.put(sel_url, json=payload)
-        put_resp.raise_for_status()
-        return put_resp
+    print(f"[DEBUG] PUT {sel_url}")
+    print(f"[DEBUG] Payload: {payload}")
 
-    # PUT (fallback to legacy format if required)
     try:
-        _put(preferred_payload)
+        put_resp = session.put(sel_url, json=payload, headers=headers)
+        put_resp.raise_for_status()
     except requests.exceptions.HTTPError as e:
-        if e.response is not None and e.response.status_code in (400, 415, 422):
-            legacy_payload = {"hostnames": final_set}
-            _put(legacy_payload)
-        else:
-            raise
+        print(f"[ERROR] PUT selected-hostnames failed ({e.response.status_code}): {e.response.text}")
+        return {"before": sorted(selected_before), "added": [], "skipped": not_allowed, "final": sorted(selected_before)}
 
-    # Summary Output
     print("\n[INFO] Final selected hostnames now set on the config:")
     for h in final_set:
-        print(f" - {h}")
+        print(f"  - {h}")
 
     return {
         "before": sorted(selected_before),
-        "added": sorted((desired_usable - selected_before)),
-        "skipped": not_selectable,
-        "final": final_set,
+        "added": sorted(list(desired_usable - selected_before)),
+        "skipped": not_allowed,
+        "final": final_set
     }
-
-# Debug what the API says before we try to update
-dump_config_hostname_state(
-    session=session,
-    base_url=base_url,
-    config_id=existing_config_id,  # or config_id for non-prod branch
-    version="1",
-    desired_fqdns=args.fqdn
-)
-
 
 ensure_config_hostnames(
     session=session,
     base_url=base_url,
-    config_id=config_id,
-    version="1",
-    fqdn_list=args.fqdn,  # Non-Prod hostnames
-    strict=True            # enforce staging activation check
+    config_id=existing_config_id,
+    version=1,
+    fqdn_list=args.fqdn,  # list of FQDNs passed on CLI
+    strict=False
 )
-
-def dump_config_hostname_state(session, base_url, config_id, version, desired_fqdns):
-    """
-    Prints out:
-      - API selectable hostnames for this config/version
-      - Already selected hostnames
-      - Desired (from args)
-      - What would be added and what would be skipped (with normalization)
-    """
-    import json
-
-    sel_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selected-hostnames"
-    selectable_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selectable-hostnames"
-
-    def _norm_list(hosts):
-        return { (h or "").strip().lower().rstrip(".") for h in (hosts or []) if (h or "").strip() }
-
-    # fetch selectable
-    try:
-        r = session.get(selectable_url); r.raise_for_status()
-        selectable_raw = r.json().get("hostnames", [])
-    except Exception as e:
-        print(f"[DEBUG] selectable-hostnames fetch FAILED: {e}")
-        selectable_raw = []
-
-    # fetch selected
-    selected_raw = []
-    try:
-        r = session.get(sel_url)
-        if r.status_code != 404:
-            r.raise_for_status()
-            data = r.json()
-            if "hostnameList" in data:
-                selected_raw = [i.get("hostname","") for i in data.get("hostnameList", [])]
-            else:
-                selected_raw = data.get("hostnames", [])
-    except Exception as e:
-        print(f"[DEBUG] selected-hostnames fetch FAILED: {e}")
-
-    desired_norm    = _norm_list(desired_fqdns)
-    selectable_norm = _norm_list(selectable_raw)
-    selected_norm   = _norm_list(selected_raw)
-
-    not_selectable  = sorted(desired_norm - selectable_norm)
-    would_add       = sorted((desired_norm & selectable_norm) - selected_norm)
-    final_preview   = sorted(selected_norm | (desired_norm & selectable_norm))
-
-    print("\n[DEBUG] ===== Hostname State (API) =====")
-    print(f"[DEBUG] Config: {config_id} v{version}")
-    print(f"[DEBUG] Desired (args): {sorted(desired_norm)}")
-    print(f"[DEBUG] Selectable     : {sorted(selectable_norm)}")
-    print(f"[DEBUG] Selected       : {sorted(selected_norm)}")
-    print(f"[DEBUG] Would add      : {would_add}")
-    print(f"[DEBUG] NOT selectable : {not_selectable}")
-    print(f"[DEBUG] Final (preview): {final_preview}")
-    print("[DEBUG] =================================\n")
-
-
