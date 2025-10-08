@@ -32,17 +32,23 @@ def reassign_dos_protection_rate_policies(
 
     # Try Client Lists API (newer)
     try:
-        resp = session.get(f"{base_url}/client-list/v1/lists")
+        resp = session.get(
+            f"{base_url}/client-list/v1/lists",
+            params={"includeInactive": "true"}  # 👈 include inactive lists too
+        )
         resp.raise_for_status()
         data = resp.json()
+        print("[DBG] Raw Client Lists response:", data)  # full dump for debugging
+
         if isinstance(data, list):
             lists = data
         elif isinstance(data, dict):
-            lists = data.get("lists", [])
+            # handle different possible keys
+            lists = data.get("lists") or data.get("clientLists") or data.get("items") or []
         else:
             lists = []
 
-        print(f"[DBG] Client Lists returned {len(lists)} items")
+        print(f"[DBG] Client Lists parsed {len(lists)} items")
         for it in lists:
             print(
                 f"    - name={it.get('name')} "
@@ -169,4 +175,3 @@ def reassign_dos_protection_rate_policies(
 
     print(f"[INFO] Reassignment complete. Success: {summary['successful']}, Failed: {summary['failed']}")
     return summary
-
