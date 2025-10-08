@@ -1,10 +1,1 @@
-def reassign_dos_protection_rate_policies(
-    session: requests.Session,
-    base_url: str,
-    config_id,                # was: config_id: str | int
-    version,                  # was: version: str | int
-    access_group: str,
-    template_policy_name_prefix: str = "Security Policy Template",
-    target_policy_id: Optional[str] = None,
-    activate_clones: bool = True,
-) -> Dict[str, Any]:
+
