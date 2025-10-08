@@ -1,204 +1,179 @@
 import requests
-from typing import Optional, Tuple, List, Dict, Union
+from typing import Optional, Iterable, Tuple, List, Dict
 
 def reassign_dos_protection_rate_policies(
     session: requests.Session,
     base_url: str,
-    config_id: Union[str, int],
-    version: Union[str, int],
+    config_id: int,
+    version: int,
     access_group: str,
-) -> Dict[str, Union[int, List[Dict[str, str]]]]:
+    policy_ids: Optional[Iterable[str]] = None,   # optional: only update these policy IDs
+    list_name_fragment: Optional[str] = None,      # optional override of the list name search
+    debug: bool = True,
+) -> Dict:
     """
-    Replace the bypass client list for all DoS / Rate Limiting policies
-    in the given Security Config version.
+    Resolve the SC-<access_group> 'Rate Controls Bypass List', then attach that list
+    to all DoS/Rate policies in the given config/version (or only those in policy_ids).
 
-    - Resolves the correct Client (Network) List via /network-list/v2/network-lists
-    - Lists rate policies per security policy (skips TEMP_* policies)
-    - Updates each rate policy via /appsec/v1/.../rate-policies/{ratePolicyId}
-    - Uses matchCriteria.bypassNetworkLists when present, otherwise falls back
-      to additionalMatchOptions (type == 'NetworkListCondition')
+    - Tries Client Lists API (/client-list/v1/lists) first.
+    - Falls back to Network Lists API (/network-list/v2/network-lists).
+    - Writes the list id into:
+        * additionalMatchOptions[type=NetworkListCondition].values (newer schema), or
+        * matchCriteria.bypassNetworkLists (older schema)
+    - Scrubs read-only fields that cause 4xx on PUT.
+
+    Returns a summary dict with counts and per-policy details.
     """
 
-    summary = {"processed": 0, "successful": 0, "failed": 0, "details": []}
+    def _dbg(msg: str):
+        if debug:
+            print(msg)
 
     # ---------------------------
-    # 1) Resolve client list id
+    # 1) Resolve the list ID
     # ---------------------------
-    def resolve_client_list_id(
-        session: requests.Session,
-        base_url: str,
-        access_group: str,
-        name_needles: Tuple[str, ...] = ("Rate Controls Bypass", "Rate Control", "Bypass"),
-    ) -> Tuple[Optional[str], Optional[str], bool]:
-        url = f"{base_url}/network-list/v2/network-lists"
-        print(f"[DBG] GET {url}")
-        try:
-            r = session.get(url)
-            r.raise_for_status()
-        except Exception as e:
-            print(f"[ERROR] network-lists fetch failed: {e}")
-            return None, None, False
-
-        items = r.json() or []
-        # Normalize: API can return either {"networkLists": [...]} or just a list
-        lists = items.get("networkLists", items) if isinstance(items, dict) else items
-
-        candidates = []
-        for nl in lists or []:
-            name = (nl.get("name") or "").strip()
-            if not name:
-                continue
-            if nl.get("deprecated", False):
-                continue
-            # loose match by access_group and one of the keywords
-            if access_group in name and any(n in name for n in name_needles):
-                active = bool(nl.get("staging", False) or nl.get("production", False))
-                candidates.append({"id": nl.get("uniqueId") or nl.get("id"),
-                                   "name": name,
-                                   "active": active})
-
-        if not candidates:
-            print("[WARN] No client list matched access_group/keywords; cannot reassign DoS.")
-            return None, None, False
-
-        print("[DBG] Candidate client lists:")
-        for c in candidates[:10]:
-            print(f"      - {c['name']}  (ID {c['id']})  active={c['active']}")
-
-        # Prefer an active one; else first candidate
-        chosen = next((c for c in candidates if c["active"]), candidates[0])
-        print(f"[INFO] Using Client List: {chosen['name']} (ID {chosen['id']}) active={chosen['active']}")
-        return chosen["id"], chosen["name"], chosen["active"]
-
-    list_id, list_name, list_active = resolve_client_list_id(session, base_url, access_group)
+    target_fragment = list_name_fragment or f"SC-{access_group} Rate Controls Bypass List"
+    list_id, list_name = _find_list_id(session, base_url, target_fragment, _dbg)
     if not list_id:
-        return summary  # already logged
+        print(f"[ERROR] No valid list found matching: '{target_fragment}'. Cannot continue.")
+        return {"successful": 0, "failed": 1, "skipped": 0,
+                "details": [{"stage": "resolve_list", "error": f"not found: {target_fragment}"}]}
 
-    # ------------------------------------------------
-    # 2) Get security policies in this config/version
-    # ------------------------------------------------
-    secpol_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
-    print(f"[DBG] GET {secpol_url}")
+    _dbg(f"[INFO] Using list '{list_name}' ({list_id}) for DoS reassignment.")
+
+    # ---------------------------
+    # 2) Fetch rate policies
+    # ---------------------------
+    list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
     try:
-        r = session.get(secpol_url)
+        _dbg(f"[DBG] GET rate policies: {list_url}")
+        r = session.get(list_url)
         r.raise_for_status()
-        secpols = r.json().get("policies", [])
+        rp_list = r.json().get("ratePolicies", [])
     except Exception as e:
-        print(f"[ERROR] security-policies fetch failed: {e}")
-        return summary
+        return {"successful": 0, "failed": 1, "skipped": 0,
+                "details": [{"stage": "fetch_rate_policies", "error": str(e)}]}
 
-    if not secpols:
-        print("[INFO] No security policies found; skipping DoS reassignment.")
-        return summary
+    if not rp_list:
+        _dbg("[INFO] No rate policies attached to this config/version; nothing to do.")
+        return {"successful": 0, "failed": 0, "skipped": 0, "details": []}
 
-    # Only real policies; skip any TEMP_* helpers
-    secpols = [p for p in secpols if not str(p.get("policyName", "")).startswith("TEMP_")]
-    print(f"[INFO] Processing DoS rate policies for {len(secpols)} security policy(ies): "
-          + ", ".join(p.get("policyName", "") for p in secpols))
+    # optional filter by IDs
+    allowed_ids = set(str(pid) for pid in policy_ids) if policy_ids else None
+    if allowed_ids:
+        rp_list = [p for p in rp_list if str(p.get("id")) in allowed_ids]
+        _dbg(f"[DBG] Filtering to {len(rp_list)} policies by provided IDs.")
 
-    # ---------------------------------------------------------
-    # 3) For each security policy, list and update rate policies
-    # ---------------------------------------------------------
-    for sp in secpols:
-        sp_id = sp.get("policyId")
-        sp_name = sp.get("policyName", "")
-        if not sp_id:
+    # ---------------------------
+    # 3) Update each policy
+    # ---------------------------
+    summary = {"successful": 0, "failed": 0, "skipped": 0, "details": []}
+    for p in rp_list:
+        pid = p.get("id")
+        pname = p.get("name")
+        if not pid:
+            summary["skipped"] += 1
+            summary["details"].append({"policy": p, "status": "skipped", "reason": "missing id"})
             continue
 
-        rp_list_url = (f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}"
-                       f"/security-policies/{sp_id}/rate-policies")
-        print(f"[DBG] GET {rp_list_url}")
+        rp_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{pid}"
         try:
-            r = session.get(rp_list_url)
-            if r.status_code == 404:
-                # Some accounts don’t expose per-policy listing; continue anyway
-                print(f"[WARN] 404 on rate-policies list for policy {sp_name}; continuing.")
-                continue
-            r.raise_for_status()
-            assigned = r.json().get("ratePolicies", [])
-        except Exception as e:
-            print(f"[WARN] Could not list rate policies for {sp_name}: {e}")
-            continue
-
-        if not assigned:
-            print(f"[INFO] No rate policies attached to policy {sp_name}")
-            continue
-
-        for rp in assigned:
-            rp_id = rp.get("id")
-            rp_name = rp.get("name", "")
-            if not rp_id:
-                continue
-
-            summary["processed"] += 1
-            # Fetch full object via config-scoped endpoint
-            rp_get_url = (f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}"
-                          f"/rate-policies/{rp_id}")
-            print(f"[DBG] GET {rp_get_url}  (policy '{rp_name}')")
-            try:
-                g = session.get(rp_get_url)
-                g.raise_for_status()
-                data = g.json()
-            except Exception as e:
-                print(f"[ERROR] Fetch rate policy {rp_name} failed: {e}")
-                summary["failed"] += 1
-                summary["details"].append({"policy_id": rp_id, "name": rp_name, "error": f"GET: {e}"})
-                continue
+            _dbg(f"[DBG] GET policy: {pname} ({pid}) -> {rp_url}")
+            g = session.get(rp_url)
+            g.raise_for_status()
+            doc = g.json()
 
             changed = False
 
-            # 1) Preferred: matchCriteria.bypassNetworkLists
-            mc = data.get("matchCriteria")
-            if isinstance(mc, dict):
-                old = mc.get("bypassNetworkLists") or []
-                if old != [list_id]:
-                    mc["bypassNetworkLists"] = [list_id]
-                    changed = True
-                    print(f"[DBG] {rp_name}: bypassNetworkLists {old} -> [{list_id}]")
+            # Try newer schema first: additionalMatchOptions / NetworkListCondition
+            amo = doc.get("additionalMatchOptions")
+            if isinstance(amo, list):
+                for opt in amo:
+                    if isinstance(opt, dict) and opt.get("type") == "NetworkListCondition":
+                        vals = opt.get("values", [])
+                        # replace with only this id if different
+                        if not isinstance(vals, list) or vals != [list_id]:
+                            opt["values"] = [list_id]
+                            changed = True
+                            _dbg(f"[DBG]   set NetworkListCondition.values -> [{list_id}]")
+                # if we found amo, we prefer it and won't fall back unless unchanged
 
-            # 2) Fallback: additionalMatchOptions NetworkListCondition
+            # Older schema: matchCriteria.bypassNetworkLists
             if not changed:
-                amo = data.get("additionalMatchOptions", [])
-                if isinstance(amo, list):
-                    for opt in amo:
-                        if isinstance(opt, dict) and opt.get("type") == "NetworkListCondition":
-                            old_vals = opt.get("values") or []
-                            if old_vals != [list_id]:
-                                opt["values"] = [list_id]
-                                changed = True
-                                print(f"[DBG] {rp_name}: NetworkListCondition {old_vals} -> [{list_id}]")
-                            break
+                mc = doc.get("matchCriteria")
+                if isinstance(mc, dict):
+                    cur = mc.get("bypassNetworkLists", [])
+                    if not isinstance(cur, list) or cur != [list_id]:
+                        mc["bypassNetworkLists"] = [list_id]
+                        changed = True
+                        _dbg(f"[DBG]   set matchCriteria.bypassNetworkLists -> [{list_id}]")
 
-            if not changed:
-                summary["details"].append({
-                    "policy_id": rp_id,
-                    "name": rp_name,
-                    "status": "unchanged"
-                })
-                continue
+            # scrub typical read-only fields before PUT
+            for ro in ("id", "updateDate", "createDate", "used"):
+                if ro in doc:
+                    doc.pop(ro, None)
 
-            # scrub read-only fields that can cause 4xx
-            for ro in ("id", "createDate", "updateDate", "used"):
-                data.pop(ro, None)
-
-            rp_put_url = rp_get_url  # same URL for PUT
-            print(f"[DBG] PUT {rp_put_url}")
-            try:
-                u = session.put(rp_put_url, json=data)
+            if changed:
+                _dbg(f"[DBG] PUT policy: {pname} ({pid})")
+                u = session.put(rp_url, json=doc)
                 u.raise_for_status()
                 summary["successful"] += 1
-                summary["details"].append({
-                    "policy_id": rp_id,
-                    "name": rp_name,
-                    "status": "updated",
-                    "new_list": list_id,
-                    "list_name": list_name
-                })
-            except Exception as e:
-                print(f"[ERROR] Update rate policy {rp_name} failed: {e}")
-                summary["failed"] += 1
-                summary["details"].append({"policy_id": rp_id, "name": rp_name, "error": f"PUT: {e}"})
+                summary["details"].append({"policyId": pid, "name": pname, "status": "updated"})
+            else:
+                summary["skipped"] += 1
+                summary["details"].append({"policyId": pid, "name": pname, "status": "unchanged"})
 
-    print(f"[INFO] DoS reassignment complete. "
-          f"Processed={summary['processed']}  Success={summary['successful']}  Failed={summary['failed']}")
+        except Exception as e:
+            summary["failed"] += 1
+            summary["details"].append({"policyId": pid, "name": pname, "status": "failed", "error": str(e)})
+
+    _dbg(f"[INFO] DoS reassignment done. Success: {summary['successful']}  "
+         f"Skipped: {summary['skipped']}  Failed: {summary['failed']}")
     return summary
+
+
+# ---------- helpers ----------
+
+def _find_list_id(
+    session: requests.Session,
+    base_url: str,
+    name_fragment: str,
+    debug_print,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Try Client Lists API first (/client-list/v1/lists), then Network Lists API
+    (/network-list/v2/network-lists). Returns (id, name) or (None, None).
+    """
+    # Client Lists API (newer)
+    try:
+        url = f"{base_url}/client-list/v1/lists"
+        debug_print(f"[DBG] GET client lists: {url}")
+        r = session.get(url)
+        r.raise_for_status()
+        data = r.json()
+        items: List[Dict] = data if isinstance(data, list) else []
+        for it in items:
+            name = (it.get("name") or "").strip()
+            lid = it.get("listId") or it.get("id")
+            if name and name_fragment in name:
+                return lid, name
+    except Exception as e:
+        debug_print(f"[WARN] Client Lists lookup failed: {e}")
+
+    # Network Lists API (legacy)
+    try:
+        url = f"{base_url}/network-list/v2/network-lists"
+        debug_print(f"[DBG] GET network lists: {url}")
+        r = session.get(url, params={"page": 0, "pageSize": 1000})
+        r.raise_for_status()
+        payload = r.json()
+        lists: List[Dict] = payload.get("networkLists", []) if isinstance(payload, dict) else (payload if isinstance(payload, list) else [])
+        for it in lists:
+            name = (it.get("name") or "").strip()
+            lid = it.get("uniqueId") or it.get("id")
+            if name and name_fragment in name:
+                return lid, name
+    except Exception as e:
+        debug_print(f"[WARN] Network Lists lookup failed: {e}")
+
+    return None, None
