@@ -1,140 +1,176 @@
-from typing import Optional, Union
 import requests
+from typing import Union, Iterable, Optional
 
 def reassign_dos_protection_rate_policies(
     session: requests.Session,
     base_url: str,
     config_id: Union[str, int],
     version: Union[str, int],
-    access_group: str,
-    target_policy_id: Optional[Union[str, int]] = None,  # process only this policy if given
+    access_group: Optional[str] = None,
+    policy_ids: Optional[Iterable[str]] = None,
+    exclude_name_prefix: str = "TEMP_",
 ) -> dict:
     """
-    For each rate policy attached to the given security policy(ies), rewrite the
-    NetworkListCondition to point at the 'SC-<access_group>-Rate Controls Bypass List'
-    (by *name*), then PUT the rate policy back.
+    Replace the bypass client list for all DoS / Rate Limiting policies
+    attached to non-TEMP security policies within the given config/version.
 
-    Uses the correct, policy-scoped endpoints:
-      /appsec/v1/configs/{id}/versions/{v}/security-policies/{policyId}/rate-policies
+    - Automatically resolves the correct active Client List ID based on access_group.
+    - Updates both legacy and modern payload shapes.
+    - Returns full summary of successes/failures.
     """
-    cfg = str(config_id)
-    ver = str(version)
 
-    def _p(url: str) -> str:
-        print(f"[DBG] {url}")
-        return url
+    summary = {
+        "processed_policies": 0,
+        "processed_rate_policies": 0,
+        "successful": 0,
+        "failed": 0,
+        "details": []
+    }
 
-    # 1) discover which security policies to touch
-    policies = []
-    if target_policy_id is not None:
-        policies = [str(target_policy_id)]
-        print(f"[INFO] Restricting DoS updates to policyId={target_policy_id}")
+    # ----------------------------------------------------------
+    # STEP 1: Resolve the correct active Client List ID
+    # ----------------------------------------------------------
+    list_url = f"{base_url}/appsec/v1/network-lists"
+    target_list_id = None
+    try:
+        resp = session.get(list_url)
+        resp.raise_for_status()
+        all_lists = resp.json().get("networkLists", [])
+        for lst in all_lists:
+            name = lst.get("name", "")
+            if not name or lst.get("deprecated", True):
+                continue
+            if "Rate Controls Bypass List" in name and access_group in name:
+                target_list_id = lst.get("id")
+                print(f"[INFO] Using active Client List: {name} (ID {target_list_id})")
+                break
+    except Exception as e:
+        print(f"[WARN] Could not resolve client list automatically: {e}")
+
+    if not target_list_id:
+        print("[ERROR] No valid active Client List ID found — cannot continue.")
+        summary["failed"] += 1
+        summary["details"].append({"stage": "resolve_client_list", "error": "No active list found"})
+        return summary
+
+    # ----------------------------------------------------------
+    # STEP 2: Get all security policies (skip TEMP_)
+    # ----------------------------------------------------------
+    sp_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies"
+    try:
+        r = session.get(sp_url)
+        r.raise_for_status()
+        all_policies = r.json().get("policies", [])
+    except Exception as e:
+        print(f"[ERROR] Could not list security policies: {e}")
+        summary["failed"] += 1
+        return summary
+
+    selected = []
+    if policy_ids:
+        idset = set(str(p) for p in policy_ids)
+        selected = [p for p in all_policies if str(p.get("policyId")) in idset]
     else:
-        pol_url = _p(f"{base_url}/appsec/v1/configs/{cfg}/versions/{ver}/security-policies")
+        for p in all_policies:
+            name = (p.get("policyName") or "").strip()
+            if not name.startswith(exclude_name_prefix):
+                selected.append(p)
+
+    if not selected:
+        print("[INFO] No eligible (non-TEMP) security policies found; skipping DoS reassignment.")
+        return summary
+
+    # ----------------------------------------------------------
+    # STEP 3: Iterate and update rate policies
+    # ----------------------------------------------------------
+    for sp in selected:
+        sp_id = sp.get("policyId")
+        sp_name = sp.get("policyName")
+        summary["processed_policies"] += 1
+
+        rp_list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/security-policies/{sp_id}/rate-policies"
+        print(f"[DBG] Listing rate policies for {sp_name} ({sp_id})")
+
         try:
-            r = session.get(pol_url)
-            r.raise_for_status()
-            policies = [str(p.get("policyId")) for p in r.json().get("policies", []) if p.get("policyId")]
-        except Exception as e:
-            print(f"[WARN] Failed to list security policies for config {cfg} v{ver}: {e}")
-            return {"successful": 0, "failed": 1, "details": [{"stage": "list_policies", "error": str(e)}]}
-
-    if not policies:
-        print("[INFO] No security policies found; skipping DoS reassignment.")
-        return {"successful": 0, "failed": 0, "details": []}
-
-    print(f"[INFO] Processing DoS rate policies for {len(policies)} security policy(ies): {policies}")
-
-    summary = {"successful": 0, "failed": 0, "details": []}
-    new_list_name = f"SC-{access_group}-Rate Controls Bypass List"
-
-    for policy_id in policies:
-        # 2) list rate policies under this security policy
-        list_url = _p(f"{base_url}/appsec/v1/configs/{cfg}/versions/{ver}/security-policies/{policy_id}/rate-policies")
-        try:
-            lr = session.get(list_url)
+            lr = session.get(rp_list_url)
             lr.raise_for_status()
-            rate_policies = lr.json().get("ratePolicies", [])
+            rate_items = lr.json().get("ratePolicies", [])
         except Exception as e:
-            msg = f"Failed to list rate policies for policy {policy_id}: {e}"
-            print(f"[WARN] {msg}")
+            print(f"[WARN] Failed to fetch rate policies for {sp_name}: {e}")
             summary["failed"] += 1
-            summary["details"].append({"policyId": policy_id, "stage": "list_rate_policies", "error": str(e)})
             continue
 
-        if not rate_policies:
-            print(f"[INFO] No rate policies attached to policy {policy_id}")
+        if not rate_items:
+            print(f"[INFO] No rate policies attached to {sp_name}; skipping.")
             continue
 
-        print(f"[INFO] Found {len(rate_policies)} rate policies for policy {policy_id}")
-
-        for rp in rate_policies:
-            rp_id = rp.get("id") or rp.get("ratePolicyId")
-            rp_name = rp.get("name", f"ratePolicy:{rp_id}")
+        for rp in rate_items:
+            rp_id = rp.get("id")
+            rp_name = rp.get("name")
             if not rp_id:
-                print(f"[WARN] Skipping malformed rate policy entry: {rp}")
                 continue
 
-            get_rp_url = _p(f"{base_url}/appsec/v1/configs/{cfg}/versions/{ver}/security-policies/{policy_id}/rate-policies/{rp_id}")
+            rp_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{rp_id}"
             try:
-                gr = session.get(get_rp_url)
+                gr = session.get(rp_url)
                 gr.raise_for_status()
-                full = gr.json()
+                data = gr.json()
             except Exception as e:
-                msg = f"Could not fetch rate policy {rp_id} ({rp_name}): {e}"
-                print(f"[WARN] {msg}")
+                print(f"[WARN] Failed to GET rate policy {rp_name}: {e}")
                 summary["failed"] += 1
-                summary["details"].append({"policyId": policy_id, "ratePolicyId": rp_id, "stage": "get_rate_policy", "error": str(e)})
                 continue
 
             changed = False
-            for opt in full.get("additionalMatchOptions", []):
-                # Some payloads use objects; others nest under a key. Normalize to dict lookup.
-                opt_type = opt.get("type") or opt.get("matchType")
-                if str(opt_type) != "NetworkListCondition":
-                    continue
 
-                values = opt.get("values") or opt.get("value") or []
-                if not isinstance(values, list):
-                    values = [values]
+            # Legacy structure
+            mc = data.get("matchCriteria")
+            if isinstance(mc, dict) and "bypassNetworkLists" in mc:
+                old = mc.get("bypassNetworkLists", [])
+                mc["bypassNetworkLists"] = [target_list_id]
+                changed = True
+                print(f"[DBG] {rp_name}: bypassNetworkLists {old} -> [{target_list_id}]")
 
-                # Replace any template/default list names *by name* (no id dependency)
-                new_values = []
-                for v in values:
-                    v_str = str(v).strip()
-                    if v_str and v_str != new_list_name:
+            # Modern structure
+            amo = data.get("additionalMatchOptions")
+            if isinstance(amo, list):
+                for opt in amo:
+                    if isinstance(opt, dict) and opt.get("type") == "NetworkListCondition":
+                        old_vals = opt.get("values", [])
+                        opt["values"] = [target_list_id]
                         changed = True
-                        new_values.append(new_list_name)
-                    else:
-                        new_values.append(v)
-
-                # write back
-                if "values" in opt:
-                    opt["values"] = new_values
-                else:
-                    opt["value"] = new_values
+                        print(f"[DBG] {rp_name}: NetworkListCondition {old_vals} -> [{target_list_id}]")
 
             if not changed:
-                print(f"[INFO] {rp_name}: no NetworkListCondition changes needed.")
-                summary["details"].append({"policyId": policy_id, "ratePolicyId": rp_id, "name": rp_name, "status": "skipped"})
+                summary["details"].append({
+                    "ratePolicyId": rp_id,
+                    "name": rp_name,
+                    "status": "unchanged"
+                })
                 continue
 
-            # scrub common read-only fields to avoid 4xx
-            for ro in ("id", "used", "createDate", "updateDate", "createdBy"):
-                full.pop(ro, None)
+            # Remove read-only fields
+            for field in ["id", "used", "createDate", "updateDate", "createdBy"]:
+                data.pop(field, None)
 
-            put_rp_url = get_rp_url  # same URL
-            print(f"[DBG] PUT {put_rp_url} (setting NetworkListCondition -> {new_list_name})")
             try:
-                pr = session.put(put_rp_url, json=full)
+                pr = session.put(rp_url, json=data)
                 pr.raise_for_status()
                 summary["successful"] += 1
-                summary["details"].append({"policyId": policy_id, "ratePolicyId": rp_id, "name": rp_name, "status": "updated"})
-                print(f"[INFO] Updated rate policy {rp_name} ({rp_id}).")
+                summary["processed_rate_policies"] += 1
+                summary["details"].append({
+                    "ratePolicyId": rp_id,
+                    "name": rp_name,
+                    "status": "updated"
+                })
+                print(f"[INFO] Updated rate policy {rp_name} ({rp_id}) on {sp_name}")
             except Exception as e:
-                print(f"[ERROR] Failed to update rate policy {rp_name} ({rp_id}): {e}")
+                print(f"[ERROR] Failed to PUT rate policy {rp_name}: {e}")
                 summary["failed"] += 1
-                summary["details"].append({"policyId": policy_id, "ratePolicyId": rp_id, "name": rp_name, "stage": "put_rate_policy", "error": str(e)})
+                summary["details"].append({
+                    "ratePolicyId": rp_id,
+                    "name": rp_name,
+                    "error": str(e)
+                })
 
-    print(f"[INFO] DoS reassignment done. Success: {summary['successful']}  Failed: {summary['failed']}")
+    print(f"[INFO] DoS reassignment complete. Success: {summary['successful']}  Failed: {summary['failed']}")
     return summary
