@@ -1,3 +1,7 @@
+assignments_str = [f"{p.get('name')}({p.get('id')})" for p in assigned]
+_debug(f"DOS assignments on config {config_id} v{version}: {assignments_str}")
+
+
 def reassign_dos_protection_rate_policies(
     session,
     base_url,
