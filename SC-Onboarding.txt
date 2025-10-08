@@ -17,7 +17,7 @@ def reassign_dos_protection_rate_policies(
     - Finds the correct client list (active or inactive).
     - Fetches all rate policies.
     - Builds a minimal valid payload for each policy update.
-    - Updates only the bypass list field (or additionalMatchOptions).
+    - Updates only the bypass list field (or additionalMatchConditions).
     """
     summary: Dict[str, Union[int, List[Dict[str, str]]]] = {"successful": 0, "failed": 0, "details": []}
     fragment = (list_name_fragment or f"SC-{access_group} Rate Controls Bypass List").strip()
@@ -143,14 +143,14 @@ def reassign_dos_protection_rate_policies(
         policy_id = get_policy_id(policy)
         policy_name = policy.get("name") or "Unnamed Policy"
         rp_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{policy_id}"
-        print(f"[INFO] Detecting edits for policy '{policy_name}' using id:{policy_id}")
+        print(f"[INFO] Processing policy '{policy_name}' (id={policy_id})")
 
         try:
             rp_resp = session.get(rp_url)
             rp_resp.raise_for_status()
             full_doc = rp_resp.json()
 
-            # Build a minimal payload from scratch
+            # Build a minimal payload from scratch (only allowed fields)
             payload = {
                 "name": full_doc.get("name"),
                 "description": full_doc.get("description"),
@@ -160,12 +160,10 @@ def reassign_dos_protection_rate_policies(
                 "clientIdentifier": full_doc.get("clientIdentifier"),
                 "action": full_doc.get("action", {"type": "alert"}),
                 "additionalMatchConditions": full_doc.get("additionalMatchConditions", []),
+                "matchCriteria": {
+                    "bypassNetworkLists": [client_list_id]
+                }
             }
-
-            # Inject the client list into matchCriteria if present
-            if "matchCriteria" in full_doc:
-                payload["matchCriteria"] = full_doc["matchCriteria"]
-                payload["matchCriteria"]["bypassNetworkLists"] = [client_list_id]
 
             print(f"[DBG] PUT URL: {rp_url}")
             print("[DBG] Payload being sent:")
