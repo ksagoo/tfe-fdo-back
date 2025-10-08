@@ -1,3 +1,11 @@
+results["dos_rate_policies"] = reassign_dos_protection_rate_policies(
+    session,
+    base_url,
+    config_id,
+    version,
+    access_group
+)
+
 def reassign_dos_protection_rate_policies(
     session,
     base_url,
