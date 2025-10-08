@@ -1,6 +1,6 @@
 import requests
 import json
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Any, Optional
 
 def reassign_dos_protection_rate_policies(
     session: requests.Session,
@@ -8,71 +8,155 @@ def reassign_dos_protection_rate_policies(
     config_id: Union[str, int],
     version: Union[str, int],
     access_group: str,
-    list_name_fragment: str = None,   # optional override
+    list_name_fragment: Optional[str] = None,  # optional override
 ) -> Dict[str, Union[int, List[Dict[str, str]]]]:
     """
     Reassign DoS / Rate Limiting policies to use the correct Client List
     for the specified access_group.
 
-    Looks up list via Client Lists API (v1), falls back to Network Lists API (v2),
-    then applies it across all rate policies in the given config/version.
-
-    Returns a summary dictionary:
-    {
-        "successful": <int>,
-        "failed": <int>,
-        "details": [ { "policy": <name>, "status": "updated|skipped|failed", "error": <optional> } ]
-    }
+    - Fetches client lists (includes inactive) and falls back to network lists.
+    - Recursively scans nested JSON structures to find list objects.
+    - Case-insensitive match against name attribute.
     """
-    summary = {"successful": 0, "failed": 0, "details": []}
+    summary: Dict[str, Union[int, List[Dict[str, str]]]] = {"successful": 0, "failed": 0, "details": []}
+    fragment = (list_name_fragment or f"SC-{access_group} Rate Controls Bypass List").strip()
+    print(f"[DBG] Matching fragment: '{fragment}' (case-insensitive)")
 
-    # ----------------------------------------------------------------------
-    # STEP 1: Find matching client list
-    # ----------------------------------------------------------------------
-    fragment = list_name_fragment or f"SC-{access_group} Rate Controls Bypass List"
-    client_list_id, client_list_name = None, None
+    # -------------------------
+    # Helpers
+    # -------------------------
+    def _pretty_dump(label: str, data: Any):
+        print(f"[DBG] {label} (formatted):")
+        try:
+            print(json.dumps(data, indent=2))
+        except Exception:
+            print(f"[DBG] {label} could not be pretty-printed; non-JSON type.")
 
-    # Try Client Lists API (newer)
+    def _collect_list_candidates(obj: Any) -> List[Dict[str, Any]]:
+        """
+        Recursively traverse obj to collect dicts that look like 'list' records.
+        A candidate is any dict that has a 'name' and some form of id (listId/id/uniqueId),
+        or dict entries under common wrappers: lists, clientLists, items, results, data, content.
+        """
+        candidates: List[Dict[str, Any]] = []
+
+        def has_id(d: Dict[str, Any]) -> bool:
+            return any(k in d and d[k] for k in ("listId", "id", "uniqueId"))
+
+        def is_candidate(d: Dict[str, Any]) -> bool:
+            name = d.get("name")
+            return isinstance(name, str) and has_id(d)
+
+        def walk(node: Any):
+            if isinstance(node, dict):
+                # If dict itself looks like a candidate, add it.
+                if is_candidate(node):
+                    candidates.append(node)
+
+                # Check common wrapper keys first to reduce noise.
+                for key in ("lists", "clientLists", "items", "results", "networkLists", "data", "content"):
+                    if key in node and isinstance(node[key], (list, dict)):
+                        walk(node[key])
+
+                # Then walk all values.
+                for v in node.values():
+                    walk(v)
+
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+            # Ignore primitives
+
+        walk(obj)
+        return candidates
+
+    def _format_candidate_debug(d: Dict[str, Any]) -> str:
+        return (
+            f"name={d.get('name')} "
+            f"id={d.get('listId') or d.get('id') or d.get('uniqueId')} "
+            f"status={d.get('status')} "
+            f"protection={d.get('protectionStatus')} "
+            f"shared={d.get('shared')} "
+            f"type={d.get('type')}"
+        )
+
+    # -------------------------
+    # STEP 1: Resolve client list
+    # -------------------------
+    client_list_id: Optional[str] = None
+    client_list_name: Optional[str] = None
+
     try:
         resp = session.get(
             f"{base_url}/client-list/v1/lists",
-            params={"includeInactive": "true"}  # include inactive lists too
+            params={"includeInactive": "true"},
         )
         resp.raise_for_status()
         data = resp.json()
+        _pretty_dump("Raw Client Lists response", data)
 
-        # Pretty-print the raw JSON for debug
-        print("[DBG] Raw Client Lists response (formatted):")
-        print(json.dumps(data, indent=2))
-
+        # Parse common wrappers first, then deep scan for nested records.
         if isinstance(data, list):
-            lists = data
+            primary = data
         elif isinstance(data, dict):
-            lists = data.get("lists") or data.get("clientLists") or data.get("items") or []
-        else:
-            lists = []
-
-        print(f"[DBG] Client Lists parsed {len(lists)} items")
-        for it in lists:
-            print(
-                f"    - name={it.get('name')} "
-                f"id={it.get('listId') or it.get('id')} "
-                f"status={it.get('status')} "
-                f"protection={it.get('protectionStatus')} "
-                f"shared={it.get('shared')}"
+            primary = (
+                data.get("lists")
+                or data.get("clientLists")
+                or data.get("items")
+                or data.get("results")
+                or data.get("data")
+                or data.get("content")
+                or []
             )
+        else:
+            primary = []
 
-        # now apply filter (case-insensitive)
-        for it in lists:
+        # Collect candidates from primary and full data (dedup by id+name).
+        candidates = []
+        seen = set()
+
+        def add_candidate(d: Dict[str, Any]):
+            cid = d.get("listId") or d.get("id") or d.get("uniqueId") or ""
+            nm = d.get("name") or ""
+            key = (str(cid), nm)
+            if key not in seen and (cid or nm):
+                seen.add(key)
+                candidates.append(d)
+
+        # From primary
+        if isinstance(primary, list):
+            for it in primary:
+                if isinstance(it, dict) and (it.get("name") and (it.get("listId") or it.get("id") or it.get("uniqueId"))):
+                    add_candidate(it)
+        elif isinstance(primary, dict):
+            # Sometimes the wrapper itself is an object containing candidates.
+            nested = _collect_list_candidates(primary)
+            for it in nested:
+                add_candidate(it)
+
+        # Deep scan the entire payload too (in case primary missed items)
+        deep_candidates = _collect_list_candidates(data)
+        for it in deep_candidates:
+            add_candidate(it)
+
+        print(f"[DBG] Client Lists: discovered {len(candidates)} candidates (after deep scan)")
+        for it in candidates:
+            print(f"    - {_format_candidate_debug(it)}")
+
+        # Case-insensitive match against fragment
+        frag_lower = fragment.lower()
+        for it in candidates:
             name = (it.get("name") or "").strip()
-            lid = it.get("listId") or it.get("id")
-            if name and fragment.lower() in name.lower():
-                client_list_id, client_list_name = lid, name
+            if name and frag_lower in name.lower():
+                client_list_id = str(it.get("listId") or it.get("id") or it.get("uniqueId"))
+                client_list_name = name
                 break
+
     except Exception as e:
         print(f"[WARN] Client Lists API lookup failed: {e}")
 
-    # Fallback to Network Lists API (legacy)
+    # Fallback to Network Lists API
     if not client_list_id:
         try:
             resp = session.get(
@@ -81,33 +165,41 @@ def reassign_dos_protection_rate_policies(
             )
             resp.raise_for_status()
             payload = resp.json()
-            lists = payload.get("networkLists", []) if isinstance(payload, dict) else []
-            print(f"[DBG] Network Lists returned {len(lists)} items")
-            for it in lists:
-                print(
-                    f"    - name={it.get('name')} "
-                    f"id={it.get('uniqueId') or it.get('id')} "
-                    f"type={it.get('type')} "
-                    f"shared={it.get('shared')}"
-                )
-            for it in lists:
+            _pretty_dump("Raw Network Lists response", payload)
+
+            net_candidates: List[Dict[str, Any]] = []
+            if isinstance(payload, dict):
+                network_lists = payload.get("networkLists", [])
+                if isinstance(network_lists, list):
+                    net_candidates = [it for it in network_lists if isinstance(it, dict)]
+            else:
+                # Deep scan if shape differs
+                net_candidates = _collect_list_candidates(payload)
+
+            print(f"[DBG] Network Lists: discovered {len(net_candidates)} candidates")
+            for it in net_candidates:
+                print(f"    - {_format_candidate_debug(it)}")
+
+            frag_lower = fragment.lower()
+            for it in net_candidates:
                 name = (it.get("name") or "").strip()
-                lid = it.get("uniqueId") or it.get("id")
-                if name and fragment.lower() in name.lower():
-                    client_list_id, client_list_name = lid, name
+                if name and frag_lower in name.lower():
+                    client_list_id = str(it.get("uniqueId") or it.get("id"))
+                    client_list_name = name
                     break
+
         except Exception as e:
             print(f"[WARN] Network Lists API lookup failed: {e}")
 
     if not client_list_id:
-        print(f"[ERROR] No matching Client or Network List found for '{fragment}'. Cannot proceed.")
+        print(f"[ERROR] No matching Client or Network List found for fragment '{fragment}'. Cannot proceed.")
         return summary
 
-    print(f"[INFO] Found matching list '{client_list_name}' (ID: {client_list_id})")
+    print(f"[INFO] Using list '{client_list_name}' (ID: {client_list_id}) for DoS reassignment.")
 
-    # ----------------------------------------------------------------------
-    # STEP 2: Get all rate policies
-    # ----------------------------------------------------------------------
+    # -------------------------
+    # STEP 2: Fetch rate policies
+    # -------------------------
     rate_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
     try:
         r = session.get(rate_url)
@@ -125,9 +217,9 @@ def reassign_dos_protection_rate_policies(
 
     print(f"[INFO] Found {len(policies)} rate policies to process.")
 
-    # ----------------------------------------------------------------------
-    # STEP 3: Loop and update each policy
-    # ----------------------------------------------------------------------
+    # -------------------------
+    # STEP 3: Update each policy
+    # -------------------------
     for policy in policies:
         policy_id = policy.get("id")
         policy_name = policy.get("name") or "Unnamed Policy"
@@ -136,11 +228,11 @@ def reassign_dos_protection_rate_policies(
         try:
             rp_resp = session.get(rp_url)
             rp_resp.raise_for_status()
-            data = rp_resp.json()
+            doc = rp_resp.json()
             changed = False
 
-            # newer schema: additionalMatchOptions
-            amo = data.get("additionalMatchOptions", [])
+            # Try newer schema: additionalMatchOptions / NetworkListCondition
+            amo = doc.get("additionalMatchOptions", [])
             if isinstance(amo, list):
                 for opt in amo:
                     if isinstance(opt, dict) and opt.get("type") == "NetworkListCondition":
@@ -148,29 +240,30 @@ def reassign_dos_protection_rate_policies(
                         if vals != [client_list_id]:
                             opt["values"] = [client_list_id]
                             changed = True
+                            print(f"[DBG]   set NetworkListCondition.values -> [{client_list_id}]")
 
-            # older schema: matchCriteria.bypassNetworkLists
-            mc = data.get("matchCriteria")
+            # Older schema: matchCriteria.bypassNetworkLists
+            mc = doc.get("matchCriteria")
             if not changed and isinstance(mc, dict):
-                existing = mc.get("bypassNetworkLists", [])
-                if existing != [client_list_id]:
+                cur = mc.get("bypassNetworkLists", [])
+                if cur != [client_list_id]:
                     mc["bypassNetworkLists"] = [client_list_id]
                     changed = True
+                    print(f"[DBG]   set matchCriteria.bypassNetworkLists -> [{client_list_id}]")
 
-            if not changed:
-                summary["details"].append({"policy": policy_name, "status": "skipped"})
-                continue
-
-            # clean read-only fields
+            # Scrub read-only fields before PUT
             for ro in ("id", "updateDate", "createDate", "used"):
-                data.pop(ro, None)
+                if ro in doc:
+                    doc.pop(ro, None)
 
-            put_resp = session.put(rp_url, json=data)
-            put_resp.raise_for_status()
-            summary["successful"] += 1
-            summary["details"].append({"policy": policy_name, "status": "updated"})
-
-            print(f"[INFO] Updated rate policy '{policy_name}' -> list {client_list_name} ({client_list_id})")
+            if changed:
+                put_resp = session.put(rp_url, json=doc)
+                put_resp.raise_for_status()
+                summary["successful"] += 1
+                summary["details"].append({"policy": policy_name, "status": "updated"})
+                print(f"[INFO] Updated rate policy '{policy_name}' -> list {client_list_name} ({client_list_id})")
+            else:
+                summary["details"].append({"policy": policy_name, "status": "skipped"})
 
         except Exception as e:
             print(f"[ERROR] Failed updating rate policy '{policy_name}': {e}")
