@@ -3,196 +3,232 @@ def reassign_dos_protection_rate_policies(
     base_url,
     config_id,
     version,
-    *args,
-    **kwargs,
+    access_group,
+    template_policy_name_prefix="Security Policy Template",
+    template_bypass_name="Security Policy Template Rate Controls Bypass List",
+    sc_bypass_suffix="Rate Controls Bypass List",
+    activate_clones=True,
+    target_policy_id=None,  # optional: only touch rate policies that belong to a specific security policy id
 ):
     """
-    Clone template DoS rate policies and reassign them to SC-<access_group> clones,
-    then fix their Match Criteria ('NetworkListCondition') so the client list used
-    is the SC-<access_group> 'Rate Controls Bypass List'.
-
-    Drop-in: works with existing call sites (extra positional/keyword args ignored).
-
-    Expected kwargs (optional):
-      - access_group: str  (used to build SC- names)
-      - template_policy_name_prefix: str (default: 'Security Policy Template')
-      - activate_clones: bool (default: True)  -> activate cloned policies in STAGING
-      - debug: bool (default: True)
-
-    Returns a summary dict.
+    Debug version: verbose logging around each network call and transformation.
     """
-    access_group = kwargs.get("access_group") or kwargs.get("group") or ""
-    template_policy_name_prefix = kwargs.get("template_policy_name_prefix", "Security Policy Template")
-    activate_clones = kwargs.get("activate_clones", True)
-    debug = kwargs.get("debug", True)
-
-    def _debug(msg):
-        if debug:
-            print(f"[DEBUG] {msg}")
 
     list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/dos-rates"
     clone_url = f"{base_url}/appsec/v1/rate-policies/clone"
-    policy_url_template = f"{base_url}/appsec/v1/rate-policies/{{policy_id}}"
+    policy_url = lambda pid: f"{base_url}/appsec/v1/rate-policies/{pid}"
+    lists_url = f"{base_url}/appsec/v1/client-list/definitions"
 
-    # The target client list name we want inside NetworkListCondition
-    desired_list_name = f"SC-{access_group} Rate Controls Bypass List".strip()
+    def _get_all_client_lists():
+        print(f"[DBG] GET client lists: {lists_url}")
+        try:
+            r = session.get(lists_url, params={})
+            print(f"[DBG] -> status {r.status_code}")
+            r.raise_for_status()
+            data = r.json()
+            items = data.get("clientLists", []) or data.get("items", []) or []
+            by_name = {}
+            by_id = {}
+            for it in items:
+                lid = str(it.get("id") or it.get("listId") or "").strip()
+                nm = (it.get("name") or "").strip()
+                if lid:
+                    by_id[lid] = nm
+                if nm:
+                    by_name[nm.lower()] = lid
+            print(f"[DBG] Client lists found: {len(items)}")
+            # small sample for sanity
+            for i, (lid, nm) in enumerate(by_id.items()):
+                if i >= 3: break
+                print(f"[DBG]   list sample: id={lid} name={nm}")
+            return by_name, by_id
+        except Exception as e:
+            print(f"[WARN] Could not fetch client lists: {e}")
+            return {}, {}
 
-    summary = {
-        "processed": 0,
-        "successful": 0,
-        "failed": 0,
-        "fixed_conditions": 0,
-        "details": [],
-    }
+    def _resolve_bypass_ids():
+        by_name, by_id = _get_all_client_lists()
+        template_id = by_name.get(template_bypass_name.lower())
+        sc_name = f"SC-{access_group} {sc_bypass_suffix}".strip()
+        sc_id = by_name.get(sc_name.lower())
+        print(f"[DBG] Template bypass name -> id: '{template_bypass_name}' -> {template_id}")
+        print(f"[DBG] SC bypass name       -> id: '{sc_name}' -> {sc_id}")
+        return template_id, sc_id, sc_name
 
-    # Helper to show current assignment brief
-    def _brief_assignments(assign):
-        items = []
-        for p in (assign or []):
-            nm = p.get("name")
-            pid = p.get("id")
-            items.append(f"{nm}({pid})")
-        return items
+    summary = {"processed": 0, "successful": 0, "failed": 0, "fixed_conditions": 0, "details": []}
 
     try:
-        # 1) Read current assignments
+        # read rate policies assigned to this config/version
+        print(f"[DBG] GET assigned DoS policies: {list_url}")
         resp = session.get(list_url)
+        print(f"[DBG] -> status {resp.status_code}")
         resp.raise_for_status()
-        assigned = resp.json().get("ratePolicies", [])
-        _debug(
-            "DOS assignments on config {} v{}: {}".format(
-                config_id, version, _brief_assignments(assigned)
-            )
-        )
+        assigned = resp.json().get("ratePolicies", []) or []
+        print(f"[DBG] Assigned DoS policies count: {len(assigned)}")
+        for rp in assigned:
+            print(f"[DBG]   assigned: id={rp.get('id')} name='{rp.get('name')}'")
 
-        updated_assignment_ids = []
+        if not assigned:
+            print("[INFO] No DoS rate policies assigned to this config/version.")
+            return summary
+
+        template_list_id, sc_list_id, sc_list_name = _resolve_bypass_ids()
+        if not sc_list_id:
+            print(f"[WARN] SC bypass list not found by name: '{sc_list_name}'. Create it first, then re-run.")
+        if not template_list_id:
+            print(f"[WARN] Template bypass list id not found for name '{template_bypass_name}'. "
+                  f"Will still try name-based replacement.")
+
+        new_assignment_ids = []
 
         for rp in assigned:
             summary["processed"] += 1
             orig_id = rp.get("id")
             orig_name = rp.get("name") or ""
-
             kept_id = orig_id
             kept_name = orig_name
 
-            # 2) Clone template policies to SC-<access_group>...
+            # 1) clone away from template-named policies (once)
             if orig_name.startswith(template_policy_name_prefix):
-                suffix = orig_name.replace(template_policy_name_prefix, "").strip()
+                suffix = orig_name.replace(template_policy_name_prefix, "", 1).strip()
                 clone_name = f"SC-{access_group} {suffix}".strip()
+                print(f"[DBG] Template-named policy detected -> will use clone name '{clone_name}'")
 
-                # If a clone with the target name already exists in assignment list, reuse it
-                existing = next((x for x in assigned if (x.get("name") or "") == clone_name), None)
+                existing = next((p for p in assigned if (p.get("name") or "").strip() == clone_name), None)
                 if existing:
                     kept_id = existing.get("id")
                     kept_name = clone_name
-                    _debug(f"Reusing existing clone: {kept_name} ({kept_id})")
+                    print(f"[DBG] Reusing existing clone: id={kept_id} name='{kept_name}'")
                 else:
                     try:
                         payload = {
                             "cloneFromRatePolicyId": orig_id,
                             "name": clone_name,
                             "description": f"Cloned from {orig_name}",
-                            "matchType": rp.get("matchType", "DOS"),
+                            "matchType": rp.get("matchType"),
                         }
+                        print(f"[DBG] POST clone: {clone_url}")
+                        print(f"[DBG] Payload: {payload}")
                         c = session.post(clone_url, json=payload)
+                        print(f"[DBG] -> status {c.status_code}")
                         c.raise_for_status()
                         kept_id = c.json().get("id")
                         kept_name = clone_name
-                        _debug(f"Cloned DOS policy: {orig_name} -> {kept_name} ({kept_id})")
-
                         if activate_clones and kept_id:
-                            act = session.post(
-                                policy_url_template.format(policy_id=kept_id) + "/activate",
-                                json={"network": "STAGING"},
-                            )
-                            # best-effort; don't raise
-                            _debug(f"Staging activation requested for {kept_name} ({kept_id}); status={act.status_code}")
+                            act_url = policy_url(kept_id) + "/activate"
+                            print(f"[DBG] POST activate clone (staging): {act_url}")
+                            a = session.post(act_url, json={"network": "STAGING"})
+                            print(f"[DBG] -> status {a.status_code}")
                         summary["successful"] += 1
-                        summary["details"].append(
-                            {"template": orig_name, "clone": kept_name, "status": "success"}
-                        )
-                    except Exception as e:
-                        # Fall back to template id if cloning fails
-                        _debug(f"Clone failed for {orig_name}: {e}")
+                        summary["details"].append({"template": orig_name, "clone": kept_name, "status": "success"})
+                        print(f"[DOS] Cloned '{orig_name}' -> '{kept_name}' (id {kept_id})")
+                    except Exception as ce:
                         kept_id = orig_id
                         kept_name = orig_name
                         summary["failed"] += 1
-                        summary["details"].append(
-                            {"template": orig_name, "status": "clone_failed", "error": str(e)}
-                        )
+                        summary["details"].append({"template": orig_name, "status": "clone_failed", "error": str(ce)})
+                        print(f"[WARN] Clone failed for '{orig_name}': {ce}")
 
-            # 3) Fetch full policy and try to fix NetworkListCondition → values
+            # 2) load full policy, optionally filter by security policy id
             try:
-                d = session.get(policy_url_template.format(policy_id=kept_id))
-                d.raise_for_status()
-                full = d.json()
+                p_url = policy_url(kept_id)
+                print(f"[DBG] GET rate-policy detail: {p_url}")
+                p = session.get(p_url)
+                print(f"[DBG] -> status {p.status_code}")
+                p.raise_for_status()
+                full = p.json()
 
-                changed = False
-                amo = full.get("additionalMatchOptions", [])
-                for opt in amo:
-                    if opt.get("type") != "NetworkListCondition":
+                if target_policy_id:
+                    print(f"[DBG] target_policy_id filter: want={target_policy_id}, policyId={full.get('policyId')}")
+                    if str(full.get("policyId")) != str(target_policy_id):
+                        new_assignment_ids.append(kept_id)
                         continue
 
-                    values = opt.get("values", [])
+                changed = False
+                # dump current match options for visibility
+                print(f"[DBG] Current additionalMatchOptions for '{kept_name}':")
+                for opt in full.get("additionalMatchOptions", []) or []:
+                    print(f"[DBG]   type={opt.get('type')} values={opt.get('values')}")
+
+                for opt in full.get("additionalMatchOptions", []) or []:
+                    if (opt.get("type") or "").strip() != "NetworkListCondition":
+                        continue
+
+                    vals = opt.get("values", []) or []
                     new_vals = []
-                    for v in values:
+                    for v in vals:
                         v_str = str(v).strip()
-                        # Keep numeric IDs as-is
-                        if v_str.isdigit():
+
+                        # Id-based replacement first
+                        if template_list_id and v_str == str(template_list_id) and sc_list_id:
+                            new_vals.append(sc_list_id)
+                            changed = True
+                            continue
+
+                        # Name-based (tenants sometimes return names)
+                        if v_str.lower() == template_bypass_name.lower():
+                            new_vals.append(sc_list_id if sc_list_id else v)
+                            changed = True
+                            continue
+
+                        # Already SC id?
+                        if sc_list_id and v_str == str(sc_list_id):
                             new_vals.append(v)
                             continue
 
-                        # If it still references a template or anything else, use our SC- name
-                        # (By name — this is accepted by the API; IDs also work but name is simpler
-                        #  and avoids needing extra lookups.)
-                        if "Security Policy Template" in v_str or v_str != desired_list_name:
-                            new_vals.append(desired_list_name)
-                            changed = True
-                        else:
-                            new_vals.append(v)
+                        new_vals.append(v)
 
-                    if changed:
+                    if new_vals != vals:
+                        print(f"[DBG] NetworkListCondition change for '{kept_name}': {vals} -> {new_vals}")
                         opt["values"] = new_vals
-                        _debug(
-                            "Updated NetworkListCondition for policy {} ({}): {}".format(
-                                kept_name, kept_id, new_vals
-                            )
-                        )
-
-                # Remove a few read-only keys that can block PUT
-                for ro in ("id", "updateDate", "used", "createdDate", "createdBy"):
-                    full.pop(ro, None)
 
                 if changed:
-                    u = session.put(policy_url_template.format(policy_id=kept_id), json=full)
+                    # scrub read-only fields
+                    for ro in ("id", "updateDate", "used", "etag"):
+                        if ro in full:
+                            print(f"[DBG] Stripping read-only field: {ro}")
+                            full.pop(ro, None)
+
+                    print(f"[DBG] PUT rate-policy update: {p_url}")
+                    # small, readable preview of the changed portion
+                    try:
+                        changed_opts = [o for o in full.get("additionalMatchOptions", []) or []
+                                        if (o.get("type") or "") == "NetworkListCondition"]
+                        print(f"[DBG] Payload (NetworkListCondition): {changed_opts}")
+                    except Exception:
+                        pass
+
+                    u = session.put(p_url, json=full)
+                    print(f"[DBG] -> status {u.status_code}")
                     u.raise_for_status()
                     summary["fixed_conditions"] += 1
-                    _debug(f"PUT policy OK: {kept_name} ({kept_id}) with updated client list values")
+                    print(f"[DOS] Updated policy '{kept_name}' ({kept_id}) with SC client list id '{sc_list_id}'.")
+                else:
+                    print(f"[DBG] No change needed for '{kept_name}'.")
 
-                updated_assignment_ids.append(kept_id)
+                new_assignment_ids.append(kept_id)
 
-            except Exception as e:
-                _debug(f"Failed to update DOS policy {kept_name} ({kept_id}): {e}")
+            except Exception as ue:
                 summary["failed"] += 1
-                summary["details"].append(
-                    {"id": kept_id, "name": kept_name, "status": "update_failed", "error": str(e)}
-                )
-                # still keep the policy in assignments so we don't break the config
-                updated_assignment_ids.append(kept_id)
+                summary["details"].append({"id": kept_id, "name": kept_name, "status": "update_failed", "error": str(ue)})
+                print(f"[ERROR] Failed to update DoS policy '{kept_name}' ({kept_id}): {ue}")
+                new_assignment_ids.append(kept_id)
 
-        # 4) Replace the assignment list in the config
+        # 3) write assignment list back (even if nothing changed)
         try:
-            put_resp = session.put(list_url, json={"ratePolicies": updated_assignment_ids})
-            put_resp.raise_for_status()
-            _debug("Updated config dos-rates assignment list: {}".format(updated_assignment_ids))
-        except Exception as e:
-            _debug(f"Failed to update dos-rates assignment list: {e}")
+            print(f"[DBG] PUT dos-rates assignment: {list_url}")
+            print(f"[DBG] Payload: {{'ratePolicies': {new_assignment_ids}}}")
+            put = session.put(list_url, json={"ratePolicies": new_assignment_ids})
+            print(f"[DBG] -> status {put.status_code}")
+            put.raise_for_status()
+        except Exception as ae:
             summary["failed"] += 1
-            summary["details"].append({"status": "assign_failed", "error": str(e)})
+            summary["details"].append({"status": "assign_failed", "error": str(ae)})
+            print(f"[WARN] Could not update dos-rates assignment list: {ae}")
 
     except Exception as e:
-        _debug(f"Top-level failure in reassign_dos_protection_rate_policies: {e}")
         summary["failed"] += 1
         summary["details"].append({"status": "failed", "error": str(e)})
+        print(f"[ERROR] reassign_dos_protection_rate_policies: {e}")
 
     return summary
