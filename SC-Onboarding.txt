@@ -34,11 +34,14 @@ def reassign_dos_protection_rate_policies(
     try:
         resp = session.get(f"{base_url}/client-list/v1/lists")
         resp.raise_for_status()
-        lists = resp.json() if isinstance(resp.json(), list) else []
-        for item in lists:
-            name = (item.get("name") or "").strip()
-            lid = item.get("listId") or item.get("id")
-            if name and list_name_fragment in name:
+        data = resp.json()
+        lists = data if isinstance(data, list) else data.get("lists", [])
+        print(f"[DBG] Client Lists returned {len(lists)} items")
+        for it in lists:
+            print(f"    - {it.get('name')} (id={it.get('listId') or it.get('id')})")
+            name = (it.get("name") or "").strip()
+            lid = it.get("listId") or it.get("id")
+            if name and list_name_fragment.lower() in name.lower():
                 client_list_id, client_list_name = lid, name
                 break
     except Exception as e:
@@ -47,13 +50,19 @@ def reassign_dos_protection_rate_policies(
     # Fallback to Network Lists API (legacy)
     if not client_list_id:
         try:
-            resp = session.get(f"{base_url}/network-list/v2/network-lists", params={"page": 0, "pageSize": 1000})
+            resp = session.get(
+                f"{base_url}/network-list/v2/network-lists",
+                params={"page": 0, "pageSize": 1000},
+            )
             resp.raise_for_status()
-            lists = resp.json().get("networkLists", [])
-            for item in lists:
-                name = (item.get("name") or "").strip()
-                lid = item.get("uniqueId") or item.get("id")
-                if name and list_name_fragment in name:
+            payload = resp.json()
+            lists = payload.get("networkLists", [])
+            print(f"[DBG] Network Lists returned {len(lists)} items")
+            for it in lists:
+                print(f"    - {it.get('name')} (id={it.get('uniqueId') or it.get('id')})")
+                name = (it.get("name") or "").strip()
+                lid = it.get("uniqueId") or it.get("id")
+                if name and list_name_fragment.lower() in name.lower():
                     client_list_id, client_list_name = lid, name
                     break
         except Exception as e:
