@@ -27,7 +27,7 @@ def reassign_dos_protection_rate_policies(
         walk(obj)
         return candidates
 
-    # Step 1: Resolve client list (case-insensitive, include inactive)
+    # Step 1: Resolve client list
     client_list_id = None
     client_list_name = None
     try:
@@ -76,59 +76,25 @@ def reassign_dos_protection_rate_policies(
             rp_resp.raise_for_status()
             full_doc = rp_resp.json()
 
+            # Step 3a: Patch client list reference inside additionalMatchOptions
             found = False
-
-            # Step 3a: Update additionalMatchCondition (singular)
-            amc = full_doc.get("additionalMatchCondition")
-            if isinstance(amc, dict):
-                cond_type = amc.get("type", "").lower()
-                if "network" in cond_type and isinstance(amc.get("values"), list):
-                    amc["values"] = [client_list_id]
-                    full_doc["additionalMatchCondition"] = amc
+            match_options = full_doc.get("additionalMatchOptions", [])
+            for cond in match_options:
+                cond_type = cond.get("type", "").lower()
+                if "network" in cond_type and isinstance(cond.get("values"), list):
+                    cond["values"] = [client_list_id]
                     found = True
 
-            # Step 3b: Update matchCriteria.bypassNetworkLists if present
-            match_criteria = full_doc.get("matchCriteria", {})
-            if not found and "bypassNetworkLists" in match_criteria:
-                match_criteria["bypassNetworkLists"] = [client_list_id]
-                full_doc["matchCriteria"] = match_criteria
-                found = True
-
             if not found:
-                print(f"[WARN] No client list condition found in '{policy_name}' — skipping update")
+                print(f"[WARN] No network condition found in '{policy_name}' — skipping update")
                 summary["details"].append({"policy": policy_name, "status": "skipped", "reason": "no client list condition"})
                 continue
 
-            # Step 3c: Preserve FileExtensionCondition if present
-            file_ext_condition = None
-            if "additionalMatchConditions" in full_doc:
-                for cond in full_doc["additionalMatchConditions"]:
-                    if cond.get("type") == "FileExtensionCondition":
-                        file_ext_condition = cond
-                        break
-
-            # Build payload
-            payload = {
-                "name": full_doc.get("name"),
-                "description": full_doc.get("description"),
-                "threshold": full_doc.get("threshold"),
-                "burstThreshold": full_doc.get("burstThreshold"),
-                "durationSeconds": full_doc.get("durationSeconds"),
-                "clientIdentifier": full_doc.get("clientIdentifier"),
-                "action": {
-                    "type": full_doc.get("action", {}).get("type", "alert")
-                }
-            }
-
-            if "additionalMatchCondition" in full_doc:
-                payload["additionalMatchCondition"] = full_doc["additionalMatchCondition"]
-            if "matchCriteria" in full_doc:
-                payload["matchCriteria"] = full_doc["matchCriteria"]
-            if file_ext_condition:
-                payload["additionalMatchConditions"] = [file_ext_condition]
+            # Step 3b: Reuse full JSON as payload
+            payload = full_doc
 
             print(f"[DBG] PUT URL: {rp_url}")
-            print("[DBG] Payload:")
+            print("[DBG] Updated Payload:")
             print(json.dumps(payload, indent=2))
 
             put_resp = session.put(rp_url, json=payload)
@@ -137,7 +103,7 @@ def reassign_dos_protection_rate_policies(
             summary["details"].append({"policy": policy_name, "status": "updated"})
             print(f"[INFO] Updated '{policy_name}' with new client list")
 
-            # Step 4: Verify update — output full JSON
+            # Step 4: Verify update
             verify_resp = session.get(rp_url)
             verify_resp.raise_for_status()
             verify_doc = verify_resp.json()
