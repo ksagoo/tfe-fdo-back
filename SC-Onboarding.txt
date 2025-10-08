@@ -76,9 +76,10 @@ def reassign_dos_protection_rate_policies(
             rp_resp.raise_for_status()
             full_doc = rp_resp.json()
 
-            # Update only the client list inside existing match conditions
-            updated_conditions = []
             found = False
+
+            # Step 3a: Update additionalMatchConditions
+            updated_conditions = []
             for cond in full_doc.get("additionalMatchConditions", []):
                 cond_type = cond.get("type", "").lower()
                 if "network" in cond_type and isinstance(cond.get("values"), list):
@@ -86,11 +87,19 @@ def reassign_dos_protection_rate_policies(
                     found = True
                 updated_conditions.append(cond)
 
+            # Step 3b: Update matchCriteria.bypassNetworkLists if present
+            match_criteria = full_doc.get("matchCriteria", {})
+            if not found and "bypassNetworkLists" in match_criteria:
+                match_criteria["bypassNetworkLists"] = [client_list_id]
+                full_doc["matchCriteria"] = match_criteria
+                found = True
+
             if not found:
-                print(f"[WARN] No NetworkListCondition found in '{policy_name}' — skipping update")
-                summary["details"].append({"policy": policy_name, "status": "skipped", "reason": "no network list condition"})
+                print(f"[WARN] No client list condition found in '{policy_name}' — skipping update")
+                summary["details"].append({"policy": policy_name, "status": "skipped", "reason": "no client list condition"})
                 continue
 
+            # Build payload
             payload = {
                 "name": full_doc.get("name"),
                 "description": full_doc.get("description"),
@@ -103,6 +112,9 @@ def reassign_dos_protection_rate_policies(
                 },
                 "additionalMatchConditions": updated_conditions
             }
+
+            if "matchCriteria" in full_doc:
+                payload["matchCriteria"] = full_doc["matchCriteria"]
 
             print(f"[DBG] PUT URL: {rp_url}")
             print("[DBG] Payload:")
@@ -128,6 +140,7 @@ def reassign_dos_protection_rate_policies(
 
     print(f"\n[INFO] Done. Success: {summary['successful']}, Failed: {summary['failed']}")
     return summary
+
 
 
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
