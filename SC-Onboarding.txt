@@ -1,1 +1,194 @@
+def reassign_dos_protection_rate_policies(
+    session,
+    base_url: str,
+    config_id: int,
+    version: int,
+    access_group: str,
+    template_policy_name_prefix: str = "Security Policy Template",
+    target_policy_id: str | None = None,   # optional: only touch policies attached to this security policy
+    activate_clones: bool = False,         # not used here, kept for compat
+):
+    """
+    Fix DoS Rate Limiting policies so their NetworkListCondition points at the
+    cloned, account-specific bypass client list (e.g. 'SC-<access_group> Rate Controls Bypass List').
 
+    Steps
+    -----
+    1) Read current DoS-rate assignments for the config/version.
+    2) For each attached rate policy:
+       - Fetch the policy (GET /rate-policies/{id})
+       - If it has additionalMatchOptions of type 'NetworkListCondition',
+         try to replace any *names* found there that look like template lists
+         with the *id* of the corresponding 'SC-<access_group> ...' client list.
+    3) PUT the updated rate policy back if we changed anything.
+
+    Notes
+    -----
+    * We do NOT use (or PUT to) '/configs/{id}/versions/{v}/policies' — that
+      endpoint lists the *collection* and is not for updating a specific policy.
+      To update a specific policy use:
+        /appsec/v1/configs/{id}/versions/{v}/security-policies/{policyId}  (for security policy objects)
+        /appsec/v1/rate-policies/{ratePolicyId}                            (for DoS rate policies)
+    * Here we only update DoS *rate policies*, so the correct PUT is /rate-policies/{id}.
+    """
+
+    import urllib.parse
+
+    def _debug(msg: str):
+        print(f"[DBG] {msg}")
+
+    # ---- endpoints
+    list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/dos-rates"
+    rate_policy_url = f"{base_url}/appsec/v1/rate-policies/{{policy_id}}"
+    cl_search_url = f"{base_url}/appsec/v1/client-list/definitions?search="
+
+    # ---- small helpers
+    def _norm_list(v):
+        if v is None:
+            return []
+        return v if isinstance(v, list) else [v]
+
+    def _resolve_client_list_id_from_name(name_fragment: str) -> str | None:
+        """Find a client list id by fuzzy name search. Returns the first id or None."""
+        try:
+            qs = urllib.parse.quote(name_fragment)
+            resp = session.get(cl_search_url + qs)
+            resp.raise_for_status()
+            items = resp.json().get("data", []) or resp.json().get("clientLists", [])
+            # items can be [{"id": "...","name": "..."}]
+            for it in items:
+                n = (it.get("name") or "").strip()
+                if name_fragment.lower() in n.lower():
+                    return str(it.get("id"))
+        except Exception as e:
+            _debug(f"client-list search error for '{name_fragment}': {e}")
+        return None
+
+    def _expected_sc_list_name(template_name: str) -> str:
+        """
+        If the incoming name *looks* like a template artifact, derive the expected SC- name.
+        Otherwise, still try a best-effort search with the given fragment.
+        """
+        suffix = template_name
+        if template_policy_name_prefix in template_name:
+            # keep the part after the template prefix
+            suffix = template_name.split(template_policy_name_prefix, 1)[-1].strip()
+        # normalize common variants (e.g. drop "Template" and keep 'Rate Controls Bypass List')
+        if "Rate Controls Bypass List" not in suffix:
+            # be tolerant: ensure the canonical tail exists
+            if "bypass" in suffix.lower():
+                pass
+            else:
+                suffix = (suffix + " Rate Controls Bypass List").strip()
+        return f"SC-{access_group} {suffix}".replace("  ", " ").strip()
+
+    # ---- 1) read assigned rate policies
+    try:
+        r = session.get(list_url)
+        if r.status_code == 404:
+            _debug(f"dos-rates endpoint 404 for this config/version, skipping DoS reassignment.")
+            return {
+                "processed": 0, "successful": 0, "failed": 0, "fixed_conditions": 0,
+                "details": [], "note": "dos-rates not available"
+            }
+        r.raise_for_status()
+        assigned = r.json().get("ratePolicies") or r.json().get("ratePolicyIds") or []
+        assigned_ids = [str(x.get("id") if isinstance(x, dict) else x) for x in assigned]
+    except Exception as e:
+        _debug(f"GET dos-rates failed: {e}")
+        return {
+            "processed": 0, "successful": 0, "failed": 1, "fixed_conditions": 0,
+            "details": [{"status": "read_dos_rates_failed", "error": str(e)}]
+        }
+
+    if not assigned_ids:
+        _debug("No rate policies attached; skipping DoS reassignment.")
+        return {"processed": 0, "successful": 0, "failed": 0, "fixed_conditions": 0, "details": []}
+
+    _debug(f"Assigned DoS rate policy ids: {assigned_ids}")
+
+    summary = {"processed": 0, "successful": 0, "failed": 0, "fixed_conditions": 0, "details": []}
+
+    for rp_id in assigned_ids:
+        summary["processed"] += 1
+        try:
+            # ---- 2) fetch full rate policy
+            g = session.get(rate_policy_url.format(policy_id=rp_id))
+            g.raise_for_status()
+            full = g.json()
+            rp_name = full.get("name", f"id:{rp_id}")
+
+            # If user asked to scope to a particular *security policy*, skip others.
+            if target_policy_id and str(full.get("policyId")) != str(target_policy_id):
+                _debug(f"Skipping rate policy '{rp_name}' (policyId {full.get('policyId')}) "
+                       f"!= requested {target_policy_id}")
+                summary["successful"] += 1  # treated as 'processed ok'
+                continue
+
+            changed = False
+
+            # Look for additionalMatchOptions -> items with type == NetworkListCondition
+            for opt in full.get("additionalMatchOptions", []):
+                if opt.get("type") != "NetworkListCondition":
+                    continue
+
+                values_in = _norm_list(opt.get("values"))
+                values_out = []
+                for v in values_in:
+                    v_str = str(v).strip()
+
+                    # if already a numeric id, keep as-is
+                    if v_str.isdigit():
+                        values_out.append(v)
+                        continue
+
+                    # treat as a *name* (template-ish), try to resolve to the SC list id
+                    candidate_name = _expected_sc_list_name(v_str)
+                    resolved_id = _resolve_client_list_id_from_name(candidate_name)
+
+                    if resolved_id:
+                        values_out.append(resolved_id)
+                        if resolved_id != v_str:
+                            changed = True
+                            _debug(f"    NetworkListCondition: '{v_str}' -> id {resolved_id}")
+                    else:
+                        # fallback: keep original
+                        values_out.append(v)
+                        _debug(f"    NetworkListCondition: no match for '{candidate_name}', kept '{v_str}'")
+
+                # only write back if we changed
+                if changed:
+                    opt["values"] = values_out
+
+            if changed:
+                # scrub read-only fields that cause 4xx on PUT
+                for ro in ("id", "updateDate", "used", "createdDate", "createdBy"):
+                    full.pop(ro, None)
+
+                # Small readable preview
+                try:
+                    changed_opts = [
+                        {k: o.get(k) for k in ("type", "values")}
+                        for o in full.get("additionalMatchOptions", [])
+                        if o.get("type") == "NetworkListCondition"
+                    ]
+                    _debug(f"PUT payload (NetworkListCondition) for '{rp_name}': {changed_opts}")
+                except Exception:
+                    pass
+
+                u = session.put(rate_policy_url.format(policy_id=rp_id), json=full)
+                u.raise_for_status()
+                summary["fixed_conditions"] += 1
+                summary["successful"] += 1
+                summary["details"].append({"id": rp_id, "name": rp_name, "status": "updated"})
+                _debug(f"Updated DoS rate policy '{rp_name}' ({rp_id})")
+            else:
+                summary["successful"] += 1
+                summary["details"].append({"id": rp_id, "name": rp_name, "status": "no_change"})
+
+        except Exception as e:
+            summary["failed"] += 1
+            summary["details"].append({"id": rp_id, "status": "error", "error": str(e)})
+            _debug(f"ERROR updating rate policy id {rp_id}: {e}")
+
+    return summary
