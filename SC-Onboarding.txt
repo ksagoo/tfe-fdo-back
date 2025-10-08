@@ -143,7 +143,7 @@ def reassign_dos_protection_rate_policies(
         policy_id = get_policy_id(policy)
         policy_name = policy.get("name") or "Unnamed Policy"
         rp_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{policy_id}"
-        print(f"[DBG] Fetching details for policy '{policy_name}' using id={policy_id}")
+        print(f"[INFO] Detecting edits for policy '{policy_name}' using id:{policy_id}")
 
         try:
             rp_resp = session.get(rp_url)
@@ -154,29 +154,17 @@ def reassign_dos_protection_rate_policies(
             payload = {
                 "name": full_doc.get("name"),
                 "description": full_doc.get("description"),
-                "matchType": full_doc.get("matchType"),
-                "pathMatchType": full_doc.get("pathMatchType"),
-                "requestType": full_doc.get("requestType"),
-                "type": full_doc.get("type"),
-                "sameActionOnIpv6": full_doc.get("sameActionOnIpv6", True),
-                "averageThreshold": full_doc.get("averageThreshold"),
+                "threshold": full_doc.get("threshold"),
                 "burstThreshold": full_doc.get("burstThreshold"),
-                "burstWindow": full_doc.get("burstWindow"),
+                "durationSeconds": full_doc.get("durationSeconds"),
+                "clientIdentifier": full_doc.get("clientIdentifier"),
+                "action": full_doc.get("action", {"type": "alert"}),
+                "additionalMatchConditions": full_doc.get("additionalMatchConditions", []),
             }
 
-            # Preserve action if present
-            if "action" in full_doc:
-                payload["action"] = full_doc["action"]
-
-            # Update bypass list
-            if "additionalMatchOptions" in full_doc:
-                payload["additionalMatchOptions"] = []
-                for opt in full_doc.get("additionalMatchOptions", []):
-                    if isinstance(opt, dict) and opt.get("type") == "NetworkListCondition":
-                        opt["values"] = [client_list_id]
-                    payload["additionalMatchOptions"].append(opt)
-            elif "matchCriteria" in full_doc:
-                payload["matchCriteria"] = full_doc.get("matchCriteria", {})
+            # Inject the client list into matchCriteria if present
+            if "matchCriteria" in full_doc:
+                payload["matchCriteria"] = full_doc["matchCriteria"]
                 payload["matchCriteria"]["bypassNetworkLists"] = [client_list_id]
 
             print(f"[DBG] PUT URL: {rp_url}")
