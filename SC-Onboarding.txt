@@ -1,5 +1,5 @@
 import requests
-from typing import Optional, Dict, List, Tuple, Union
+from typing import Dict, List, Union
 
 def reassign_dos_protection_rate_policies(
     session: requests.Session,
@@ -35,7 +35,13 @@ def reassign_dos_protection_rate_policies(
         resp = session.get(f"{base_url}/client-list/v1/lists")
         resp.raise_for_status()
         data = resp.json()
-        lists = data if isinstance(data, list) else data.get("lists", [])
+        if isinstance(data, list):
+            lists = data
+        elif isinstance(data, dict):
+            lists = data.get("lists", [])
+        else:
+            lists = []
+
         print(f"[DBG] Client Lists returned {len(lists)} items")
         for it in lists:
             print(f"    - {it.get('name')} (id={it.get('listId') or it.get('id')})")
@@ -56,7 +62,7 @@ def reassign_dos_protection_rate_policies(
             )
             resp.raise_for_status()
             payload = resp.json()
-            lists = payload.get("networkLists", [])
+            lists = payload.get("networkLists", []) if isinstance(payload, dict) else []
             print(f"[DBG] Network Lists returned {len(lists)} items")
             for it in lists:
                 print(f"    - {it.get('name')} (id={it.get('uniqueId') or it.get('id')})")
