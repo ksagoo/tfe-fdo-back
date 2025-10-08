@@ -1,172 +1,157 @@
-def _norm(hosts):
-    return {h.strip().lower() for h in (hosts or []) if h and h.strip()}
-
-def collect_existing_fqdns(session, base_url, config_id, version=1):
+def reassign_dos_protection_rate_policies(
+    session,
+    base_url,
+    config_id,
+    version,
+    access_group,
+    template_policy_name_prefix="Security Policy Template",
+    target_policy_id: str | None = None,   # optional: only fix policies attached to this security policy
+    activate_clones: bool = True,          # keep your staging activation behavior
+):
     """
-    Returns a set of FQDNs already tied to this Security Config version.
-    Sources:
-      - selected-hostnames (what the GUI shows in 'Hostnames currently associated...')
-      - match-targets (websiteTargets.hostnames) as a fallback/safety net
+    1) For every DoS rate policy attached to this config/version:
+       - If its name starts with the template prefix, clone it to 'SC-<access_group> <suffix>'.
+       - Otherwise keep the existing policy id.
+    2) For each kept/cloned policy, rewrite additionalMatchOptions/NetworkListCondition
+       values so that any template client list names/ids are replaced by the
+       corresponding 'SC-<access_group> …' client list (if found).
+    3) PUT the cleaned policy back, then update the config's dos-rates assignment list.
     """
-    import requests
-    existing = set()
+    list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/dos-rates"
+    clone_url = f"{base_url}/appsec/v1/rate-policies/clone"
+    policy_url_template = f"{base_url}/appsec/v1/rate-policies/{{policy_id}}"
 
-    # 1) selected-hostnames
-    sel_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selected-hostnames"
+    summary = {"processed": 0, "successful": 0, "failed": 0, "fixed_conditions": 0, "details": []}
+
+    # helper: resolve the cloned client-list id from either a template-like name or any name fragment
+    def _resolve_client_list_id_from_name(name: str) -> str | None:
+        # if it looks like a template list name, derive the expected SC- name
+        expected = name
+        if "Security Policy Template" in name:
+            suffix = name.split("Security Policy Template", 1)[-1].strip()
+            expected = f"SC-{access_group} {suffix}".strip()
+
+        # try to find a client list whose *name* contains/equals the expected
+        matches = search_client_lists_by_name(session, base_url, expected)
+        return matches[0][0] if matches else None  # (listId, name) -> listId
+
     try:
-        r = session.get(sel_url, headers={"accept": "application/json"})
-        if r.status_code != 404:
-            r.raise_for_status()
-            data = r.json()
-            if "hostnameList" in data:
-                existing |= _norm([h.get("hostname") for h in data.get("hostnameList", [])])
-            else:
-                existing |= _norm(data.get("hostnames", []))
-    except Exception as e:
-        print(f"[WARN] selected-hostnames fetch failed (continuing): {e}")
-
-    # 2) match-targets (safety belt)
-    mt_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/match-targets"
-    try:
-        r = session.get(mt_url, headers={"accept": "application/json"})
-        r.raise_for_status()
-        mt = r.json()
-        for wt in (mt.get("matchTargets", {}) or {}).get("websiteTargets", []):
-            existing |= _norm(wt.get("hostnames", []))
-    except Exception as e:
-        print(f"[WARN] match-targets fetch failed (continuing): {e}")
-
-    return existing
-
-def build_desired_fqdns(session, base_url, config_id, version, new_fqdns):
-    """
-    Union of what's already associated with the config + what the caller just requested.
-    Always returns a sorted, de-duplicated list.
-    """
-    existing = collect_existing_fqdns(session, base_url, config_id, version)
-    desired  = existing | _norm(new_fqdns)
-    return sorted(desired)
-
-
-# After you create/clone the Prod policy and set version notes:
-desired_fqdns = build_desired_fqdns(
-    session=session,
-    base_url=base_url,
-    config_id=existing_config_id,  # same config for NonProd & Prod
-    version=1,
-    new_fqdns=args.fqdn          # whatever was passed on the CLI for this run
-)
-
-print(f"[DEBUG] Desired FQDNs (union): {desired_fqdns}")
-
-
-def ensure_config_hostnames(session, base_url, config_id, version, fqdn_list, strict=False):
-    """
-    Ensures that all requested FQDNs (NonProd + Prod) are associated with the given
-    Security Configuration version. Always attempts to PUT all requested FQDNs first.
-
-    Behavior:
-      1. Fetch currently selected + selectable hostnames (for debug only).
-      2. Build full desired list (existing + requested).
-      3. PUT all requested hostnames in 'mode=append' format.
-      4. If API rejects, fallback to only selectable hostnames.
-    """
-    import requests
-
-    sel_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selected-hostnames"
-    selectable_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/selectable-hostnames"
-
-    def _norm(hosts):
-        return {h.strip().lower() for h in (hosts or []) if h and h.strip()}
-
-    # --- Fetch selectable hostnames (for debug info)
-    selectable = set()
-    try:
-        resp = session.get(selectable_url, headers={"accept": "application/json"})
+        # 1) Read the assignment list
+        resp = session.get(list_url)
         resp.raise_for_status()
-        selectable = _norm(resp.json().get("hostnames", []))
-    except Exception as e:
-        print(f"[WARN] Unable to fetch selectable hostnames (debug only): {e}")
+        policies = resp.json().get("ratePolicies", [])
+        updated_assignments: list[str] = []
 
-    # --- Fetch already selected hostnames
-    selected_before = set()
-    try:
-        resp = session.get(sel_url, headers={"accept": "application/json"})
-        if resp.status_code != 404:
-            resp.raise_for_status()
-            data = resp.json()
-            if "hostnameList" in data:
-                selected_before = _norm([h.get("hostname") for h in data.get("hostnameList", [])])
-            else:
-                selected_before = _norm(data.get("hostnames", []))
-    except Exception as e:
-        print(f"[WARN] Could not fetch existing selected hostnames: {e}")
+        for p in policies:
+            summary["processed"] += 1
+            orig_name = p.get("name", "")
+            orig_id = p.get("id")
 
-    desired_raw = _norm(fqdn_list)
-    desired_all = sorted(selected_before | desired_raw)
-    not_selectable = sorted(desired_raw - selectable)
-    selectable_now = sorted(desired_raw & selectable)
+            # decide which policy id we will keep (clone or original)
+            kept_id = orig_id
+            kept_name = orig_name
 
-    print(f"\n[DEBUG] ========== Hostname Sync Debug ==========")
-    print(f"[DEBUG] Config ID : {config_id}  Version: {version}")
-    print(f"[DEBUG] Desired (requested): {sorted(desired_raw)}")
-    print(f"[DEBUG] Selectable (API)   : {sorted(selectable)}")
-    print(f"[DEBUG] Not selectable     : {not_selectable}")
-    print(f"[DEBUG] Selectable subset  : {selectable_now}")
-    print(f"[DEBUG] Currently selected : {sorted(selected_before)}")
-    print(f"[DEBUG] Final (attempting ALL): {desired_all}")
-    print(f"[DEBUG] ==========================================\n")
+            # clone if it looks like a template copy
+            if orig_name.startswith(template_policy_name_prefix):
+                suffix = orig_name.replace(template_policy_name_prefix, "").strip()
+                clone_name = f"SC-{access_group} {suffix}".strip()
 
-    # --- Primary payload: all requested (per your ask)
-    payload_all = {
-        "hostnameList": [{"hostname": h} for h in desired_all],
-        "mode": "append"
-    }
+                # if a policy with clone_name already exists in the assignment list, reuse it
+                existing = next((rp for rp in policies if rp.get("name") == clone_name), None)
+                if existing:
+                    kept_id = existing.get("id")
+                    kept_name = clone_name
+                else:
+                    try:
+                        clone_payload = {
+                            "cloneFromRatePolicyId": orig_id,
+                            "name": clone_name,
+                            "description": f"Cloned from {orig_name}",
+                            "matchType": p.get("matchType"),
+                        }
+                        c = session.post(clone_url, json=clone_payload)
+                        c.raise_for_status()
+                        kept_id = c.json().get("id")
+                        kept_name = clone_name
 
-    # --- Fallback payload: only selectable
-    payload_filtered = {
-        "hostnameList": [{"hostname": h} for h in sorted(selected_before | (desired_raw & selectable))],
-        "mode": "append"
-    }
+                        if activate_clones and kept_id:
+                            act = session.post(policy_url_template.format(policy_id=kept_id) + "/activate",
+                                               json={"network": "STAGING"})
+                            # don't fail build on activation errors; it's best-effort
+                        summary["successful"] += 1
+                        summary["details"].append({"template": orig_name, "clone": kept_name, "status": "success"})
+                    except Exception as clone_err:
+                        # fallback to the original template policy id
+                        kept_id = orig_id
+                        kept_name = orig_name
+                        summary["failed"] += 1
+                        summary["details"].append(
+                            {"template": orig_name, "status": "clone_failed", "error": str(clone_err)}
+                        )
 
-    headers = {"accept": "application/json", "content-type": "application/json"}
-
-    print(f"[DEBUG] PUT (ALL requested) → {sel_url}")
-    print(f"[DEBUG] Payload (ALL)       : {payload_all}")
-
-    try:
-        resp = session.put(sel_url, json=payload_all, headers=headers)
-        resp.raise_for_status()
-        used_payload = "ALL requested"
-        final_set = desired_all
-    except requests.exceptions.HTTPError as e:
-        status = e.response.status_code if e.response is not None else None
-        if status in (400, 415, 422):
-            print(f"[INFO] PUT failed ({status}) — retrying with filtered (selectable only).")
-            print(f"[DEBUG] Payload (filtered): {payload_filtered}")
+            # 2) Fix NetworkListCondition for the kept policy (cloned or original)
             try:
-                resp = session.put(sel_url, json=payload_filtered, headers=headers)
-                resp.raise_for_status()
-                used_payload = "filtered (selectable only)"
-                final_set = sorted(payload_filtered["hostnameList"])
-            except Exception as e2:
-                print(f"[ERROR] Both PUT attempts failed: {e2}")
-                return {"before": sorted(selected_before), "added": [], "skipped": not_selectable, "final": sorted(selected_before)}
-        else:
-            print(f"[ERROR] PUT failed (non-recoverable): {e}")
-            return {"before": sorted(selected_before), "added": [], "skipped": not_selectable, "final": sorted(selected_before)}
+                # fetch full policy
+                d = session.get(policy_url_template.format(policy_id=kept_id))
+                d.raise_for_status()
+                full = d.json()
 
-    print("\n[INFO] Final selected hostnames now set on the config (payload used:", used_payload, ")")
-    for h in desired_all:
-        print("  -", h)
+                # optional: only touch policies attached to a specific security policy
+                if target_policy_id and full.get("policyId") != target_policy_id:
+                    updated_assignments.append(kept_id)
+                    continue
 
-    return {
-        "before": sorted(selected_before),
-        "added": sorted(list(desired_raw - selected_before)),
-        "skipped": not_selectable,
-        "final": desired_all,
-        "payload_used": used_payload
-    }
+                changed = False
+                for opt in full.get("additionalMatchOptions", []):
+                    if opt.get("type") != "NetworkListCondition":
+                        continue
+                    new_vals = []
+                    for v in opt.get("values", []):
+                        v_str = str(v)
 
+                        # if appears numeric (already an id), keep as-is
+                        if v_str.isdigit():
+                            new_vals.append(v)
+                            continue
 
+                        # treat as a name and try to resolve it to the SC- list id
+                        resolved = _resolve_client_list_id_from_name(v_str)
+                        new_vals.append(resolved if resolved else v)  # fall back to original if not found
+                        if resolved and resolved != v:
+                            changed = True
 
+                    if changed:
+                        opt["values"] = new_vals
+
+                # scrub read-only fields before PUT
+                for ro in ("id", "updateDate", "used"):
+                    full.pop(ro, None)
+
+                if changed:
+                    u = session.put(policy_url_template.format(policy_id=kept_id), json=full)
+                    u.raise_for_status()
+                    summary["fixed_conditions"] += 1
+
+                updated_assignments.append(kept_id)
+
+            except Exception as fix_err:
+                summary["failed"] += 1
+                summary["details"].append(
+                    {"id": kept_id, "name": kept_name, "status": "update_failed", "error": str(fix_err)}
+                )
+                # still keep this policy in the assignment list to avoid breaking the config
+                updated_assignments.append(kept_id)
+
+        # 3) Replace the assignment list in the config
+        try:
+            put_resp = session.put(list_url, json={"ratePolicies": updated_assignments})
+            put_resp.raise_for_status()
+        except Exception as assign_err:
+            summary["failed"] += 1
+            summary["details"].append({"status": "assign_failed", "error": str(assign_err)})
+
+    except Exception as e:
+        summary["failed"] += 1
+        summary["details"].append({"status": "failed", "error": str(e)})
+
+    return summary
