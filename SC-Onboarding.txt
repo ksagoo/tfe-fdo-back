@@ -13,11 +13,6 @@ def reassign_dos_protection_rate_policies(
     """
     Reassign DoS / Rate Limiting policies to use the correct Client List
     for the specified access_group.
-
-    - Fetches client lists (includes inactive) and falls back to network lists.
-    - Recursively scans nested JSON structures to find list objects.
-    - Case-insensitive match against name attribute.
-    - Dynamically selects correct rate policy ID field.
     """
     summary: Dict[str, Union[int, List[Dict[str, str]]]] = {"successful": 0, "failed": 0, "details": []}
     fragment = (list_name_fragment or f"SC-{access_group} Rate Controls Bypass List").strip()
@@ -98,35 +93,8 @@ def reassign_dos_protection_rate_policies(
     except Exception as e:
         print(f"[WARN] Client Lists API lookup failed: {e}")
 
-    # Fallback to Network Lists API
     if not client_list_id:
-        try:
-            resp = session.get(
-                f"{base_url}/network-list/v2/network-lists",
-                params={"page": 0, "pageSize": 1000},
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-            _pretty_dump("Raw Network Lists response", payload)
-
-            candidates = _collect_list_candidates(payload)
-            print(f"[DBG] Network Lists: discovered {len(candidates)} candidates")
-            for it in candidates:
-                print(f"    - {_format_candidate_debug(it)}")
-
-            frag_lower = fragment.lower()
-            for it in candidates:
-                name = (it.get("name") or "").strip()
-                if name and frag_lower in name.lower():
-                    client_list_id = str(it.get("uniqueId") or it.get("id"))
-                    client_list_name = name
-                    break
-
-        except Exception as e:
-            print(f"[WARN] Network Lists API lookup failed: {e}")
-
-    if not client_list_id:
-        print(f"[ERROR] No matching Client or Network List found for fragment '{fragment}'. Cannot proceed.")
+        print(f"[ERROR] No matching Client List found for fragment '{fragment}'. Cannot proceed.")
         return summary
 
     print(f"[INFO] Using list '{client_list_name}' (ID: {client_list_id}) for DoS reassignment.")
@@ -175,11 +143,11 @@ def reassign_dos_protection_rate_policies(
         try:
             rp_resp = session.get(rp_url)
             rp_resp.raise_for_status()
-            doc = rp_resp.json()
+            data = rp_resp.json()
             changed = False
 
             # newer schema: additionalMatchOptions
-            amo = doc.get("additionalMatchOptions", [])
+            amo = data.get("additionalMatchOptions", [])
             if isinstance(amo, list):
                 for opt in amo:
                     if isinstance(opt, dict) and opt.get("type") == "NetworkListCondition":
@@ -189,7 +157,7 @@ def reassign_dos_protection_rate_policies(
                             changed = True
 
             # older schema: matchCriteria.bypassNetworkLists
-            mc = doc.get("matchCriteria")
+            mc = data.get("matchCriteria")
             if not changed and isinstance(mc, dict):
                 existing = mc.get("bypassNetworkLists", [])
                 if existing != [client_list_id]:
@@ -200,11 +168,21 @@ def reassign_dos_protection_rate_policies(
                 summary["details"].append({"policy": policy_name, "status": "skipped"})
                 continue
 
-            # clean read-only fields
-            for ro in ("id", "updateDate", "createDate", "used"):
-                doc.pop(ro, None)
+            # aggressively strip read-only / metadata fields
+            readonly_fields = {
+                "id", "policyId", "uuid", "uniqueId",
+                "createDate", "updateDate", "createdAt", "updatedAt",
+                "links", "etag", "version", "used", "metadata", "availableActions"
+            }
+            for ro in list(data.keys()):
+                if ro in readonly_fields:
+                    data.pop(ro, None)
 
-            put_resp = session.put(rp_url, json=doc)
+            print(f"[DBG] PUT URL: {rp_url}")
+            print("[DBG] Payload being sent:")
+            print(json.dumps(data, indent=2))
+
+            put_resp = session.put(rp_url, json=data)
             put_resp.raise_for_status()
             summary["successful"] += 1
             summary["details"].append({"policy": policy_name, "status": "updated"})
