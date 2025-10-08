@@ -17,7 +17,7 @@ def reassign_dos_protection_rate_policies(
     - Finds the correct client list (active or inactive).
     - Fetches all rate policies.
     - Builds a minimal valid payload for each policy update.
-    - Updates only the bypass list field (or additionalMatchConditions).
+    - Updates only the bypass list field.
     """
     summary: Dict[str, Union[int, List[Dict[str, str]]]] = {"successful": 0, "failed": 0, "details": []}
     fragment = (list_name_fragment or f"SC-{access_group} Rate Controls Bypass List").strip()
@@ -150,7 +150,7 @@ def reassign_dos_protection_rate_policies(
             rp_resp.raise_for_status()
             full_doc = rp_resp.json()
 
-            # Build a minimal payload from scratch (only allowed fields)
+            # Build ultra-minimal payload (only allowed fields)
             payload = {
                 "name": full_doc.get("name"),
                 "description": full_doc.get("description"),
@@ -158,7 +158,9 @@ def reassign_dos_protection_rate_policies(
                 "burstThreshold": full_doc.get("burstThreshold"),
                 "durationSeconds": full_doc.get("durationSeconds"),
                 "clientIdentifier": full_doc.get("clientIdentifier"),
-                "action": full_doc.get("action", {"type": "alert"}),
+                "action": {
+                    "type": full_doc.get("action", {}).get("type", "alert")
+                },
                 "additionalMatchConditions": full_doc.get("additionalMatchConditions", []),
                 "matchCriteria": {
                     "bypassNetworkLists": [client_list_id]
