@@ -44,7 +44,16 @@ def reassign_dos_protection_rate_policies(
 
         print(f"[DBG] Client Lists returned {len(lists)} items")
         for it in lists:
-            print(f"    - {it.get('name')} (id={it.get('listId') or it.get('id')})")
+            print(
+                f"    - name={it.get('name')} "
+                f"id={it.get('listId') or it.get('id')} "
+                f"status={it.get('status')} "
+                f"protection={it.get('protectionStatus')} "
+                f"shared={it.get('shared')}"
+            )
+
+        # now apply filter (case-insensitive)
+        for it in lists:
             name = (it.get("name") or "").strip()
             lid = it.get("listId") or it.get("id")
             if name and list_name_fragment.lower() in name.lower():
@@ -65,7 +74,13 @@ def reassign_dos_protection_rate_policies(
             lists = payload.get("networkLists", []) if isinstance(payload, dict) else []
             print(f"[DBG] Network Lists returned {len(lists)} items")
             for it in lists:
-                print(f"    - {it.get('name')} (id={it.get('uniqueId') or it.get('id')})")
+                print(
+                    f"    - name={it.get('name')} "
+                    f"id={it.get('uniqueId') or it.get('id')} "
+                    f"type={it.get('type')} "
+                    f"shared={it.get('shared')}"
+                )
+            for it in lists:
                 name = (it.get("name") or "").strip()
                 lid = it.get("uniqueId") or it.get("id")
                 if name and list_name_fragment.lower() in name.lower():
