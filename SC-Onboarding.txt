@@ -8,11 +8,16 @@ def reassign_dos_protection_rate_policies(
     config_id: Union[str, int],
     version: Union[str, int],
     access_group: str,
-    list_name_fragment: Optional[str] = None,  # optional override
+    list_name_fragment: Optional[str] = None,
 ) -> Dict[str, Union[int, List[Dict[str, str]]]]:
     """
     Reassign DoS / Rate Limiting policies to use the correct Client List
     for the specified access_group.
+
+    - Finds the correct client list (active or inactive).
+    - Fetches all rate policies.
+    - Builds a minimal valid payload for each policy update.
+    - Updates only the bypass list field (or additionalMatchOptions).
     """
     summary: Dict[str, Union[int, List[Dict[str, str]]]] = {"successful": 0, "failed": 0, "details": []}
     fragment = (list_name_fragment or f"SC-{access_group} Rate Controls Bypass List").strip()
@@ -143,46 +148,42 @@ def reassign_dos_protection_rate_policies(
         try:
             rp_resp = session.get(rp_url)
             rp_resp.raise_for_status()
-            data = rp_resp.json()
-            changed = False
+            full_doc = rp_resp.json()
 
-            # newer schema: additionalMatchOptions
-            amo = data.get("additionalMatchOptions", [])
-            if isinstance(amo, list):
-                for opt in amo:
-                    if isinstance(opt, dict) and opt.get("type") == "NetworkListCondition":
-                        vals = opt.get("values", [])
-                        if vals != [client_list_id]:
-                            opt["values"] = [client_list_id]
-                            changed = True
-
-            # older schema: matchCriteria.bypassNetworkLists
-            mc = data.get("matchCriteria")
-            if not changed and isinstance(mc, dict):
-                existing = mc.get("bypassNetworkLists", [])
-                if existing != [client_list_id]:
-                    mc["bypassNetworkLists"] = [client_list_id]
-                    changed = True
-
-            if not changed:
-                summary["details"].append({"policy": policy_name, "status": "skipped"})
-                continue
-
-            # aggressively strip read-only / metadata fields
-            readonly_fields = {
-                "id", "policyId", "uuid", "uniqueId",
-                "createDate", "updateDate", "createdAt", "updatedAt",
-                "links", "etag", "version", "used", "metadata", "availableActions"
+            # Build a minimal payload from scratch
+            payload = {
+                "name": full_doc.get("name"),
+                "description": full_doc.get("description"),
+                "matchType": full_doc.get("matchType"),
+                "pathMatchType": full_doc.get("pathMatchType"),
+                "requestType": full_doc.get("requestType"),
+                "type": full_doc.get("type"),
+                "sameActionOnIpv6": full_doc.get("sameActionOnIpv6", True),
+                "averageThreshold": full_doc.get("averageThreshold"),
+                "burstThreshold": full_doc.get("burstThreshold"),
+                "burstWindow": full_doc.get("burstWindow"),
             }
-            for ro in list(data.keys()):
-                if ro in readonly_fields:
-                    data.pop(ro, None)
+
+            # Preserve action if present
+            if "action" in full_doc:
+                payload["action"] = full_doc["action"]
+
+            # Update bypass list
+            if "additionalMatchOptions" in full_doc:
+                payload["additionalMatchOptions"] = []
+                for opt in full_doc.get("additionalMatchOptions", []):
+                    if isinstance(opt, dict) and opt.get("type") == "NetworkListCondition":
+                        opt["values"] = [client_list_id]
+                    payload["additionalMatchOptions"].append(opt)
+            elif "matchCriteria" in full_doc:
+                payload["matchCriteria"] = full_doc.get("matchCriteria", {})
+                payload["matchCriteria"]["bypassNetworkLists"] = [client_list_id]
 
             print(f"[DBG] PUT URL: {rp_url}")
             print("[DBG] Payload being sent:")
-            print(json.dumps(data, indent=2))
+            print(json.dumps(payload, indent=2))
 
-            put_resp = session.put(rp_url, json=data)
+            put_resp = session.put(rp_url, json=payload)
             put_resp.raise_for_status()
             summary["successful"] += 1
             summary["details"].append({"policy": policy_name, "status": "updated"})
