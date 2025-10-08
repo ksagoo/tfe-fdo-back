@@ -78,14 +78,14 @@ def reassign_dos_protection_rate_policies(
 
             found = False
 
-            # Step 3a: Update additionalMatchConditions
-            updated_conditions = []
-            for cond in full_doc.get("additionalMatchConditions", []):
-                cond_type = cond.get("type", "").lower()
-                if "network" in cond_type and isinstance(cond.get("values"), list):
-                    cond["values"] = [client_list_id]
+            # Step 3a: Update additionalMatchCondition (singular)
+            amc = full_doc.get("additionalMatchCondition")
+            if isinstance(amc, dict):
+                cond_type = amc.get("type", "").lower()
+                if "network" in cond_type and isinstance(amc.get("values"), list):
+                    amc["values"] = [client_list_id]
+                    full_doc["additionalMatchCondition"] = amc
                     found = True
-                updated_conditions.append(cond)
 
             # Step 3b: Update matchCriteria.bypassNetworkLists if present
             match_criteria = full_doc.get("matchCriteria", {})
@@ -99,6 +99,14 @@ def reassign_dos_protection_rate_policies(
                 summary["details"].append({"policy": policy_name, "status": "skipped", "reason": "no client list condition"})
                 continue
 
+            # Step 3c: Preserve FileExtensionCondition if present
+            file_ext_condition = None
+            if "additionalMatchConditions" in full_doc:
+                for cond in full_doc["additionalMatchConditions"]:
+                    if cond.get("type") == "FileExtensionCondition":
+                        file_ext_condition = cond
+                        break
+
             # Build payload
             payload = {
                 "name": full_doc.get("name"),
@@ -109,12 +117,15 @@ def reassign_dos_protection_rate_policies(
                 "clientIdentifier": full_doc.get("clientIdentifier"),
                 "action": {
                     "type": full_doc.get("action", {}).get("type", "alert")
-                },
-                "additionalMatchConditions": updated_conditions
+                }
             }
 
+            if "additionalMatchCondition" in full_doc:
+                payload["additionalMatchCondition"] = full_doc["additionalMatchCondition"]
             if "matchCriteria" in full_doc:
                 payload["matchCriteria"] = full_doc["matchCriteria"]
+            if file_ext_condition:
+                payload["additionalMatchConditions"] = [file_ext_condition]
 
             print(f"[DBG] PUT URL: {rp_url}")
             print("[DBG] Payload:")
