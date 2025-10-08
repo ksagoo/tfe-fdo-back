@@ -73,26 +73,19 @@ def reassign_dos_protection_rate_policies(
             rp_resp.raise_for_status()
             full_doc = rp_resp.json()
 
-            # Build GUI-visible match conditions
-            new_conditions = [
-                {
-                    "type": "NetworkListCondition",
-                    "positiveMatch": False,
-                    "values": [client_list_id]
-                },
-                {
-                    "type": "RequestMethodCondition",
-                    "positiveMatch": True,
-                    "values": ["POST"]
-                }
-            ]
+            # Update only the client list inside existing match conditions
+            updated_conditions = []
+            found = False
+            for cond in full_doc.get("additionalMatchConditions", []):
+                if cond.get("type") == "NetworkListCondition":
+                    cond["values"] = [client_list_id]
+                    found = True
+                updated_conditions.append(cond)
 
-            existing_conditions = full_doc.get("additionalMatchConditions", [])
-            filtered_conditions = [
-                c for c in existing_conditions
-                if c.get("type") not in ("NetworkListCondition", "RequestMethodCondition")
-            ]
-            filtered_conditions.extend(new_conditions)
+            if not found:
+                print(f"[WARN] No NetworkListCondition found in '{policy_name}' — skipping update")
+                summary["details"].append({"policy": policy_name, "status": "skipped", "reason": "no network list condition"})
+                continue
 
             payload = {
                 "name": full_doc.get("name"),
@@ -104,7 +97,7 @@ def reassign_dos_protection_rate_policies(
                 "action": {
                     "type": full_doc.get("action", {}).get("type", "alert")
                 },
-                "additionalMatchConditions": filtered_conditions
+                "additionalMatchConditions": updated_conditions
             }
 
             print(f"[DBG] PUT URL: {rp_url}")
@@ -115,28 +108,7 @@ def reassign_dos_protection_rate_policies(
             put_resp.raise_for_status()
             summary["successful"] += 1
             summary["details"].append({"policy": policy_name, "status": "updated"})
-            print(f"[INFO] Updated '{policy_name}'")
-
-            # Step 4: Verify update
-            verify_resp = session.get(rp_url)
-            verify_resp.raise_for_status()
-            verify_doc = verify_resp.json()
-            match_conditions = verify_doc.get("additionalMatchConditions", [])
-
-            found_network = any(
-                c.get("type") == "NetworkListCondition" and client_list_id in c.get("values", []) and c.get("positiveMatch") is False
-                for c in match_conditions
-            )
-            found_post = any(
-                c.get("type") == "RequestMethodCondition" and "POST" in c.get("values", []) and c.get("positiveMatch") is True
-                for c in match_conditions
-            )
-
-            if found_network and found_post:
-                print(f"[VERIFY] ✅ Both conditions correctly attached to '{policy_name}'")
-            else:
-                print(f"[VERIFY] ❌ Missing condition(s) in '{policy_name}'")
-                summary["details"][-1]["verify"] = "missing"
+            print(f"[INFO] Updated '{policy_name}' with new client list")
 
         except Exception as e:
             print(f"[ERROR] Failed updating '{policy_name}': {e}")
@@ -145,6 +117,7 @@ def reassign_dos_protection_rate_policies(
 
     print(f"[INFO] Done. Success: {summary['successful']}, Failed: {summary['failed']}")
     return summary
+
 
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 def reassign_dos_rate_policies_gui_visible(
