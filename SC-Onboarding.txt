@@ -1,3 +1,27 @@
+def _resolve_client_list_id_from_name(name: str) -> str | None:
+    # if it looks like a template list name, derive the expected SC- name
+    expected = name
+    if "Security Policy Template" in name:
+        suffix = name.split("Security Policy Template", 1)[-1].strip()
+        expected = f"SC-{access_group} {suffix}".strip()
+
+    # try to find a client list whose name contains/equals the expected
+    matches = search_client_lists_by_name(session, base_url, expected)
+    if not matches:
+        print(f"[WARN] No client list found for '{expected}'")
+        return None
+
+    # handle tuple or simple id returns safely
+    first_match = matches[0]
+    if isinstance(first_match, (list, tuple)):
+        return first_match[0]
+    elif isinstance(first_match, dict):
+        return first_match.get("id")
+    else:
+        return str(first_match)
+
+
+
 def reassign_dos_protection_rate_policies(
     session,
     base_url,
