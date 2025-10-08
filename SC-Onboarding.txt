@@ -10,31 +10,18 @@ def reassign_dos_protection_rate_policies(
     access_group: str,
     list_name_fragment: Optional[str] = None,
 ) -> Dict[str, Union[int, List[Dict[str, str]]]]:
-    """
-    Reassign DoS / Rate Limiting policies to use the correct Client List
-    for the specified access_group.
-
-    - Finds the correct client list (active or inactive).
-    - Fetches all rate policies.
-    - Builds a minimal valid payload for each policy update.
-    - Updates only the bypass list field.
-    """
     summary: Dict[str, Union[int, List[Dict[str, str]]]] = {"successful": 0, "failed": 0, "details": []}
     fragment = (list_name_fragment or f"SC-{access_group} Rate Controls Bypass List").strip()
     print(f"[DBG] Matching fragment: '{fragment}' (case-insensitive)")
 
-    # -------------------------
-    # Helpers
-    # -------------------------
     def _pretty_dump(label: str, data: Any):
         print(f"[DBG] {label} (formatted):")
         try:
             print(json.dumps(data, indent=2))
         except Exception:
-            print(f"[DBG] {label} could not be pretty-printed; non-JSON type.")
+            print(f"[DBG] {label} could not be pretty-printed.")
 
     def _collect_list_candidates(obj: Any) -> List[Dict[str, Any]]:
-        """Recursively traverse obj to collect dicts that look like 'list' records."""
         candidates: List[Dict[str, Any]] = []
 
         def has_id(d: Dict[str, Any]) -> bool:
@@ -57,88 +44,53 @@ def reassign_dos_protection_rate_policies(
         walk(obj)
         return candidates
 
-    def _format_candidate_debug(d: Dict[str, Any]) -> str:
-        return (
-            f"name={d.get('name')} "
-            f"id={d.get('listId') or d.get('id') or d.get('uniqueId')} "
-            f"status={d.get('status')} "
-            f"protection={d.get('protectionStatus')} "
-            f"shared={d.get('shared')} "
-            f"type={d.get('type')}"
-        )
-
-    # -------------------------
     # STEP 1: Resolve client list
-    # -------------------------
-    client_list_id: Optional[str] = None
-    client_list_name: Optional[str] = None
+    client_list_id = None
+    client_list_name = None
 
     try:
-        resp = session.get(
-            f"{base_url}/client-list/v1/lists",
-            params={"includeInactive": "true"},
-        )
+        resp = session.get(f"{base_url}/client-list/v1/lists", params={"includeInactive": "true"})
         resp.raise_for_status()
         data = resp.json()
-        _pretty_dump("Raw Client Lists response", data)
+        _pretty_dump("Client Lists", data)
 
         candidates = _collect_list_candidates(data)
-        print(f"[DBG] Client Lists: discovered {len(candidates)} candidates")
-        for it in candidates:
-            print(f"    - {_format_candidate_debug(it)}")
-
-        frag_lower = fragment.lower()
         for it in candidates:
             name = (it.get("name") or "").strip()
-            if name and frag_lower in name.lower():
+            if name and fragment.lower() in name.lower():
                 client_list_id = str(it.get("listId") or it.get("id") or it.get("uniqueId"))
                 client_list_name = name
                 break
 
     except Exception as e:
-        print(f"[WARN] Client Lists API lookup failed: {e}")
+        print(f"[WARN] Failed to fetch client lists: {e}")
 
     if not client_list_id:
-        print(f"[ERROR] No matching Client List found for fragment '{fragment}'. Cannot proceed.")
+        print(f"[ERROR] No matching Client List found for fragment '{fragment}'")
         return summary
 
-    print(f"[INFO] Using list '{client_list_name}' (ID: {client_list_id}) for DoS reassignment.")
+    print(f"[INFO] Using list '{client_list_name}' (ID: {client_list_id})")
 
-    # -------------------------
     # STEP 2: Fetch rate policies
-    # -------------------------
     rate_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies"
     try:
         r = session.get(rate_url)
         r.raise_for_status()
         raw_policies = r.json()
-        _pretty_dump("Raw rate policies response", raw_policies)
+        _pretty_dump("Rate Policies", raw_policies)
         policies = raw_policies.get("ratePolicies", [])
     except Exception as e:
         print(f"[ERROR] Failed to fetch rate policies: {e}")
-        summary["failed"] += 1
-        summary["details"].append({"policy": "N/A", "status": "failed", "error": str(e)})
         return summary
 
     if not policies:
-        print("[INFO] No rate policies found for this config/version.")
+        print("[INFO] No rate policies found.")
         return summary
 
-    print(f"[INFO] Found {len(policies)} rate policies to process.")
-
-    # Helper to pick correct ID field
     def get_policy_id(p: dict) -> str:
-        return str(
-            p.get("id")
-            or p.get("policyId")
-            or p.get("uuid")
-            or p.get("uniqueId")
-            or ""
-        )
+        return str(p.get("id") or p.get("policyId") or p.get("uuid") or p.get("uniqueId") or "")
 
-    # -------------------------
     # STEP 3: Update each policy
-    # -------------------------
     for policy in policies:
         policy_id = get_policy_id(policy)
         policy_name = policy.get("name") or "Unnamed Policy"
@@ -150,18 +102,22 @@ def reassign_dos_protection_rate_policies(
             rp_resp.raise_for_status()
             full_doc = rp_resp.json()
 
-            # Build ultra-minimal payload (only allowed fields)
+            # Build minimal schema-aligned payload
             payload = {
                 "name": full_doc.get("name"),
                 "description": full_doc.get("description"),
-                "threshold": full_doc.get("threshold"),
+                "averageThreshold": full_doc.get("averageThreshold"),
                 "burstThreshold": full_doc.get("burstThreshold"),
-                "durationSeconds": full_doc.get("durationSeconds"),
+                "burstWindow": full_doc.get("burstWindow", 5),
                 "clientIdentifier": full_doc.get("clientIdentifier"),
+                "matchType": full_doc.get("matchType"),
+                "pathMatchType": full_doc.get("pathMatchType"),
+                "requestType": full_doc.get("requestType"),
+                "sameActionOnIpv6": full_doc.get("sameActionOnIpv6", True),
+                "type": full_doc.get("type"),
                 "action": {
                     "type": full_doc.get("action", {}).get("type", "alert")
                 },
-                "additionalMatchConditions": full_doc.get("additionalMatchConditions", []),
                 "matchCriteria": {
                     "bypassNetworkLists": [client_list_id]
                 }
@@ -175,11 +131,10 @@ def reassign_dos_protection_rate_policies(
             put_resp.raise_for_status()
             summary["successful"] += 1
             summary["details"].append({"policy": policy_name, "status": "updated"})
-
-            print(f"[INFO] Updated rate policy '{policy_name}' -> list {client_list_name} ({client_list_id})")
+            print(f"[INFO] Updated rate policy '{policy_name}'")
 
         except Exception as e:
-            print(f"[ERROR] Failed updating rate policy '{policy_name}': {e}")
+            print(f"[ERROR] Failed updating '{policy_name}': {e}")
             summary["failed"] += 1
             summary["details"].append({"policy": policy_name, "status": "failed", "error": str(e)})
 
