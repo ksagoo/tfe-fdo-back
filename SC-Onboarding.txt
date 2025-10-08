@@ -8,23 +8,23 @@ def reassign_dos_protection_rate_policies(
     version: Union[int, str],
     access_group: str,
     template_policy_name_prefix: str = "Security Policy Template",
-    target_policy_id: Optional[str] = None,   # only touch policies attached to this security policy (optional)
+    target_policy_id: Optional[str] = None,   # optional: only touch policies attached to this security policy
     activate_clones: bool = True,             # keep your staging activation behavior
 ) -> dict:
     """
-    For the given security config/version:
-      1) Read the assigned DoS rate policies.
-      2) For any policy whose name starts with the template prefix, clone it to 'SC-<access_group> <suffix>'.
-         Otherwise keep the existing policy.
-      3) For each kept/cloned policy, rewrite any additionalMatchOptions/NetworkListCondition values so
-         any *names* that look like template lists are replaced with the 'SC-<access_group> …' client list ID.
-      4) PUT the updated policy and then PUT the updated assignments list back on the config.
-    Emits lots of [DBG] lines so you can see what happened.
+    Reassign DoS rate policies and fix NetworkListCondition values to point to the
+    'SC-<access_group> …' client list IDs. Very verbose debug included.
+
+    Normal path:
+      GET  /appsec/v1/configs/{config_id}/versions/{version}/dos-rates
+    Fallback (only if target_policy_id provided and above 404s):
+      GET  /appsec/v1/policies/{target_policy_id}/rate-policies
     """
 
-    list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/dos-rates"
+    list_url_cfg = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/dos-rates"
     clone_url = f"{base_url}/appsec/v1/rate-policies/clone"
     policy_url_template = f"{base_url}/appsec/v1/rate-policies/{{policy_id}}"
+    list_url_policy_tmpl = f"{base_url}/appsec/v1/policies/{{policy_id}}/rate-policies"
 
     summary = {
         "processed": 0,
@@ -34,172 +34,206 @@ def reassign_dos_protection_rate_policies(
         "details": [],
     }
 
-    # --- small helper: find client-list by (expected) name fragment and return its ID ---
+    def _debug(s: str):
+        print(f"[DBG] {s}")
+
+    # --- helper: client list id by name fragment ---
     def _find_client_list_id_by_name(fragment: str) -> Optional[str]:
         try:
-            # Akamai appsec client lists search supports ?search=
             url = f"{base_url}/appsec/v1/client-lists?search={fragment}"
             r = session.get(url)
+            _debug(f"GET client-lists search: {url} -> {r.status_code}")
             r.raise_for_status()
-            items = r.json().get("content", []) or r.json().get("lists", []) or []
-            # match case-insensitively on name containment, prefer exact
-            frag_low = fragment.lower().strip()
+            data = r.json()
+            items = data.get("content") or data.get("lists") or []
+            frag_low = (fragment or "").lower().strip()
             exact = [x for x in items if x.get("name", "").lower() == frag_low]
             if exact:
+                _debug(f"client-list exact match: '{exact[0].get('name')}' -> {exact[0].get('id')}")
                 return str(exact[0].get("id"))
             partial = [x for x in items if frag_low in x.get("name", "").lower()]
             if partial:
+                _debug(f"client-list partial match: '{partial[0].get('name')}' -> {partial[0].get('id')}")
                 return str(partial[0].get("id"))
+            _debug(f"client-list no match for '{fragment}'")
             return None
         except Exception as e:
-            print(f"[DBG] client-list search failed for '{fragment}': {e}")
+            _debug(f"client-list search failed for '{fragment}': {e}")
             return None
 
-    try:
-        # 1) Read current assignments
-        resp = session.get(list_url)
-        if resp.status_code == 404:
-            print(f"[DBG] dos-rates endpoint 404 for this config/version, skipping DoS reassignment.")
-            return summary
-        resp.raise_for_status()
-        assigned = resp.json().get("ratePolicies", [])
-        print(f"[DBG] dos-rates assignments: {[ (p.get('id'), p.get('name')) for p in assigned ]}")
+    # --- helper: read assignments from config-level or policy-level (fallback) ---
+    def _read_assignments() -> Optional[list]:
+        # primary: config/version dos-rates
+        try:
+            r = session.get(list_url_cfg)
+            _debug(f"GET dos-rates (config): {list_url_cfg} -> {r.status_code}")
+            if r.status_code == 404:
+                _debug(f"dos-rates 404 body: {r.text[:400]}")
 
-        updated_assignments = []
-
-        for p in assigned:
-            summary["processed"] += 1
-            orig_name = p.get("name", "")
-            orig_id = p.get("id")
-            kept_id = orig_id
-            kept_name = orig_name
-
-            # 2) Clone if looks like template
-            if orig_name.startswith(template_policy_name_prefix):
-                suffix = orig_name.replace(template_policy_name_prefix, "").strip()
-                clone_name = f"SC-{access_group} {suffix}".strip()
-                print(f"[DBG] template policy detected -> clone as '{clone_name}'")
-
-                # reuse if already present in assignment list
-                existing = next((rp for rp in assigned if rp.get("name") == clone_name), None)
-                if existing:
-                    kept_id = existing.get("id")
-                    kept_name = clone_name
-                    print(f"[DBG] clone already exists in assignments -> reuse id {kept_id}")
+                # fallback only when we have a specific security policy to target
+                if target_policy_id:
+                    list_url_policy = list_url_policy_tmpl.format(policy_id=target_policy_id)
+                    rp = session.get(list_url_policy)
+                    _debug(f"GET rate-policies (policy): {list_url_policy} -> {rp.status_code}")
+                    if rp.ok:
+                        arr = rp.json() or []
+                        # normalize shape to match config-level list (each must carry id+name)
+                        normalized = []
+                        for item in arr:
+                            # policy endpoint usually returns full rate policy objects
+                            rid = item.get("id") or item.get("ratePolicyId")
+                            rname = item.get("name")
+                            if rid and rname:
+                                normalized.append({"id": rid, "name": rname})
+                        _debug(f"rate-policies (policy) count: {len(normalized)}")
+                        return normalized
+                    else:
+                        _debug(f"policy fallback failed: {rp.status_code} body: {rp.text[:400]}")
+                        return None
                 else:
-                    try:
-                        payload = {
-                            "cloneFromRatePolicyId": orig_id,
-                            "name": clone_name,
-                            "description": f"Cloned from {orig_name}",
-                            "matchType": p.get("matchType"),
-                        }
-                        c = session.post(clone_url, json=payload)
-                        c.raise_for_status()
-                        kept_id = c.json().get("id")
-                        kept_name = clone_name
-                        print(f"[DBG] cloned new rate policy id={kept_id} name='{kept_name}'")
+                    return None
 
-                        if activate_clones and kept_id:
-                            act = session.post(
-                                policy_url_template.format(policy_id=kept_id) + "/activate",
-                                json={"network": "STAGING"},
-                            )
-                            if act.status_code >= 400:
-                                print(f"[DBG] staging activate of {kept_id} returned {act.status_code} (continuing)")
-                        summary["successful"] += 1
-                        summary["details"].append({"template": orig_name, "clone": kept_name, "status": "success"})
-                    except Exception as clone_err:
-                        kept_id = orig_id
-                        kept_name = orig_name
-                        summary["failed"] += 1
-                        summary["details"].append(
-                            {"template": orig_name, "status": "clone_failed", "error": str(clone_err)}
+            r.raise_for_status()
+            data = r.json()
+            arr = data.get("ratePolicies", [])
+            _debug(f"dos-rates (config) count: {len(arr)}")
+            return arr
+        except Exception as e:
+            _debug(f"read assignments failed: {e}")
+            return None
+
+    assigned = _read_assignments()
+    if not assigned:
+        _debug("No rate policies discovered; skipping DoS reassignment. (Either 404 without fallback or empty list.)")
+        return summary
+
+    _debug(f"assignments -> {[(p.get('id'), p.get('name')) for p in assigned]}")
+
+    updated_assignments = []
+
+    for p in assigned:
+        summary["processed"] += 1
+        orig_name = p.get("name", "")
+        orig_id = p.get("id")
+        kept_id = orig_id
+        kept_name = orig_name
+
+        # clone if looks like template
+        if orig_name.startswith(template_policy_name_prefix):
+            suffix = orig_name.replace(template_policy_name_prefix, "").strip()
+            clone_name = f"SC-{access_group} {suffix}".strip()
+            _debug(f"template policy detected -> clone as '{clone_name}'")
+
+            existing = next((rp for rp in assigned if rp.get("name") == clone_name), None)
+            if existing:
+                kept_id = existing.get("id")
+                kept_name = clone_name
+                _debug(f"clone already exists in assignments -> reuse id {kept_id}")
+            else:
+                try:
+                    payload = {
+                        "cloneFromRatePolicyId": orig_id,
+                        "name": clone_name,
+                        "description": f"Cloned from {orig_name}",
+                        "matchType": p.get("matchType"),
+                    }
+                    c = session.post(clone_url, json=payload)
+                    _debug(f"POST clone: {clone_url} -> {c.status_code}")
+                    c.raise_for_status()
+                    kept_id = c.json().get("id")
+                    kept_name = clone_name
+                    if activate_clones and kept_id:
+                        act = session.post(
+                            policy_url_template.format(policy_id=kept_id) + "/activate",
+                            json={"network": "STAGING"},
                         )
-                        print(f"[DBG] clone failed for '{orig_name}': {clone_err} -> keep original")
+                        _debug(f"POST activate staging ({kept_id}) -> {act.status_code}")
+                    summary["successful"] += 1
+                    summary["details"].append({"template": orig_name, "clone": kept_name, "status": "success"})
+                except Exception as clone_err:
+                    kept_id = orig_id
+                    kept_name = orig_name
+                    summary["failed"] += 1
+                    summary["details"].append(
+                        {"template": orig_name, "status": "clone_failed", "error": str(clone_err)}
+                    )
+                    _debug(f"clone failed for '{orig_name}': {clone_err} -> keep original")
 
-            # 3) Fix NetworkListCondition values to point at SC- list IDs
-            try:
-                d = session.get(policy_url_template.format(policy_id=kept_id))
-                d.raise_for_status()
-                full = d.json()
+        # fix NetworkListCondition values
+        try:
+            d = session.get(policy_url_template.format(policy_id=kept_id))
+            _debug(f"GET rate-policy {kept_id} -> {d.status_code}")
+            d.raise_for_status()
+            full = d.json()
 
-                if target_policy_id is not None:
-                    # only touch policies attached to a specific security policy id
-                    if str(full.get("policyId")) != str(target_policy_id):
-                        print(f"[DBG] skipping rate policy {kept_id} (attached to different security policy)")
-                        updated_assignments.append(kept_id)
+            if target_policy_id is not None and str(full.get("policyId")) != str(target_policy_id):
+                _debug(f"skip {kept_id}: attached to policy {full.get('policyId')} (target {target_policy_id})")
+                updated_assignments.append(kept_id)
+                continue
+
+            changed = False
+            for opt in full.get("additionalMatchOptions", []):
+                if opt.get("type") != "NetworkListCondition":
+                    continue
+                old_vals = opt.get("values", []) or []
+                new_vals = []
+                for v in old_vals:
+                    v_str = str(v).strip()
+                    if v_str.isdigit():
+                        new_vals.append(v_str)
                         continue
 
-                changed = False
-                for opt in full.get("additionalMatchOptions", []):
-                    if opt.get("type") != "NetworkListCondition":
-                        continue
+                    expected = v_str
+                    if "Security Policy Template" in v_str:
+                        suffix = v_str.split("Security Policy Template", 1)[-1].strip()
+                        expected = f"SC-{access_group} {suffix}".strip()
 
-                    old_vals = opt.get("values", []) or []
-                    new_vals = []
-
-                    for v in old_vals:
-                        v_str = str(v).strip()
-                        # numeric -> already an ID
-                        if v_str.isdigit():
-                            new_vals.append(v_str)
-                            continue
-
-                        # Looks like a *name* (often the default template list name)
-                        # Build the expected SC-<access_group> list name from any template-like name.
-                        expected = v_str
-                        if "Security Policy Template" in v_str:
-                            suffix = v_str.split("Security Policy Template", 1)[-1].strip()
-                            expected = f"SC-{access_group} {suffix}".strip()
-
-                        resolved_id = _find_client_list_id_by_name(expected)
-                        if resolved_id:
-                            new_vals.append(resolved_id)
-                            if resolved_id != v_str:
-                                changed = True
-                        else:
-                            # No match found; keep original so we don't break the policy
-                            new_vals.append(v_str)
-
-                    if changed:
-                        print(f"[DBG] Payload (NetworkListCondition) change for policy '{kept_name}': {new_vals}")
-                        opt["values"] = new_vals
-
-                # remove read-only fields before PUT
-                for ro in ("id", "updateDate", "used", "createdDate", "createdBy"):
-                    if ro in full:
-                        full.pop(ro, None)
+                    resolved_id = _find_client_list_id_by_name(expected)
+                    if resolved_id:
+                        new_vals.append(resolved_id)
+                        if resolved_id != v_str:
+                            changed = True
+                    else:
+                        new_vals.append(v_str)
 
                 if changed:
-                    u = session.put(policy_url_template.format(policy_id=kept_id), json=full)
-                    u.raise_for_status()
-                    summary["fixed_conditions"] += 1
-                    print(f"[DBG] Updated DoS policy '{kept_name}' ({kept_id}) with new client list ids.")
+                    _debug(f"NetworkListCondition change for '{kept_name}': {new_vals}")
+                    opt["values"] = new_vals
 
-                updated_assignments.append(kept_id)
+            # scrub read-only fields
+            for ro in ("id", "updateDate", "used", "createdDate", "createdBy"):
+                full.pop(ro, None)
 
-            except Exception as fix_err:
-                summary["failed"] += 1
-                summary["details"].append(
-                    {"id": kept_id, "name": kept_name, "status": "update_failed", "error": str(fix_err)}
-                )
-                print(f"[DBG] failed to update policy {kept_id} '{kept_name}': {fix_err}")
-                updated_assignments.append(kept_id)
+            if changed:
+                u = session.put(policy_url_template.format(policy_id=kept_id), json=full)
+                _debug(f"PUT rate-policy {kept_id} -> {u.status_code}")
+                u.raise_for_status()
+                summary["fixed_conditions"] += 1
 
-        # 4) Write back the assignments list
-        try:
-            put_resp = session.put(list_url, json={"ratePolicies": updated_assignments})
-            put_resp.raise_for_status()
-            print(f"[DBG] wrote dos-rates assignments: {updated_assignments}")
-        except Exception as assign_err:
+            updated_assignments.append(kept_id)
+
+        except Exception as fix_err:
             summary["failed"] += 1
-            summary["details"].append({"status": "assign_failed", "error": str(assign_err)})
-            print(f"[DBG] failed to PUT dos-rates assignments: {assign_err}")
+            summary["details"].append(
+                {"id": kept_id, "name": kept_name, "status": "update_failed", "error": str(fix_err)}
+            )
+            _debug(f"failed to update rate policy {kept_id}: {fix_err}")
+            updated_assignments.append(kept_id)
 
-    except Exception as e:
+    # write back assignments only if we got them from config-level endpoint
+    if assigned and isinstance(assigned, list) and "ratePolicies" not in assigned:
+        # We normalized policy-level list; there’s no config-level assignment to PUT.
+        _debug("Assignments came from policy-level fallback; skipping config-level PUT.")
+        return summary
+
+    try:
+        put_resp = session.put(list_url_cfg, json={"ratePolicies": updated_assignments})
+        _debug(f"PUT dos-rates (config): {list_url_cfg} -> {put_resp.status_code}")
+        _debug(f"Payload: {{'ratePolicies': {updated_assignments}}}")
+        put_resp.raise_for_status()
+    except Exception as assign_err:
         summary["failed"] += 1
-        summary["details"].append({"status": "failed", "error": str(e)})
-        print(f"[DBG] top-level failure in reassign_dos_protection_rate_policies: {e}")
+        summary["details"].append({"status": "assign_failed", "error": str(assign_err)})
+        _debug(f"failed to PUT dos-rates assignments: {assign_err}")
 
     return summary
