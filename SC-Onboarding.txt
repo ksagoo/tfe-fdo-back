@@ -1,12 +1,111 @@
 from typing import Optional, Union
+import requests
+import json
+
 
 def reassign_dos_protection_rate_policies(
-    session,
+    session: requests.Session,
     base_url: str,
-    config_id: int,
-    version: int,
+    config_id: Union[str, int],
+    version: Union[str, int],
     access_group: str,
-    template_policy_name_prefix: str = "Security Policy Template",
-    target_policy_id: Optional[str] = None, 
-    activate_clones: bool = False,
-):
+) -> dict:
+    """
+    Reassign DoS Protection Rate Policies for a given config/policy version.
+    Compatible with Python 3.9 (no union pipe syntax).
+
+    Args:
+        session: Authenticated requests.Session object.
+        base_url: Akamai API base URL.
+        config_id: Security configuration ID.
+        version: Security configuration version.
+        access_group: Access group name (used for target list mapping).
+
+    Returns:
+        dict summarizing success/failure per rate policy.
+    """
+    summary = {"successful": 0, "failed": 0, "details": []}
+
+    list_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/dos-rates"
+
+    print(f"[DEBUG] Fetching DoS rate policies from {list_url}")
+
+    try:
+        resp = session.get(list_url)
+        resp.raise_for_status()
+        assigned = resp.json().get("ratePolicies", [])
+    except Exception as e:
+        print(f"[WARN] Failed to fetch DoS rate policies for config {config_id}: {e}")
+        summary["failed"] += 1
+        summary["details"].append({
+            "config_id": config_id,
+            "error": str(e),
+            "stage": "fetch_rate_policies"
+        })
+        return summary
+
+    if not assigned:
+        print("[INFO] No rate policies detected; skipping DoS reassignment.")
+        return summary
+
+    print(f"[INFO] Found {len(assigned)} rate policies to process.")
+
+    for policy in assigned:
+        try:
+            pid = policy.get("id")
+            name = policy.get("name")
+            if not pid:
+                print(f"[WARN] Skipping unnamed or invalid policy entry: {policy}")
+                continue
+
+            policy_url = f"{base_url}/appsec/v1/configs/{config_id}/versions/{version}/rate-policies/{pid}"
+            print(f"[DEBUG] Processing rate policy {name} (ID {pid})")
+
+            resp = session.get(policy_url)
+            if resp.status_code != 200:
+                print(f"[WARN] Unable to retrieve policy {name} ({pid}) – HTTP {resp.status_code}")
+                continue
+
+            data = resp.json()
+
+            # Update NetworkListCondition entries
+            changed = False
+            for opt in data.get("additionalMatchOptions", []):
+                if opt.get("positiveMatch") is False and "NetworkListCondition" in opt:
+                    opt["NetworkListCondition"]["name"] = f"SC-{access_group}-Rate Controls Bypass List"
+                    changed = True
+
+            if changed:
+                # Remove read-only fields
+                for field in ["id", "createDate", "updateDate", "used"]:
+                    data.pop(field, None)
+
+                print(f"[DEBUG] Updating rate policy {name} with new bypass list.")
+                put_resp = session.put(policy_url, json=data)
+                put_resp.raise_for_status()
+                summary["successful"] += 1
+                summary["details"].append({
+                    "policy_id": pid,
+                    "name": name,
+                    "status": "updated"
+                })
+            else:
+                print(f"[INFO] No match condition updates needed for {name}.")
+                summary["details"].append({
+                    "policy_id": pid,
+                    "name": name,
+                    "status": "skipped"
+                })
+
+        except Exception as e:
+            print(f"[ERROR] Failed to update rate policy {policy.get('name')}: {e}")
+            summary["failed"] += 1
+            summary["details"].append({
+                "policy_id": policy.get("id"),
+                "name": policy.get("name"),
+                "error": str(e)
+            })
+
+    print(f"[INFO] DoS Protection Rate Policy reassignment complete. "
+          f"Success: {summary['successful']}, Failed: {summary['failed']}")
+    return summary
