@@ -1,3 +1,20 @@
+# TEMP TEST: Call DoS rate policy reassignment immediately after creating Prod Policy
+dos_summary = reassign_dos_protection_rate_policies(
+    session=session,
+    base_url=base_url,
+    config_id=existing_config_id,
+    version=1,
+    access_group=args.access_group
+)
+print("[DEBUG] DoS reassignment summary during Prod onboarding:")
+pprint(dos_summary)
+
+
+
+
+
+
+
 # Process only Security Policy Template lists
 for cl in client_lists:
     original_name = cl.get("name", "")
