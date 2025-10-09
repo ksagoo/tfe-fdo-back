@@ -1,1 +1,258 @@
-client-lists
+import requests
+import argparse
+from urllib.parse import urljoin
+import configparser
+import os
+from akamai.edgegrid import EdgeGridAuth
+
+def delete_bypass_list(session, base_url, access_group):
+    prefix = f"SC-{access_group}".lower()
+    target_phrase = "rate controls bypass list"
+
+    url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
+
+    try:
+        resp = session.get(url)
+        resp.raise_for_status()
+        client_lists = resp.json().get("content", [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch client lists: {e}")
+        return
+
+    for cl in client_lists:
+        name = cl.get("name", "").lower()
+        list_id = cl.get("listId")
+        status = cl.get("status", "").upper()
+
+        if name.startswith(prefix) and target_phrase in name:
+            try:
+                del_url = f"{base_url}/client-list/v1/lists/{list_id}"
+                session.delete(del_url)
+                print(f"[DELETED] {name} (ID: {list_id}, Status: {status})")
+            except Exception as e:
+                print(f"[ERROR] Failed to delete {name} (ID: {list_id}): {e}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Delete Rate Controls Bypass List for a given access group")
+    parser.add_argument("--access-group", required=True, help="Access group prefix (e.g. XYZ)")
+    parser.add_argument("--edgerc", default="~/.edgerc", help="Path to .edgerc file")
+    parser.add_argument("--section", default="default", help="Section name in .edgerc (e.g. DEV)")
+
+    args = parser.parse_args()
+
+    # Load credentials from .edgerc
+    config = configparser.ConfigParser()
+    config.read(os.path.expanduser(args.edgerc))
+
+    if args.section not in config:
+        print(f"[ERROR] Section '{args.section}' not found in {args.edgerc}")
+        return
+
+    section_config = config[args.section]
+    base_url = f"https://{section_config['host']}"
+
+    session = requests.Session()
+    session.auth = EdgeGridAuth(
+        client_token=section_config["client_token"],
+        client_secret=section_config["client_secret"],
+        access_token=section_config["access_token"]
+    )
+
+    delete_bypass_list(session, base_url, args.access_group)
+
+if __name__ == "__main__":
+    main()
+
+
+python delete_bypass_list.py \
+  --access-group XYZ \
+  --section DEV \
+  --edgerc ~/.edgerc
+
+
+
+
+
+# Client List Activations
+    parser.add_argument("--wait-for-all-client-list-activations", action="store_true", default=False, help="If set, waits for all cloned client lists to become ACTIVE before continuing")
+    parser.add_argument("--activate-client-lists-in-production", action="store_true", default=False, help="If set, activates cloned client lists in Production after successful Staging activation")
+
+def activate_client_list(session, base_url, list_id, network="STAGING"):
+    """
+    Triggers activation of a client list in the specified network (STAGING or PRODUCTION).
+    """
+    url = urljoin(base_url, f"/client-list/v1/lists/{list_id}/activate")
+    headers = {"accept": "application/json", "content-type": "application/json"}
+
+    try:
+        response = session.put(url, json={"network": network}, headers=headers)
+        response.raise_for_status()
+        print(f"[INFO] Activation triggered for client list {list_id} on {network}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to activate client list {list_id} on {network}: {e}")
+        return False
+
+def wait_for_client_list_activation(session, base_url, list_id, timeout=600, interval=15):
+    """
+    Polls the client list status until it becomes ACTIVE, or times out.
+    """
+    status_url = urljoin(base_url, f"/client-list/v1/lists/{list_id}")
+    headers = {"accept": "application/json"}
+
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            response = session.get(status_url, headers=headers)
+            response.raise_for_status()
+            status = response.json().get("status", "").upper()
+            if status == "ACTIVE":
+                print(f"[INFO] Client list {list_id} is now ACTIVE")
+                return True
+            else:
+                print(f"[WAIT] Client list {list_id} status: {status} — retrying in {interval}s")
+        except Exception as e:
+            print(f"[WARN] Failed to fetch status for client list {list_id}: {e}")
+        time.sleep(interval)
+
+    print(f"[ERROR] Timeout waiting for client list {list_id} to become ACTIVE")
+    return False
+
+def should_wait_for_activation(name, wait_for_all=False):
+    """
+    Determines whether to wait for activation based on name or CLI override.
+    """
+    return wait_for_all or "rate controls bypass list" in name.lower()
+
+def run_all_reassignments(base_url, session, config_id, version, old_policy_id, new_policy_id, fqdn_list, isProd, section, access_group, wait_for_all_client_list_activations=False, activate_client_lists_in_production=False, print_summary=True):
+
+    results = {}
+    results["clone_client_lists"] = clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section=None, dry_run=False, wait_for_all=wait_for_all_client_list_activations, activate_in_production=activate_client_lists_in_production)
+ 
+
+Main()
+    # Reassignment of policies/client lists
+    results = run_all_reassignments(
+        base_url=base_url,
+        session=session,
+        config_id=config_id,
+        version=args.version_to_clone,
+        old_policy_id=template_policy_id,
+        new_policy_id=policy_id,
+        fqdn_list=fqdn_list,
+        isProd=args.isProd,
+        section=args.section,
+        access_group=args.access_group,
+        wait_for_all_client_list_activations=args.wait_for_all_client_list_activations,
+        activate_client_lists_in_production=args.activate_client_lists_in_production
+    )
+
+def clone_and_rename_client_lists(session, base_url, config_id, version, access_group, section, dry_run=True, wait_for_all=False, activate_in_production=False):
+    summary = {
+        "processed": 0,
+        "successful": 0,
+        "failed": 0,
+        "skipped_existing": [],
+        "results": []
+    }
+
+    def normalize(name: str) -> str:
+        return name.strip().lower()
+
+    def should_wait_for_activation(name):
+        return wait_for_all or "rate controls bypass list" in name.lower()
+
+    try:
+        url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
+        if section:
+            url += f"&section={section}"
+
+        resp = session.get(url)
+        resp.raise_for_status()
+        client_lists = resp.json().get("content", [])
+    except Exception as e:
+        print(f"[ERROR]: Failed to fetch client lists: {e}")
+        return summary
+
+    for cl in client_lists:
+        original_name = cl.get("name", "")
+        if "Security Policy Template" not in original_name:
+            continue
+        if original_name.startswith("SC-"):
+            continue
+        if "ASN Block List" in original_name:
+            print(f"[INFO] Skipping ASN Block List: {original_name}")
+            continue
+
+        suffix = original_name.replace("Security Policy Template", "").strip()
+        new_name = f"SC-{access_group}{suffix}"
+        norm_new_name = normalize(new_name)
+
+        matching = [x for x in client_lists if normalize(x.get("name", "")) == norm_new_name]
+        if any(not m.get("deprecated", False) for m in matching):
+            summary["skipped_existing"].append(new_name)
+            continue
+
+        payload = {
+            "name": new_name,
+            "type": cl.get("type"),
+            "listType": cl.get("listType"),
+            "description": f"Cloned from template list '{original_name}'",
+            "tags": [],
+            "cloneFromList": {"listId": cl.get("listId")}
+        }
+
+        if dry_run:
+            summary["successful"] += 1
+            summary["results"].append({
+                "status": "dry-run",
+                "source": original_name,
+                "target": new_name
+            })
+            continue
+
+        try:
+            clone_url = f"{base_url}/client-list/v1/lists"
+            if section:
+                clone_url += f"?section={section}"
+
+            clone_resp = session.post(clone_url, json=payload)
+            clone_resp.raise_for_status()
+            new_list_id = clone_resp.json().get("listId")
+            print(f"[SUCCESS] Cloned: '{original_name}' → '{new_name}' (ID: {new_list_id})")
+
+            # Trigger staging activation
+            activated_staging = activate_client_list(session, base_url, new_list_id, network="STAGING")
+
+            # Wait if needed
+            if activated_staging and should_wait_for_activation(new_name):
+                activated_staging = wait_for_client_list_activation(session, base_url, new_list_id)
+
+            # Optionally trigger production activation
+            if activated_staging and activate_in_production:
+                activate_client_list(session, base_url, new_list_id, network="PRODUCTION")
+
+            # Log result
+            status = "cloned+activated" if activated_staging else "activation_failed"
+            summary["successful" if activated_staging else "failed"] += 1
+            summary["results"].append({
+                "status": status,
+                "source": original_name,
+                "target": new_name,
+                "listId": new_list_id
+            })
+
+        except Exception as e:
+            print(f"[ERROR] Failed to clone client list '{original_name}': {e}")
+            summary["failed"] += 1
+            summary["results"].append({
+                "status": "clone_failed",
+                "source": original_name,
+                "target": new_name,
+                "error": str(e)
+            })
+
+    return summary
+
+
+
