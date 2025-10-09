@@ -5,7 +5,7 @@ import configparser
 import os
 from akamai.edgegrid import EdgeGridAuth
 
-def delete_bypass_list(session, base_url, access_group):
+def delete_bypass_list(session, base_url, access_group, debug=False):
     prefix = f"SC-{access_group}".lower()
     target_phrase = "rate controls bypass list"
 
@@ -25,18 +25,22 @@ def delete_bypass_list(session, base_url, access_group):
         status = cl.get("status", "").upper()
 
         if name.startswith(prefix) and target_phrase in name:
-            try:
-                del_url = f"{base_url}/client-list/v1/lists/{list_id}"
-                session.delete(del_url)
-                print(f"[DELETED] {name} (ID: {list_id}, Status: {status})")
-            except Exception as e:
-                print(f"[ERROR] Failed to delete {name} (ID: {list_id}): {e}")
+            if debug:
+                print(f"[DEBUG] Would delete: {name} (ID: {list_id}, Status: {status})")
+            else:
+                try:
+                    del_url = f"{base_url}/client-list/v1/lists/{list_id}"
+                    session.delete(del_url)
+                    print(f"[DELETED] {name} (ID: {list_id}, Status: {status})")
+                except Exception as e:
+                    print(f"[ERROR] Failed to delete {name} (ID: {list_id}): {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Delete Rate Controls Bypass List for a given access group")
     parser.add_argument("--access-group", required=True, help="Access group prefix (e.g. XYZ)")
     parser.add_argument("--edgerc", default="~/.edgerc", help="Path to .edgerc file")
     parser.add_argument("--section", default="default", help="Section name in .edgerc (e.g. DEV)")
+    parser.add_argument("--debug", action="store_true", help="If set, only displays lists that would be deleted")
 
     args = parser.parse_args()
 
@@ -58,7 +62,7 @@ def main():
         access_token=section_config["access_token"]
     )
 
-    delete_bypass_list(session, base_url, args.access_group)
+    delete_bypass_list(session, base_url, args.access_group, debug=args.debug)
 
 if __name__ == "__main__":
     main()
@@ -67,7 +71,9 @@ if __name__ == "__main__":
 python delete_bypass_list.py \
   --access-group XYZ \
   --section DEV \
-  --edgerc ~/.edgerc
+  --edgerc ~/.edgerc \
+  --debug
+
 
 
 
