@@ -536,3 +536,58 @@ def activate_client_list(session, base_url, list_id, network="STAGING"):
         print(f"[ERROR] Unexpected error during activation for list {list_id}: {e}")
         return False
 
+------------------------------------------------------------------
+
+import time
+from urllib.parse import urljoin
+
+def get_client_list_status(session, base_url, list_id):
+    url = urljoin(base_url, f"/client-list/v1/lists/{list_id}")
+    headers = {"accept": "application/json"}
+
+    try:
+        response = session.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"[WARN] Could not fetch status for list {list_id}: {e}")
+        return {}
+
+def activate_client_list(session, base_url, list_id, environment="STAGING", wait=True, timeout=60, interval=5):
+    """
+    Activates the given client list in the specified environment.
+    If wait=True, polls until the list reaches ACTIVE status or timeout.
+    """
+    activate_url = urljoin(base_url, f"/client-list/v1/lists/{list_id}/environments/{environment}/activate")
+    headers = {"accept": "application/json"}
+
+    try:
+        resp = session.post(activate_url, headers=headers)
+        resp.raise_for_status()
+        print(f"[INFO] Activation triggered for list {list_id} in {environment}")
+    except requests.exceptions.HTTPError as e:
+        print(f"[ERROR] Activation failed — Status: {resp.status_code}, Body: {resp.text}")
+        return False
+    except Exception as e:
+        print(f"[ERROR] Unexpected error during activation: {e}")
+        return False
+
+    if not wait:
+        return True
+
+    # Wait for activation to complete
+    print(f"[WAIT] Polling for list {list_id} to reach ACTIVE status...")
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        status_data = get_client_list_status(session, base_url, list_id)
+        current_status = status_data.get("status", "UNKNOWN")
+        if current_status == "ACTIVE":
+            print(f"[SUCCESS] List {list_id} is now ACTIVE.")
+            return True
+        elif current_status == "FAILED":
+            print(f"[ERROR] List {list_id} activation failed.")
+            return False
+        time.sleep(interval)
+
+    print(f"[TIMEOUT] List {list_id} did not reach ACTIVE status within {timeout} seconds.")
+    return False
