@@ -1,10 +1,20 @@
-python delete_client_lists.py --access-group XYZ --section DEV --purge-deprecated
-
 import requests
 import argparse
 import configparser
 import os
 from akamai.edgegrid import EdgeGridAuth
+
+def rename_client_list(session, base_url, list_id, new_name):
+    patch_url = f"{base_url}/client-list/v1/lists/{list_id}"
+    headers = {"accept": "application/json", "content-type": "application/json"}
+    try:
+        resp = session.patch(patch_url, json={"name": new_name}, headers=headers)
+        resp.raise_for_status()
+        print(f"[RENAMED] {list_id} → '{new_name}'")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to rename {list_id} → '{new_name}': {e}")
+        return False
 
 def delete_client_lists(session, base_url, access_group, debug=False, purge_deprecated=False):
     prefix = f"SC-{access_group}".lower()
@@ -19,36 +29,58 @@ def delete_client_lists(session, base_url, access_group, debug=False, purge_depr
         return
 
     for cl in client_lists:
-        name = cl.get("name", "").lower()
+        name = cl.get("name", "")
+        norm_name = name.lower()
         list_id = cl.get("listId")
         status = cl.get("status", "").upper()
         deprecated = cl.get("deprecated", False)
 
-        if name.startswith(prefix):
-            if debug:
-                print(f"[DEBUG] {name} (ID: {list_id}) — Status: {status}, Deprecated: {deprecated}")
-                continue
+        if not norm_name.startswith(prefix):
+            continue
 
-            if deprecated and not purge_deprecated:
-                print(f"[SKIP] {name} (ID: {list_id}) is already deprecated. Use --purge-deprecated to remove.")
-                continue
+        if debug:
+            print(f"[DEBUG] {name} (ID: {list_id}) — Status: {status or 'UNKNOWN'}, Deprecated: {deprecated}")
+            continue
 
-            try:
-                del_url = f"{base_url}/client-list/v1/lists/{list_id}"
-                del_resp = session.delete(del_url)
-                if del_resp.status_code == 204:
-                    print(f"[DELETED] {name} (ID: {list_id}, Status: {status}, Deprecated: {deprecated})")
-                else:
-                    print(f"[ERROR] Failed to delete {name} — Status: {del_resp.status_code}, Body: {del_resp.text}")
-            except Exception as e:
-                print(f"[ERROR] Exception deleting {name}: {e}")
+        # Handle ACTIVE lists by renaming
+        if status == "ACTIVE":
+            new_name = f"ToBeDeleted-{name}"
+            rename_client_list(session, base_url, list_id, new_name)
+            continue
+
+        # Handle deprecated lists
+        if deprecated:
+            if purge_deprecated:
+                try:
+                    del_url = f"{base_url}/client-list/v1/lists/{list_id}"
+                    del_resp = session.delete(del_url)
+                    if del_resp.status_code == 204:
+                        print(f"[PURGED] Deprecated list {name} (ID: {list_id})")
+                    else:
+                        print(f"[ERROR] Failed to purge {name} — Status: {del_resp.status_code}, Body: {del_resp.text}")
+                except Exception as e:
+                    print(f"[ERROR] Exception purging {name}: {e}")
+            else:
+                print(f"[SKIP] {name} (ID: {list_id}) is deprecated. Use --purge-deprecated to force deletion.")
+            continue
+
+        # Delete inactive lists
+        try:
+            del_url = f"{base_url}/client-list/v1/lists/{list_id}"
+            del_resp = session.delete(del_url)
+            if del_resp.status_code == 204:
+                print(f"[DELETED] {name} (ID: {list_id}) — Status: {status or 'UNKNOWN'}")
+            else:
+                print(f"[ERROR] Failed to delete {name} — Status: {del_resp.status_code}, Body: {del_resp.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception deleting {name}: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Delete SC-{access_group} client lists")
+    parser = argparse.ArgumentParser(description="Delete or rename SC-{access_group} client lists")
     parser.add_argument("--access-group", required=True, help="Access group prefix (e.g. XYZ)")
     parser.add_argument("--edgerc", default="~/.edgerc", help="Path to .edgerc file")
     parser.add_argument("--section", default="default", help="Section name in .edgerc (e.g. DEV)")
-    parser.add_argument("--debug", action="store_true", help="Only display lists and their status without deleting")
+    parser.add_argument("--debug", action="store_true", help="Only display lists and their status without deleting or renaming")
     parser.add_argument("--purge-deprecated", action="store_true", help="Also delete lists that are already deprecated")
 
     args = parser.parse_args()
