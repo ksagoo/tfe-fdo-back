@@ -1,3 +1,16 @@
+if original_name.startswith("Reputation Allowlist"):
+    try:
+        base, paren = original_name.split("(", 1)
+        paren = paren.replace("Security Policy Template", "").strip().rstrip(")")
+        new_name = f"{base.strip()} ({paren}SC-{access_group})"
+    except Exception:
+        # fallback if split fails
+        new_name = f"Reputation Allowlist (SC-{access_group})"
+else:
+    suffix = original_name.replace("Security Policy Template", "").strip()
+    new_name = f"SC-{access_group} {suffix}"
+
+
 # Special handling for Reputation Allowlist naming convention
 if original_name.startswith("Reputation Allowlist"):
     try:
