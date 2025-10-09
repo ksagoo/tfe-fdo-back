@@ -1,46 +1,27 @@
-def get_client_list_status(session, base_url, list_id, environment="STAGING"):
+def activate_client_list(session, base_url, list_id, networks=["STAGING"], notes="", pr_link="", notification_emails=None):
     """
-    Fetches the activation status of a client list for a specific environment.
+    Activates the given client list for the specified networks.
+    This mirrors the GUI behavior including support for notification email.
     """
-    url = urljoin(base_url, f"/client-list/v1/lists/{list_id}")
-    headers = {"accept": "application/json"}
-
-    try:
-        response = session.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-
-        if environment.upper() == "STAGING":
-            return data.get("stagingActivationStatus", "UNKNOWN")
-        elif environment.upper() == "PRODUCTION":
-            return data.get("productionActivationStatus", "UNKNOWN")
-        else:
-            return "UNKNOWN"
-
-    except Exception as e:
-        print(f"[WARN] Could not fetch status for list {list_id}: {e}")
-        return "UNKNOWN"
-
-def activate_client_list(session, base_url, list_id, environment="STAGING", wait=True, timeout=600, interval=30):
-    """
-    Activates the given client list in the specified environment.
-    Includes polling and email notification.
-    """
-    activate_url = urljoin(base_url, f"/client-list/v1/lists/{list_id}/environments/{environment}/activate")
+    url = f"{base_url}/client-list/v1/lists/{list_id}/activate"
     headers = {"accept": "application/json", "content-type": "application/json"}
 
     payload = {
-        "listId": list_id,
-        "network": environment,
-        "version": 1,
-        "comments": "Automated activation via onboarding script",
-        "notificationRecipients": ["kuldeep.sagoo@hsbc.com"]
+        "networks": networks,  # Example: ["STAGING"] or ["PRODUCTION"]
     }
 
+    if notes:
+        payload["notes"] = notes
+    if pr_link:
+        payload["prLink"] = pr_link
+    if notification_emails:
+        payload["notificationEmails"] = notification_emails
+
     try:
-        response = session.post(activate_url, headers=headers, json=payload)
+        response = session.post(url, headers=headers, json=payload)
         response.raise_for_status()
-        print(f"[INFO] Activation triggered for list {list_id} in {environment}")
+        print(f"[INFO] Activation request sent for list {list_id} to {networks}")
+        return True
     except requests.exceptions.HTTPError as e:
         print(f"[ERROR] Activation failed — Status: {response.status_code}, Body: {response.text}")
         return False
@@ -48,47 +29,12 @@ def activate_client_list(session, base_url, list_id, environment="STAGING", wait
         print(f"[ERROR] Unexpected error during activation: {e}")
         return False
 
-    if not wait:
-        return True
 
-    # Poll until the list becomes ACTIVE
-    print(f"[WAIT] Waiting for list {list_id} to become ACTIVE...")
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        status = get_client_list_status(session, base_url, list_id, environment)
-        print(f"[STATUS] {environment} status for list {list_id}: {status}")
-
-        if status == "ACTIVE":
-            print(f"[SUCCESS] List {list_id} is now ACTIVE in {environment}.")
-            return True
-        elif status == "FAILED":
-            print(f"[ERROR] List {list_id} activation failed in {environment}.")
-            return False
-
-        time.sleep(interval)
-
-    print(f"[TIMEOUT] List {list_id} did not become ACTIVE within {timeout} seconds.")
-    return False
-
-
-
-
-created_id = response.json().get("listId")
-print(f"[SUCCESS] Cloned: '{original_name}' => '{new_name}' (listId: {created_id})")
-
-# Activate in STAGING and wait until ACTIVE
-activated_staging = activate_client_list(session, base_url, created_id, environment="STAGING", wait=True)
-
-# Optionally activate in PRODUCTION
-if activated_staging and activate_in_production:
-    activate_client_list(session, base_url, created_id, environment="PRODUCTION", wait=True)
-
-status = "cloned+activated" if activated_staging else "activation_failed"
-summary["successful" if activated_staging else "failed"] += 1
-summary["results"].append({
-    "status": status,
-    "source": original_name,
-    "target": new_name,
-    "listId": created_id
-})
-
+activate_client_list(
+    session,
+    base_url,
+    created_id,
+    networks=["STAGING"],  # or ["PRODUCTION"] if needed
+    notes="Automated activation from script",
+    notification_emails=["kuldeep.sagoo@hsbc.com"]
+)
