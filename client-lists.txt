@@ -1,40 +1,32 @@
-def wait_for_activation(session, base_url, list_id, timeout=600, interval=20):
-    url = f"{base_url}/client-list/v1/lists/{list_id}/environments/STAGING/status"
-    headers = {"accept": "application/json"}
+from urllib.parse import urljoin
 
-    start = time.time()
-    while time.time() - start < timeout:
-        response = session.get(url, headers=headers)
-        if response.status_code == 200:
-            status = response.json().get("activationStatus", "")
-            print(f"[WAIT] List {list_id} activation status: {status}")
-            if status == "ACTIVE":
-                print(f"[SUCCESS] List {list_id} is now ACTIVE.")
-                return True
-        else:
-            print(f"[ERROR] Failed to get status for list {list_id}: {response.text}")
-        
-        time.sleep(interval)
+def activate_client_list(session, base_url, list_id, network="STAGING", comment="", notification_email=None):
+    """
+    Activates the specified client list in the given network (STAGING or PRODUCTION).
+    """
+    activate_url = urljoin(base_url, f"/client-list/v1/lists/{list_id}/activations")
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
+    }
 
-    print(f"[TIMEOUT] Activation did not complete within {timeout} seconds for list {list_id}.")
-    return False
-
-def activate_client_list(session, base_url, list_id, network="STAGING", comments=None, email=None):
-    url = f"{base_url}/client-list/v1/lists/{list_id}/environments/{network}/activate"
     payload = {
         "action": "ACTIVATE",
-        "network": network
+        "network": network,
+        "comments": comment or f"Automated activation of list {list_id}",
     }
-    if comments:
-        payload["comments"] = comments
-    if email:
-        payload["notificationRecipients"] = [email]
+
+    if notification_email:
+        payload["notificationRecipients"] = [notification_email]
 
     try:
-        resp = session.post(url, json=payload)
-        resp.raise_for_status()
-        print(f"[INFO] Activation requested for list {list_id} in {network}")
+        response = session.post(activate_url, headers=headers, json=payload)
+        response.raise_for_status()
+        print(f"[INFO] Activation triggered for list {list_id} in {network}")
         return True
+    except requests.exceptions.HTTPError:
+        print(f"[ERROR] Activation failed — Status: {response.status_code}, Body: {response.text}")
     except Exception as e:
-        print(f"[ERROR] Activation failed for list {list_id}: {e}")
-        return False
+        print(f"[ERROR] Unexpected error during activation: {e}")
+
+    return False
