@@ -1,10 +1,12 @@
+python delete_client_lists.py --access-group XYZ --section DEV --purge-deprecated
+
 import requests
 import argparse
 import configparser
 import os
 from akamai.edgegrid import EdgeGridAuth
 
-def delete_client_lists(session, base_url, access_group, debug=False):
+def delete_client_lists(session, base_url, access_group, debug=False, purge_deprecated=False):
     prefix = f"SC-{access_group}".lower()
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
 
@@ -25,23 +27,29 @@ def delete_client_lists(session, base_url, access_group, debug=False):
         if name.startswith(prefix):
             if debug:
                 print(f"[DEBUG] {name} (ID: {list_id}) — Status: {status}, Deprecated: {deprecated}")
-            else:
-                try:
-                    del_url = f"{base_url}/client-list/v1/lists/{list_id}"
-                    del_resp = session.delete(del_url)
-                    if del_resp.status_code == 204:
-                        print(f"[DELETED] {name} (ID: {list_id}, Status: {status})")
-                    else:
-                        print(f"[ERROR] Failed to delete {name} (ID: {list_id}) — Status: {del_resp.status_code}, Body: {del_resp.text}")
-                except Exception as e:
-                    print(f"[ERROR] Exception deleting {name} (ID: {list_id}): {e}")
+                continue
+
+            if deprecated and not purge_deprecated:
+                print(f"[SKIP] {name} (ID: {list_id}) is already deprecated. Use --purge-deprecated to remove.")
+                continue
+
+            try:
+                del_url = f"{base_url}/client-list/v1/lists/{list_id}"
+                del_resp = session.delete(del_url)
+                if del_resp.status_code == 204:
+                    print(f"[DELETED] {name} (ID: {list_id}, Status: {status}, Deprecated: {deprecated})")
+                else:
+                    print(f"[ERROR] Failed to delete {name} — Status: {del_resp.status_code}, Body: {del_resp.text}")
+            except Exception as e:
+                print(f"[ERROR] Exception deleting {name}: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Delete SC-{access_group} client lists")
     parser.add_argument("--access-group", required=True, help="Access group prefix (e.g. XYZ)")
     parser.add_argument("--edgerc", default="~/.edgerc", help="Path to .edgerc file")
     parser.add_argument("--section", default="default", help="Section name in .edgerc (e.g. DEV)")
-    parser.add_argument("--debug", action="store_true", help="If set, only displays lists and their status without deleting")
+    parser.add_argument("--debug", action="store_true", help="Only display lists and their status without deleting")
+    parser.add_argument("--purge-deprecated", action="store_true", help="Also delete lists that are already deprecated")
 
     args = parser.parse_args()
 
@@ -62,11 +70,9 @@ def main():
         access_token=section_config["access_token"]
     )
 
-    delete_client_lists(session, base_url, args.access_group, debug=args.debug)
-
-if __name__ == "__main__":
-    main()
-
+    delete_client_lists(session, base_url, args.access_group,
+                        debug=args.debug,
+                        purge_deprecated=args.purge_deprecated)
 
 if __name__ == "__main__":
     main()
