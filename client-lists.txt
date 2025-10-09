@@ -190,7 +190,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             continue
 
         suffix = original_name.replace("Security Policy Template", "").strip()
-        new_name = f"SC-{access_group}{suffix}"
+        new_name = f"SC-{access_group} {suffix}"  # Space added here
         norm_new_name = normalize(new_name)
 
         matching = [x for x in client_lists if normalize(x.get("name", "")) == norm_new_name]
@@ -258,6 +258,3 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             })
 
     return summary
-
-
-
