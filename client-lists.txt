@@ -1,3 +1,51 @@
+def get_client_list_status(session, base_url, list_id, environment="STAGING"):
+    """
+    Fetches the activation status of a client list in the specified environment.
+    """
+    url = urljoin(base_url, f"/client-list/v1/lists/{list_id}")
+    headers = {"accept": "application/json"}
+
+    try:
+        response = session.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        # DEBUG: Show full list info (optional)
+        print(f"[STATUS] Full metadata for list {list_id}:\n{json.dumps(data, indent=2)}")
+
+        if environment.upper() == "STAGING":
+            return data.get("stagingActivationStatus", "UNKNOWN")
+        elif environment.upper() == "PRODUCTION":
+            return data.get("productionActivationStatus", "UNKNOWN")
+        else:
+            return "UNKNOWN"
+
+    except Exception as e:
+        print(f"[WARN] Could not fetch status for list {list_id}: {e}")
+        return "UNKNOWN"
+
+
+print(f"[WAIT] Waiting for list {created_id} to become INACTIVE (ready for activation)...")
+start_time = time.time()
+timeout = 300
+interval = 10
+
+while time.time() - start_time < timeout:
+    status = get_client_list_status(session, base_url, created_id, environment="STAGING")
+    print(f"[STATUS] Current staging status for {created_id}: {status}")
+
+    if status == "INACTIVE":
+        print(f"[READY] List {created_id} is now INACTIVE and ready for activation.")
+        break
+    elif status == "FAILED":
+        print(f"[ERROR] List {created_id} failed during propagation. Aborting activation.")
+        break
+
+    time.sleep(interval)
+else:
+    print(f"[TIMEOUT] List {created_id} did not become INACTIVE within {timeout} seconds.")
+
+
 def get_client_list_status(session, base_url, list_id):
     url = urljoin(base_url, f"/client-list/v1/lists/{list_id}")
     headers = {"accept": "application/json"}
