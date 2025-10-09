@@ -1,3 +1,20 @@
+# Special handling for Reputation Allowlist naming convention
+if original_name.startswith("Reputation Allowlist"):
+    try:
+        # Inject access group inside the parentheses
+        base, paren = original_name.split("(", 1)
+        paren = paren.replace("Security Policy Template", "").strip().rstrip(")")
+        new_name = f"{base.strip()} ({paren}{access_group})"
+    except Exception:
+        # fallback if parsing fails
+        new_name = f"{original_name} ({access_group})"
+else:
+    # Standard pattern: strip out 'Security Policy Template' and prepend access group
+    suffix = original_name.replace("Security Policy Template", "").strip()
+    new_name = f"SC-{access_group} {suffix}"
+
+
+
 def activate_client_list(session, base_url, list_id, network="STAGING", comments=None, email=None):
     url = f"{base_url}/client-list/v1/lists/{list_id}/environments/{network}/activate"
     payload = {
