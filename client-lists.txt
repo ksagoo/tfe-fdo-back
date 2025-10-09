@@ -5,10 +5,8 @@ import configparser
 import os
 from akamai.edgegrid import EdgeGridAuth
 
-def delete_bypass_list(session, base_url, access_group, debug=False):
+def delete_all_cloned_lists(session, base_url, access_group, debug=False):
     prefix = f"SC-{access_group}".lower()
-    target_phrase = "rate controls bypass list"
-
     url = f"{base_url}/client-list/v1/lists?includeDeprecated=true&includeNetworkLists=true"
 
     try:
@@ -24,7 +22,7 @@ def delete_bypass_list(session, base_url, access_group, debug=False):
         list_id = cl.get("listId")
         status = cl.get("status", "").upper()
 
-        if name.startswith(prefix) and target_phrase in name:
+        if name.startswith(prefix):
             if debug:
                 print(f"[DEBUG] Would delete: {name} (ID: {list_id}, Status: {status})")
             else:
@@ -36,7 +34,7 @@ def delete_bypass_list(session, base_url, access_group, debug=False):
                     print(f"[ERROR] Failed to delete {name} (ID: {list_id}): {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Delete Rate Controls Bypass List for a given access group")
+    parser = argparse.ArgumentParser(description="Delete all SC-{access_group} client lists")
     parser.add_argument("--access-group", required=True, help="Access group prefix (e.g. XYZ)")
     parser.add_argument("--edgerc", default="~/.edgerc", help="Path to .edgerc file")
     parser.add_argument("--section", default="default", help="Section name in .edgerc (e.g. DEV)")
@@ -62,10 +60,11 @@ def main():
         access_token=section_config["access_token"]
     )
 
-    delete_bypass_list(session, base_url, args.access_group, debug=args.debug)
+    delete_all_cloned_lists(session, base_url, args.access_group, debug=args.debug)
 
 if __name__ == "__main__":
     main()
+
 
 
 python delete_bypass_list.py \
