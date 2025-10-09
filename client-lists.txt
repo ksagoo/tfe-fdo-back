@@ -658,3 +658,6 @@ activate_client_list(session, base_url, created_id, environment="STAGING", wait=
 
     print(f"[TIMEOUT] List {list_id} did not reach ACTIVE status within {timeout} seconds.")
     return False
+
+
+activated_staging = activate_client_list(session, base_url, created_id, environment="STAGING")
