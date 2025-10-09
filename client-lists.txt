@@ -479,4 +479,60 @@ def activate_client_list(session, base_url, list_id, network="STAGING"):
 
 
     return summary
+-----------------------------------------------------
+
+
+from urllib.parse import urljoin
+
+def get_client_list_status(session, base_url, list_id):
+    url = urljoin(base_url, f"/client-list/v1/lists/{list_id}")
+    headers = {"accept": "application/json"}
+
+    try:
+        response = session.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        print(f"[STATUS] List {list_id} — Status: {data.get('status')}, Deprecated: {data.get('deprecated')}, Name: {data.get('name')}")
+        return data
+    except Exception as e:
+        print(f"[WARN] Could not fetch status for list {list_id}: {e}")
+        return {}
+
+def activate_client_list(session, base_url, list_id, network="STAGING"):
+    """
+    Triggers activation of a client list in the specified network,
+    with pre-check logging and detailed error diagnostics.
+    """
+    status_data = get_client_list_status(session, base_url, list_id)
+    current_status = status_data.get("status", "UNKNOWN")
+    deprecated = status_data.get("deprecated", False)
+
+    if current_status == "ACTIVE":
+        print(f"[SKIP] List {list_id} is already ACTIVE — skipping activation.")
+        return True
+    if deprecated:
+        print(f"[SKIP] List {list_id} is deprecated — cannot activate.")
+        return False
+
+    url = urljoin(base_url, f"/client-list/v1/lists/{list_id}/activate")
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
+    }
+
+    try:
+        response = session.put(url, json={"network": network}, headers=headers)
+        response.raise_for_status()
+        print(f"[INFO] Activation triggered for client list {list_id} on {network}")
+        return True
+    except requests.exceptions.HTTPError as e:
+        print(f"[ERROR] Activation failed for client list {list_id} on {network}")
+        print(f"Status Code: {response.status_code}")
+        print(f"Response Body: {response.text}")
+        print(f"Request URL: {url}")
+        print(f"Payload: {{'network': '{network}'}}")
+        return False
+    except Exception as e:
+        print(f"[ERROR] Unexpected error during activation for list {list_id}: {e}")
+        return False
 
