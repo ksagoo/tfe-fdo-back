@@ -1,3 +1,20 @@
+# Process only Security Policy Template lists
+for cl in client_lists:
+    original_name = cl.get("name", "")
+
+    # Skip non-template lists
+    if "Security Policy Template" not in original_name:
+        continue
+
+    # Skip already cloned lists
+    if original_name.startswith("SC-"):
+        continue
+
+    # Skip ASN Block Lists
+    if "ASN Block List" in original_name:
+        print(f"[INFO] Skipping ASN Block List: {original_name}")
+        continue
+
 import requests
 import json
 from typing import Dict, List, Union, Any, Optional
