@@ -1,3 +1,21 @@
+def get_client_list_status(session, base_url, list_id):
+    url = urljoin(base_url, f"/client-list/v1/lists/{list_id}")
+    headers = {"accept": "application/json"}
+
+    try:
+        response = session.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        print(f"[STATUS] Full metadata for list {list_id}:\n{json.dumps(data, indent=2)}")
+        # Akamai may return status under different keys, depending on version
+        return {
+            "status": data.get("status") or data.get("activationStatus") or "UNKNOWN"
+        }
+    except Exception as e:
+        print(f"[WARN] Could not fetch status for list {list_id}: {e}")
+        return {"status": "UNKNOWN"}
+
+
 def wait_for_list_ready(session, base_url, list_id, timeout=120, interval=10):
     """
     Waits until a newly cloned client list becomes 'INACTIVE', which means it's ready for activation.
