@@ -1,13 +1,39 @@
-# TEMP TEST: Call DoS rate policy reassignment immediately after creating Prod Policy
-dos_summary = reassign_dos_protection_rate_policies(
-    session=session,
-    base_url=base_url,
-    config_id=existing_config_id,
-    version=1,
-    access_group=args.access_group
-)
-print("[DEBUG] DoS reassignment summary during Prod onboarding:")
-pprint(dos_summary)
+def activate_client_list_and_wait(session, base_url, list_id, network="STAGING", timeout=120, interval=10):
+    """
+    Activates a client list and polls until it reaches ACTIVE status.
+    Returns True if activation succeeds, False otherwise.
+    """
+    activate_url = urljoin(base_url, f"/client-list/v1/lists/{list_id}/activate")
+    status_url = urljoin(base_url, f"/client-list/v1/lists/{list_id}")
+    headers = {"accept": "application/json", "content-type": "application/json"}
+
+    try:
+        # Step 1: Trigger activation
+        response = session.put(activate_url, json={"network": network}, headers=headers)
+        response.raise_for_status()
+        print(f"[INFO] Activation triggered for client list {list_id} on {network}")
+    except Exception as e:
+        print(f"[ERROR] Failed to activate client list {list_id}: {e}")
+        return False
+
+    # Step 2: Poll for ACTIVE status
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            status_resp = session.get(status_url, headers=headers)
+            status_resp.raise_for_status()
+            status = status_resp.json().get("status", "").upper()
+            if status == "ACTIVE":
+                print(f"[INFO] Client list {list_id} is now ACTIVE")
+                return True
+            else:
+                print(f"[WAIT] Client list {list_id} status: {status} — retrying in {interval}s")
+        except Exception as e:
+            print(f"[WARN] Failed to fetch client list status: {e}")
+        time.sleep(interval)
+
+    print(f"[ERROR] Timeout waiting for client list {list_id} to become ACTIVE")
+    return False
 
 
 
