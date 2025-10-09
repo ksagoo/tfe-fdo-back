@@ -161,7 +161,7 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
         "results": []
     }
 
-    def normalize(name: str) -> str:
+    def normalize(name):
         return name.strip().lower()
 
     def should_wait_for_activation(name):
@@ -190,11 +190,13 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
             continue
 
         suffix = original_name.replace("Security Policy Template", "").strip()
-        new_name = f"SC-{access_group} {suffix}"  # Space added here
+        new_name = f"SC-{access_group} {suffix}"
         norm_new_name = normalize(new_name)
 
         matching = [x for x in client_lists if normalize(x.get("name", "")) == norm_new_name]
-        if any(not m.get("deprecated", False) for m in matching):
+        still_in_use = any(not m.get("deprecated", False) for m in matching)
+
+        if still_in_use:
             summary["skipped_existing"].append(new_name)
             continue
 
@@ -214,47 +216,46 @@ def clone_and_rename_client_lists(session, base_url, config_id, version, access_
                 "source": original_name,
                 "target": new_name
             })
-            continue
-
-        try:
+        else:
             clone_url = f"{base_url}/client-list/v1/lists"
             if section:
                 clone_url += f"?section={section}"
 
-            clone_resp = session.post(clone_url, json=payload)
-            clone_resp.raise_for_status()
-            new_list_id = clone_resp.json().get("listId")
-            print(f"[SUCCESS] Cloned: '{original_name}' → '{new_name}' (ID: {new_list_id})")
+            try:
+                response = session.post(clone_url, json=payload)
+                response.raise_for_status()
+                created_id = response.json().get("listId")
+                print(f"[SUCCESS] Cloned: '{original_name}' => '{new_name}' (listId: {created_id})")
 
-            # Trigger staging activation
-            activated_staging = activate_client_list(session, base_url, new_list_id, network="STAGING")
+                # Activation logic
+                activated_staging = activate_client_list(session, base_url, created_id, network="STAGING")
 
-            # Wait if needed
-            if activated_staging and should_wait_for_activation(new_name):
-                activated_staging = wait_for_client_list_activation(session, base_url, new_list_id)
+                if activated_staging and should_wait_for_activation(new_name):
+                    activated_staging = wait_for_client_list_activation(session, base_url, created_id)
 
-            # Optionally trigger production activation
-            if activated_staging and activate_in_production:
-                activate_client_list(session, base_url, new_list_id, network="PRODUCTION")
+                if activated_staging and activate_in_production:
+                    activate_client_list(session, base_url, created_id, network="PRODUCTION")
 
-            # Log result
-            status = "cloned+activated" if activated_staging else "activation_failed"
-            summary["successful" if activated_staging else "failed"] += 1
-            summary["results"].append({
-                "status": status,
-                "source": original_name,
-                "target": new_name,
-                "listId": new_list_id
-            })
+                status = "cloned+activated" if activated_staging else "activation_failed"
+                summary["successful" if activated_staging else "failed"] += 1
+                summary["results"].append({
+                    "status": status,
+                    "source": original_name,
+                    "target": new_name,
+                    "listId": created_id
+                })
 
-        except Exception as e:
-            print(f"[ERROR] Failed to clone client list '{original_name}': {e}")
-            summary["failed"] += 1
-            summary["results"].append({
-                "status": "clone_failed",
-                "source": original_name,
-                "target": new_name,
-                "error": str(e)
-            })
+            except Exception as e:
+                print(f"[ERROR]: Failed to clone '{original_name}' to '{new_name}': {e}")
+                summary["failed"] += 1
+                summary["results"].append({
+                    "status": "failed",
+                    "source": original_name,
+                    "target": new_name,
+                    "error": str(e)
+                })
+
+        summary["processed"] += 1
 
     return summary
+
