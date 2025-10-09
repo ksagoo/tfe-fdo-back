@@ -1,40 +1,39 @@
-def activate_client_list(session, base_url, list_id, networks=["STAGING"], notes="", pr_link="", notification_emails=None):
+def activate_client_list(session, base_url, list_id, network="STAGING", comment="", notification_email=None):
     """
-    Activates the given client list for the specified networks.
-    This mirrors the GUI behavior including support for notification email.
+    Activates the specified client list in the given network (STAGING or PRODUCTION).
     """
-    url = f"{base_url}/client-list/v1/lists/{list_id}/activate"
-    headers = {"accept": "application/json", "content-type": "application/json"}
-
-    payload = {
-        "networks": networks,  # Example: ["STAGING"] or ["PRODUCTION"]
+    activate_url = urljoin(base_url, f"/client-list/v1/lists/{list_id}/activations")
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
     }
 
-    if notes:
-        payload["notes"] = notes
-    if pr_link:
-        payload["prLink"] = pr_link
-    if notification_emails:
-        payload["notificationEmails"] = notification_emails
+    payload = {
+        "action": "ACTIVATE",
+        "network": network,
+        "comments": comment or f"Automated activation of list {list_id}",
+    }
+
+    if notification_email:
+        payload["notificationRecipients"] = [notification_email]
 
     try:
-        response = session.post(url, headers=headers, json=payload)
+        response = session.post(activate_url, headers=headers, json=payload)
         response.raise_for_status()
-        print(f"[INFO] Activation request sent for list {list_id} to {networks}")
+        print(f"[INFO] Activation triggered for list {list_id} in {network}")
         return True
     except requests.exceptions.HTTPError as e:
         print(f"[ERROR] Activation failed — Status: {response.status_code}, Body: {response.text}")
-        return False
     except Exception as e:
         print(f"[ERROR] Unexpected error during activation: {e}")
-        return False
 
+    return False
 
-activate_client_list(
+activated_staging = activate_client_list(
     session,
     base_url,
     created_id,
-    networks=["STAGING"],  # or ["PRODUCTION"] if needed
-    notes="Automated activation from script",
-    notification_emails=["kuldeep.sagoo@hsbc.com"]
+    network="STAGING",
+    comment="Automated activation during cloning",
+    notification_email="kuldeep.sagoo@hsbc.com"
 )
