@@ -1,3 +1,51 @@
+def wait_for_list_ready(session, base_url, list_id, timeout=120, interval=10):
+    """
+    Waits until a newly cloned client list becomes 'INACTIVE', which means it's ready for activation.
+    """
+    print(f"[WAIT] Waiting for list {list_id} to become INACTIVE (ready for activation)...")
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        status = get_client_list_status(session, base_url, list_id).get("status", "UNKNOWN")
+        print(f"[CHECK] List {list_id} current status: {status}")
+        
+        if status == "INACTIVE":
+            print(f"[READY] List {list_id} is ready for activation.")
+            return True
+        elif status == "ACTIVE":
+            print(f"[SKIP] List {list_id} already ACTIVE — skipping activation.")
+            return False  # Already active, skip explicit activation
+        elif status == "FAILED":
+            print(f"[ERROR] List {list_id} failed to create.")
+            return False
+
+        time.sleep(interval)
+
+    print(f"[TIMEOUT] List {list_id} did not become ready in {timeout} seconds.")
+    return False
+
+
+created_id = response.json().get("listId")
+print(f"[SUCCESS] Cloned: '{original_name}' => '{new_name}' (listId: {created_id})")
+
+# Wait for propagation before activation
+if not wait_for_list_ready(session, base_url, created_id):
+    print(f"[ERROR] List {created_id} not ready — skipping activation.")
+    summary["failed"] += 1
+    summary["results"].append({
+        "status": "not_ready",
+        "source": original_name,
+        "target": new_name,
+        "listId": created_id
+    })
+    continue
+
+# Proceed with activation
+activated_staging = activate_client_list(session, base_url, created_id, environment="STAGING")
+...
+
+
+---------------------------------------------------------------------
 import requests
 import argparse
 import configparser
