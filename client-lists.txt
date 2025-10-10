@@ -1,61 +1,47 @@
-"""
-===========================================================
-               Akamai AppSec Onboarding Automation
-===========================================================
+flowchart TD
+A[Start] --> B[Parse CLI arguments]
+B --> C[Setup session & region metadata]
+C --> D{isProd?}
 
-Description:
-Automates the onboarding of Akamai Application Security configurations.
 
-Core Capabilities:
-- Creation of Security Configs and Policies (NonProd and Prod)
-- Cloning and reassignment of:
-  • Match targets
-  • Custom rules
-  • Rate limits
-  • Client lists
-  • Reputation profiles
-  • Bot category actions
-  • WAF rule exceptions and overrides
-  • Slow POST protections
-  • Geo/IP/ASN ACLs
-  • DoS rate protection policies
-- Section-aware logic for scoped reassignments
-- Environment-specific bypass list selection (Dev, PreProd, Prod)
-- Client list activation with optional polling logic
-- Config and policy activation in staging (and optionally in production)
-- Consolidation of hostnames for Prod policies
-- Summary output per module
-- Optional version note tagging using Jira reference
+%% --- Prod Branch: Left Side ---
+D -- "True (Prod)" --> P1[Check if Security Config<br>and NonProd Policy exist]
+P1 -->|Missing| PX[Abort:<br>prerequisites not met]
+P1 -->|Exists| P2[Create Prod Policy<br>cloned from NonProd]
+P2 --> P3[Copy match targets]
+P3 --> P4[Consolidate hostnames<br>into Security Config]
+P4 --> P5[Set version notes]
+P5 --> Z[Print summary]
 
-Recent Enhancements:
-- Activation now uses POST `/client-list/v1/lists/{id}/activations` with payload
-- Polling logic checks `/environments/{env}/status` for `activationStatus`
-- Improved client list renaming: uses `SC-<access_group> <suffix>` pattern
-  • Special handling for Reputation Allowlist templates
-- Optional waiting for “Rate Controls Bypass List” (or all lists) via CLI flag
-- Optional production activation after successful staging
-- `--version-notes` flag adds change ticket to config version metadata
-- Hostnames consolidated at the Security Config level during Prod onboarding
 
-Usage Example:
-  python akamai_appsec_onboarding_complete.py \
-    --section <SECTION> \
-    --access_group <ACCESS_GROUP> \
-    --fqdn <FQDN> \
-    --template_config_name <TEMPLATE_NAME> \
-    --isProd <true|false> \
-    [--version-notes <JIRA_ISSUE>] \
-    [--wait-for-all-client-list-activations] \
-    [--activate-client-lists-in-production]
+%% --- NonProd Branch: Right Side ---
+D -- "False (NonProd)" --> N1[Check if Security Config exists]
+N1 --> N2[If missing, clone from<br>Security Policy Template v1]
+N2 --> N3[Create Security Config<br>and NonProd Policy]
+N3 --> N4[Set version notes]
+N4 --> N5[Assign hostnames]
+N5 --> R
 
-Requirements:
-- Python 3.x
-- Valid Akamai API credentials (.edgerc) with group-level access
 
-Metadata:
-- Created: June 2025
-- Last Updated: October 2025
-  (activation logic, client list cloning, version notes, Prod FQDN consolidation)
-- License: Internal Use Only — HSBC / Akamai Automation
-===========================================================
-"""
+%% --- Reassignment Block (NonProd only) ---
+subgraph R[Run all reassignments]
+R1[Clone and rename client lists] -->
+R2[Activate client lists in STAGING] -->
+R3[Wait for Rate Control Bypass list<br>to become ACTIVE] -->
+R4[Reassign match targets] -->
+R5[Reassign custom rules] -->
+R6[Reassign rate limits] -->
+R7[Update rate policies] -->
+R8[Reassign reputation profiles] -->
+R9[Reassign DoS protection rate policies] -->
+R10[Reassign slow POST protection] -->
+R11[Reassign Akamai bot category actions] -->
+R12[Reassign WAF rule exceptions] -->
+R13[Reassign WAF group actions] -->
+R14[Reassign WAF overrides] -->
+R15[Reassign IP/Geo/ASN lists]
+end
+
+
+R15 --> N6[Delete temporary<br>template policy]
+N6 --> Z[Print summary]
