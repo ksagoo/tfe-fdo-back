@@ -1,0 +1,187 @@
+<span id="akamai-certificate-renewal-automation---high-level-design"></span>
+= Akamai Certificate Renewal Automation - High Level Design =
+
+<span id="objective"></span>
+== Objective ==
+
+To replace the legacy Ansible-based solution for Akamai certificate renewals with a Python-based automation framework that:
+
+* Leverages Akamai CPS APIs directly<br />
+
+* Integrates into Jira and Jenkins for workflow and scheduling<br />
+
+* Eliminates static spreadsheet-based entitlement models<br />
+
+* Supports enterprise-grade security with AD group enforcement and secrets via Vault
+
+
+-----
+
+<span id="key-components"></span>
+== Key Components ==
+
+<span id="python-module"></span>
+=== Python Module ===
+
+All logic will be consolidated into a single Python module, aligned with existing onboarding practices.
+
+{|
+!width="23%"| Function
+!width="76%"| Description
+|-
+| Session Setup
+| Establish Akamai EdgeGrid-authenticated session using .edgerc
+|-
+| Entitlement Check
+| Validate user’s group membership against AD Group linked to the Access Group
+|-
+| Renew Certificate
+| CPS API interaction to renew/enroll certificate
+|-
+| Deployment Scheduling
+| CPS API call to schedule deployment (after approval)
+|-
+| Deployment Execution
+| API call to deploy cert to network
+|-
+| Status Tracking
+| Periodic polling of enrollment/deployment status
+|-
+| Jira Logging
+| Updates Jira issue with execution results
+|-
+| Error Handling
+| Logs failures to Jira and stops execution
+|}
+
+
+-----
+
+<span id="architectural-overview-mermaid-flowchart"></span>
+== Architectural Overview (Mermaid Flowchart) ==
+
+<pre class="mermaid">graph TD
+    A[Jira Form Submitted by Requestor] --&gt; B[Jenkins Pipeline Triggered]
+    B --&gt; C[Python Certificate Automation]
+    C --&gt; D[Entitlement Check: AD Group vs Access Group]
+    D --&gt; E{Entitlement Valid?}
+    E -- No --&gt; Z[Fail &amp; Send Email to User]
+    E -- Yes --&gt; F[Certificate Renewed via CPS API]
+    F --&gt; G[Deployment Scheduled via CPS API]
+    G --&gt; H[SNOW Change Ticket: Optional Validation via Kong API]
+    H --&gt; I[Deploy to Network via CPS API]
+    I --&gt; J[Track Status]
+    J --&gt; K[Log to Jira &amp; Notify User]
+    K --&gt; L[Success Email Notification]
+    Z --&gt; M[Failure Email Notification]</pre>
+
+-----
+
+<span id="flowchart---certificate-lifecycle"></span>
+== Flowchart - Certificate Lifecycle ==
+
+<pre class="mermaid">graph TD
+    A[Start - Certificate Active\n&gt;90 days] --&gt; B[EPS Checks Renewal Status]
+    B --&gt; C[At 90 Days - New Cert\nCreated]
+    C --&gt; D[Renewal Script Scans\nCertificates Daily]
+    D --&gt; E[Query Akamai API +\nOnboarded List]
+    E --&gt; F[Notify Cyber WASP if &lt;28\nDays]
+    F --&gt; G[Threshold Reduced to 14/7\nDays if Needed]
+    G --&gt; H[Deploy Certificate via\nAkamai API]
+    H --&gt; I[Send Confirmation Email]
+    I --&gt; J[Update Tracking\nSheet]
+    J --&gt; K[Check Certificate Pinning]
+    K --&gt; L[Monitor for Issues/Failures]
+    L --&gt; M{Any Issue?}
+    M -- Yes --&gt; N[Raise Incident via\nAkamai Portal]
+    N --&gt; O[Submit Hostname, Slot,\nExpiry Details]
+    O --&gt; P[Akamai Rollback /\nRe-deploy]
+    P --&gt; Q[Business Retesting]
+    Q --&gt; R[Process Complete]
+    M -- No --&gt; R</pre>
+
+-----
+
+<span id="sequence-diagram---full-flow"></span>
+== Sequence Diagram - Full Flow ==
+
+<pre class="mermaid">sequenceDiagram
+    participant User
+    participant Jira
+    participant Jenkins
+    participant PythonScript
+    participant AD
+    participant AkamaiAPI
+    participant KongAPI
+    participant SNOW
+    participant MailServer
+
+    User-&gt;&gt;Jira: Submit Certificate Renewal Form
+    Jira-&gt;&gt;Jenkins: Trigger Pipeline via Webhook
+    Jenkins-&gt;&gt;PythonScript: Execute with Form Parameters
+    PythonScript-&gt;&gt;AD: Check Group Membership
+
+    PythonScript-&gt;&gt;MailServer: Trigger Failure Email - Not Entitled
+    MailServer-&gt;&gt;User: Failure Email - Not Entitled
+    PythonScript-&gt;&gt;Jenkins: Log Failure - Not Entitled
+    PythonScript-&gt;&gt;Jenkins: Exit
+
+    Note over PythonScript: IF Entitled
+
+    PythonScript-&gt;&gt;AkamaiAPI: Authenticate via EdgeGrid
+    PythonScript-&gt;&gt;AkamaiAPI: Call CPS API to Renew Certificate
+    PythonScript-&gt;&gt;KongAPI: Validate SNOW Change Ticket
+    KongAPI-&gt;&gt;SNOW: Check Ticket Validity
+
+    PythonScript-&gt;&gt;MailServer: Trigger Failure Email - Invalid Change
+    MailServer-&gt;&gt;User: Failure Email - Invalid Change
+    PythonScript-&gt;&gt;Jenkins: Log Failure - Invalid Change
+    PythonScript-&gt;&gt;Jenkins: Exit
+
+    Note over PythonScript: IF Change Ticket is Valid
+
+    PythonScript-&gt;&gt;AkamaiAPI: Schedule or Deploy Certificate
+    PythonScript-&gt;&gt;MailServer: Trigger Success Email
+    MailServer-&gt;&gt;User: Success Email - Deployment Complete
+    PythonScript-&gt;&gt;Jenkins: Return Output
+    Jenkins-&gt;&gt;Jira: Update Deployment Status</pre>
+
+-----
+
+<span id="entitlement-enforcement"></span>
+== Entitlement Enforcement ==
+
+* Automation verifies user entitlement before renewal actions.<br />
+
+* Checks if the user is part of the '''AD Group named after the Akamai Access Group'''.<br />
+
+* This replaces the legacy Excel-based entitlement process.
+
+
+-----
+
+<span id="benefits"></span>
+== Benefits ==
+
+{|
+!width="34%"| Legacy Limitation
+!width="65%"| New Design Improvement
+|-
+| Spreadsheet-based entitlement
+| Real-time AD Group validation
+|-
+| Hardcoded secrets
+| Vault-based dynamic secret injection
+|-
+| No structured workflow
+| Jira-triggered automation with pipeline logic
+|-
+| Manual cert handling
+| Automated CPS renewals and deployments
+|-
+| No change control link
+| Optional SNOW Change ticket validation via Kong API
+|-
+| Static observability
+| Dynamic Jira logging and error propagation
+|}
