@@ -1,32 +1,61 @@
-from urllib.parse import urljoin
+"""
+===========================================================
+               Akamai AppSec Onboarding Automation
+===========================================================
 
-def activate_client_list(session, base_url, list_id, network="STAGING", comment="", notification_email=None):
-    """
-    Activates the specified client list in the given network (STAGING or PRODUCTION).
-    """
-    activate_url = urljoin(base_url, f"/client-list/v1/lists/{list_id}/activations")
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json"
-    }
+Description:
+Automates the onboarding of Akamai Application Security configurations.
 
-    payload = {
-        "action": "ACTIVATE",
-        "network": network,
-        "comments": comment or f"Automated activation of list {list_id}",
-    }
+Core Capabilities:
+- Creation of Security Configs and Policies (NonProd and Prod)
+- Cloning and reassignment of:
+  • Match targets
+  • Custom rules
+  • Rate limits
+  • Client lists
+  • Reputation profiles
+  • Bot category actions
+  • WAF rule exceptions and overrides
+  • Slow POST protections
+  • Geo/IP/ASN ACLs
+  • DoS rate protection policies
+- Section-aware logic for scoped reassignments
+- Environment-specific bypass list selection (Dev, PreProd, Prod)
+- Client list activation with optional polling logic
+- Config and policy activation in staging (and optionally in production)
+- Consolidation of hostnames for Prod policies
+- Summary output per module
+- Optional version note tagging using Jira reference
 
-    if notification_email:
-        payload["notificationRecipients"] = [notification_email]
+Recent Enhancements:
+- Activation now uses POST `/client-list/v1/lists/{id}/activations` with payload
+- Polling logic checks `/environments/{env}/status` for `activationStatus`
+- Improved client list renaming: uses `SC-<access_group> <suffix>` pattern
+  • Special handling for Reputation Allowlist templates
+- Optional waiting for “Rate Controls Bypass List” (or all lists) via CLI flag
+- Optional production activation after successful staging
+- `--version-notes` flag adds change ticket to config version metadata
+- Hostnames consolidated at the Security Config level during Prod onboarding
 
-    try:
-        response = session.post(activate_url, headers=headers, json=payload)
-        response.raise_for_status()
-        print(f"[INFO] Activation triggered for list {list_id} in {network}")
-        return True
-    except requests.exceptions.HTTPError:
-        print(f"[ERROR] Activation failed — Status: {response.status_code}, Body: {response.text}")
-    except Exception as e:
-        print(f"[ERROR] Unexpected error during activation: {e}")
+Usage Example:
+  python akamai_appsec_onboarding_complete.py \
+    --section <SECTION> \
+    --access_group <ACCESS_GROUP> \
+    --fqdn <FQDN> \
+    --template_config_name <TEMPLATE_NAME> \
+    --isProd <true|false> \
+    [--version-notes <JIRA_ISSUE>] \
+    [--wait-for-all-client-list-activations] \
+    [--activate-client-lists-in-production]
 
-    return False
+Requirements:
+- Python 3.x
+- Valid Akamai API credentials (.edgerc) with group-level access
+
+Metadata:
+- Created: June 2025
+- Last Updated: October 2025
+  (activation logic, client list cloning, version notes, Prod FQDN consolidation)
+- License: Internal Use Only — HSBC / Akamai Automation
+===========================================================
+"""
