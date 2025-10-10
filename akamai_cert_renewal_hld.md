@@ -31,6 +31,12 @@ All logic will be consolidated into a single Python module, aligned with existin
 
 ---
 
+
+h3. Certificate Renewal Flow
+
+The diagram below outlines the key decision points and logical steps in the certificate renewal process, including entitlement validation, CPS renewal, and deployment sequencing.
+
+
 ## Architectural Overview (Mermaid Flowchart)
 
 ```mermaid
@@ -124,12 +130,33 @@ sequenceDiagram
 ```
 
 ---
+## Secrets Management with Vault
 
-## Entitlement Enforcement
+- Akamai credentials (EdgeGrid tokens) are securely retrieved from Vault.
+- RBAC is enforced per subaccount.
+- Secrets are audited, rotated, and TTL is applied.
 
-- Automation verifies user entitlement before renewal actions.  
-- Checks if the user is part of the **AD Group named after the Akamai Access Group**.  
-- This replaces the legacy Excel-based entitlement process.
+---
+
+## Entitlement Enforcement & ServiceNow Controls
+
+### AD Group Validation
+
+- Before triggering a renewal, the user's Active Directory (AD) group membership is validated.
+- Only authorized groups mapped to the specific FQDN can initiate certificate renewals.
+
+### ServiceNow/Deployment Controls
+
+- Integration with Kong API is used to validate the ServiceNow Change Ticket (SNOW).
+- Only approved changes proceed to certificate deployment.
+
+---
+
+## Certificate Pinning
+
+- If certificate pinning is enabled, ISTO must confirm readiness to accept the new certificate.
+- The pinning check occurs *after certificate renewal* but *before deployment*.
+- A notification is sent to the relevant stakeholders including the certificate to be pinned.
 
 ---
 
