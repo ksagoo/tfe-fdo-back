@@ -52,9 +52,8 @@ sequenceDiagram
     Script->>Output: result_<fqdn>.json, debug.log
     Script-->>Jenkins/GitLab: SUCCESS or FAILURE printed for CI interpretation
 
-    Note right of Jenkins/GitLab: CI/CD pipeline continues (notifications, Confluence updates, etc.)
+    Note right of Jenkins/GitLab: CI/CD pipeline continues (notifications, Jira updates, etc.)
 ```
-
 ---
 
 ## Key Features
