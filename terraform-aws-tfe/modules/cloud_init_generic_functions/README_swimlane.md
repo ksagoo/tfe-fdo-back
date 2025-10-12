@@ -34,13 +34,11 @@ sequenceDiagram
         Script->>AkamaiAPI: Poll CPS change URL until complete/failed
         AkamaiAPI-->>Script: Renewal complete
 
-        alt Action includes deploy
-            Note over Script: Step 3 — Deployment
-            Script->>AkamaiAPI: POST /cps/v2/enrollments/{id}/deployments
-            AkamaiAPI-->>Script: 202 Accepted + Location header
-            Script->>AkamaiAPI: Poll CPS change URL until complete/failed
-            AkamaiAPI-->>Script: Deployment complete
-        end
+        Note over Script: Step 3 — Deployment
+        Script->>AkamaiAPI: POST /cps/v2/enrollments/{id}/deployments
+        AkamaiAPI-->>Script: 202 Accepted + Location header
+        Script->>AkamaiAPI: Poll CPS change URL until complete/failed
+        AkamaiAPI-->>Script: Deployment complete
 
         Note over Script: Step 4 — Notification
         Script->>EmailTemplate: Render {days_to_expiry}Days-EscalationNotificationEmail.html
