@@ -9,51 +9,6 @@ This implementation fully replaces the previous Ansible-based automation by prov
 
 ---
 
-## Secquence Diagram
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Jenkins/GitLab as CI/CD Trigger
-    participant Script as akamai_cert_manager.py
-    participant AkamaiAPI as Akamai CPS API
-    participant EmailTemplate as Jinja2 Templates
-    participant Output as Output Directory
-
-    Note over Script: Step 1 — Discovery Phase
-    Jenkins/GitLab->>Script: Run with (--section, --access_group, [--dry-run])
-    Script->>AkamaiAPI: GET /cps/v2/enrollments?contractId=...&groupId=...
-    AkamaiAPI-->>Script: List of enrollments + expiry dates
-    Script->>Output: Write discovered_enrollments.json
-    Note right of Script: Discovery is trigger point for renewals
-
-    loop For each discovered enrollment
-        Note over Script: Step 2 — Renewal
-        Script->>AkamaiAPI: POST /cps/v2/enrollments/{id}/renew
-        AkamaiAPI-->>Script: 202 Accepted + Location header
-        Script->>AkamaiAPI: Poll CPS change URL until complete/failed
-        AkamaiAPI-->>Script: Renewal complete
-
-        Note over Script: Step 3 — Deployment
-        Script->>AkamaiAPI: POST /cps/v2/enrollments/{id}/deployments
-        AkamaiAPI-->>Script: 202 Accepted + Location header
-        Script->>AkamaiAPI: Poll CPS change URL until complete/failed
-        AkamaiAPI-->>Script: Deployment complete
-
-        Note over Script: Step 4 — Notification
-        Script->>EmailTemplate: Render {days_to_expiry}Days-EscalationNotificationEmail.html
-        EmailTemplate-->>Script: HTML email content
-        Script->>Output: Save email and result JSON
-    end
-
-    Note over Script: Step 5 — Finalization
-    Script->>Output: result_<fqdn>.json, debug.log
-    Script-->>Jenkins/GitLab: SUCCESS or FAILURE printed for CI interpretation
-
-    Note right of Jenkins/GitLab: CI/CD pipeline continues (notifications, Jira updates, etc.)
-```
----
-
 ## Flow Diagram
 
 ```mermaid
@@ -70,6 +25,51 @@ flowchart TD
     J --> K[Write results and summary JSON]
     E --> K
     K --> L[Notify Jenkins of SUCCESS/FAILURE]
+```
+---
+
+## Secquence Diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Jenkins/GitLab as CI/CD Trigger
+    participant Script as akamai_cert_manager.py
+    participant AkamaiAPI as Akamai CPS API
+    participant EmailTemplate as Jinja2 Templates
+    participant Output as Output Directory
+
+    Note over Script: Step 1 — Discovery Phase
+    Jenkins/GitLab->>Script: Start job (--section, --access_group, [--dry-run])
+    Script->>AkamaiAPI: GET /cps/v2/enrollments (simulated if dry-run)
+    AkamaiAPI-->>Script: Enrollment list with expiry data
+    Script->>Output: Write discovered_enrollments.json
+    Note right of Script: Discovery identifies expiring certificates
+
+    loop For each discovered enrollment
+        Note over Script: Step 2 — Renewal
+        Script->>AkamaiAPI: POST /cps/v2/enrollments/{id}/renew (simulated in dry-run)
+        AkamaiAPI-->>Script: Renewal accepted or simulated response
+        Script->>AkamaiAPI: Poll CPS change status until complete or failed
+        AkamaiAPI-->>Script: Renewal completed or simulated result
+
+        Note over Script: Step 3 — Deployment
+        Script->>AkamaiAPI: POST /cps/v2/enrollments/{id}/deployments (simulated in dry-run)
+        AkamaiAPI-->>Script: Deployment accepted or simulated response
+        Script->>AkamaiAPI: Poll CPS change status until complete or failed
+        AkamaiAPI-->>Script: Deployment completed or simulated result
+
+        Note over Script: Step 4 — Notification
+        Script->>EmailTemplate: Render escalation or dry-run HTML template
+        EmailTemplate-->>Script: Generated HTML email content
+        Script->>Output: Save email and result JSON
+    end
+
+    Note over Script: Step 5 — Finalization
+    Script->>Output: Write result_<fqdn>.json, summary.json, debug.log
+    Script-->>Jenkins/GitLab: Print SUCCESS / FAILURE status for CI/CD
+
+    Note right of Jenkin: CI/CD pipeline continues (notifications, Jira updates, etc.)
 ```
 ---
 
