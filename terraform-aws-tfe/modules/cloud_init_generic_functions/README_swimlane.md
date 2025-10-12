@@ -9,7 +9,7 @@ This implementation fully replaces the previous Ansible-based automation by prov
 
 ---
 
-## Flow
+## Secquence Diagram
 
 ```mermaid
 sequenceDiagram
@@ -53,6 +53,25 @@ sequenceDiagram
     Script-->>Jenkins/GitLab: SUCCESS or FAILURE printed for CI interpretation
 
     Note right of Jenkins/GitLab: CI/CD pipeline continues (notifications, Jira updates, etc.)
+```
+---
+
+## Flow Diagram
+
+```mermaid
+flowchart TD
+    A[Jenkins Trigger] --> B{Dry-run Mode?}
+    B -->|Yes| C[Simulate CPS discovery]
+    B -->|No| D[Live CPS API discovery]
+    C --> E[Render dry-run emails]
+    D --> F[Filter expiring enrollments]
+    F --> G[Renew certificates]
+    G --> H[Deploy certificates]
+    H --> I[Poll CPS status]
+    I --> J[Render live notification emails]
+    J --> K[Write results and summary JSON]
+    E --> K
+    K --> L[Notify Jenkins of SUCCESS/FAILURE]
 ```
 ---
 
