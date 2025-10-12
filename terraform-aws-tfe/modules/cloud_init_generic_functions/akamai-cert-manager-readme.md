@@ -9,7 +9,7 @@ This implementation fully replaces the previous Ansible-based automation by prov
 
 ---
 
-## Mermaid Flow
+## Flow
 
 ```mermaid
 sequenceDiagram
