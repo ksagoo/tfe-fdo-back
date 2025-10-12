@@ -197,7 +197,7 @@ Example Jenkins stage:
 stage('Renew & Deploy Certs') {
   steps {
     sh '''
-      python3 akamai_cert_manager.py         --section APAC         --access_group AppSec         --fqdn ${CERT_FQDN}         --enrollment_id ${ENROLLMENT_ID}         --action renew_and_deploy         --deployment-network production
+      python akamai_cert_manager.py --section {REGION} --access_group {ACCESS_GROUP} --fqdn ${CERT_FQDN} --enrollment_id ${ENROLLMENT_ID} --action renew_and_deploy --deployment-network {NETWORK}
     '''
   }
 }
