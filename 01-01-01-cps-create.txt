@@ -1,11 +1,10 @@
-# Determine effective threshold (days-to-expiry overrides expiry-threshold)
-threshold = args.days_to_expiry or args.expiry_threshold
-
-discovered = discover_enrollments(
-    session,
-    base_url,
-    args.section,
-    expiry_threshold=threshold,
-    dry_run=args.dry_run,
-    debug=args.debug
-)
+# Debug: print all retrieved enrollment expiry dates for inspection
+if debug:
+    for e in all_enrollments:
+        expiry = (
+            e.get("renewal", {}).get("certificateNotAfter")
+            or e.get("certificate", {}).get("notAfter")
+            or (e.get("certificateChain", [{}])[0].get("notAfter") if e.get("certificateChain") else None)
+        )
+        cn = e.get("csr", {}).get("cn")
+        print(f"[DEBUG] Enrollment: {cn}, Expiry: {expiry}")
