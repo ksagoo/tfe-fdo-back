@@ -78,7 +78,7 @@ sequenceDiagram
 Below is an example of the email summary generated in **dry-run mode** using `certEmail_dryrun.j2`.  
 It mimics the live production format but clearly displays the `DRY-RUN MODE` tag and simulated data.
 
-```html
+
 <div class="container">
   <h1>Akamai Certificate Renewal — Dry Run Summary <span class="tag">DRY-RUN MODE</span></h1>
   <table>
@@ -90,7 +90,7 @@ It mimics the live production format but clearly displays the `DRY-RUN MODE` tag
   </table>
   <p><strong>No live changes were performed.</strong></p>
 </div>
-```
+
 
 ---
 
