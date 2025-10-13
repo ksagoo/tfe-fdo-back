@@ -1,5 +1,14 @@
-if debug:
-    import json
-    with open(os.path.join(OUTPUT_DIR, "raw_enrollments.json"), "w", encoding="utf-8") as f:
-        json.dump(response.json(), f, indent=2)
-    print("[DEBUG] Saved raw enrollment JSON to output/raw_enrollments.json")
+expiry = (
+    e.get("renewal", {}).get("certificateNotAfter")
+    or e.get("certificate", {}).get("notAfter")
+    or (e.get("certificateChain", [{}])[0].get("notAfter") if e.get("certificateChain") else None)
+    or e.get("autoRenewalStartTime")
+)
+
+# Check deployments if expiry still missing
+if not expiry and "deployments" in e:
+    for d in e.get("deployments", []):
+        cert = d.get("certificate", {})
+        if cert.get("notAfter"):
+            expiry = cert["notAfter"]
+            break
