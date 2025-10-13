@@ -1,210 +1,137 @@
-#!/usr/bin/env python
-# ============================================================
-#  Akamai Entitlement Validator (Level 2)
-# ============================================================
-#  Purpose:
-#    Validates that a given Access Group is authorized for a
-#    target FQDN or certificate based on:
-#      • CPS enrollment ownership
-#      • AppSec configuration mappings
-#      • PAPI property hostname mappings
+#!/bin/bash
+# =====================================================
+# Akamai Entitlement Validator - Live Test Suite
+# =====================================================
+# Runs the entitlement validation checks (CPS, AppSec, PAPI)
+# across one or more FQDNs using akamai_entitlement_validator.py.
+# 
+# Usage:
+#   ./entitlement_validator_suite.sh --section APAC --access-group AppSec
+#   ./entitlement_validator_suite.sh --section PROD --access-group CertOps --fqdn login.example.com
 #
-#  Notes:
-#    - Uses region-based contract/group mapping (REGION_SETTINGS)
-#    - Performs safe GET calls (no modification)
-#    - Dumps all API JSON responses under ./output/
-#    - Returns SUCCESS if any system shows valid ownership
-# ============================================================
-import os, sys, json, argparse, traceback
-from akamai.edgegrid import EdgeGridAuth
-import requests
-from urllib.parse import urljoin
-from requests.sessions import Session
+# Options:
+#   --section        Section name from .edgerc (e.g., DEV, APAC, PROD)
+#   --access-group   Akamai access group name
+#   --fqdn           (Optional) Single FQDN to validate. 
+#                    If not supplied, reads from fqdn_list.txt
+#
+# Requirements:
+#   - akamai_entitlement_validator.py in same directory
+#   - .edgerc configured and reachable
+#   - output/ directory writable
+#
+# Exit Codes:
+#   0 = All tests authorized
+#   1 = One or more unauthorized or failed
+# =====================================================
+
+set -Eeuo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_CMD="python"  # Adjust if needed
+
+# Defaults
+FQDN_LIST_FILE="${SCRIPT_DIR}/fqdn_list.txt"
+OUTPUT_DIR="${SCRIPT_DIR}/output"
+mkdir -p "$OUTPUT_DIR"
+
+# Parse args
+SECTION=""
+ACCESS_GROUP=""
+SINGLE_FQDN=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --section) SECTION="$2"; shift 2 ;;
+    --access-group) ACCESS_GROUP="$2"; shift 2 ;;
+    --fqdn) SINGLE_FQDN="$2"; shift 2 ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
+
+if [[ -z "$SECTION" || -z "$ACCESS_GROUP" ]]; then
+  echo "[ERROR] Both --section and --access-group are required."
+  exit 1
+fi
 
 # =====================================================
-# Region Settings
+# Helper: run a single validation
 # =====================================================
-REGION_SETTINGS = {
-    "DEV": {"contract_id": "ctr_1-ABCD123", "group_id": "grp_12345"},
-    "APAC": {"contract_id": "ctr_1-EFGH456", "group_id": "grp_67890"},
-    "PROD": {"contract_id": "ctr_1-IJKL789", "group_id": "grp_54321"}
+run_validation() {
+  local fqdn="$1"
+  echo "-----------------------------------------------------"
+  echo "[TEST] Validating entitlement for FQDN: ${fqdn}"
+  echo "-----------------------------------------------------"
+
+  local cmd="${PYTHON_CMD} ${SCRIPT_DIR}/akamai_entitlement_validator.py \
+    --section ${SECTION} \
+    --access-group ${ACCESS_GROUP} \
+    --fqdn ${fqdn}"
+
+  echo "[COMMAND] $cmd"
+  local start_time=$(date +%s)
+
+  set +e
+  eval "$cmd" >"${OUTPUT_DIR}/${fqdn}.log" 2>&1
+  local status=$?
+  set -e
+
+  local end_time=$(date +%s)
+  local duration=$((end_time - start_time))
+
+  if [[ $status -eq 0 ]]; then
+    echo "[RESULT] PASS (${duration}s)"
+    echo "${fqdn},PASS" >>"${OUTPUT_DIR}/summary.csv"
+    return 0
+  else
+    echo "[RESULT] FAIL (${duration}s)"
+    echo "${fqdn},FAIL" >>"${OUTPUT_DIR}/summary.csv"
+    return 1
+  fi
 }
 
 # =====================================================
-# Setup Session (uses one section for all APIs)
+# Run tests (single or multiple)
 # =====================================================
-def setup_session(section):
-    import akamai.edgegrid.edgegrid as edgegrid
-    from configparser import ConfigParser
-    from os.path import expanduser
+TOTAL=0
+PASS=0
+FAIL=0
 
-    edgerc = os.path.join(expanduser("~"), ".edgerc")
-    parser = ConfigParser()
-    parser.read(edgerc)
+if [[ -n "$SINGLE_FQDN" ]]; then
+  echo "[INFO] Running single FQDN test: ${SINGLE_FQDN}"
+  run_validation "$SINGLE_FQDN" && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
+  TOTAL=1
+else
+  echo "[INFO] Reading FQDN list from ${FQDN_LIST_FILE}"
+  if [[ ! -f "$FQDN_LIST_FILE" ]]; then
+    echo "[ERROR] Missing fqdn_list.txt and no --fqdn specified."
+    exit 1
+  fi
 
-    if not parser.has_section(section):
-        raise ValueError(f"Missing section [{section}] in .edgerc")
-
-    base_url = "https://" + parser.get(section, "host")
-    s = Session()
-    s.auth = EdgeGridAuth(
-        client_token=parser.get(section, "client_token"),
-        client_secret=parser.get(section, "client_secret"),
-        access_token=parser.get(section, "access_token")
-    )
-    s.headers.update({"Content-Type": "application/json"})
-    return s, base_url
-
-
-# =====================================================
-# CPS Lookup
-# =====================================================
-def check_cps(session, base_url, contract_id, fqdn):
-    url = f"{base_url}/cps/v2/enrollments?contractId={contract_id}"
-    print(f"[INFO] CPS lookup: {url}")
-    result = {"found": False, "url": url}
-    try:
-        resp = session.get(url, timeout=(10, 60))
-        with open("output/cps_raw.json", "w") as f:
-            f.write(resp.text)
-
-        if resp.status_code != 200:
-            print(f"[FAILURE] CPS API returned {resp.status_code}")
-            return result
-
-        data = resp.json()
-        for cert in data.get("enrollments", []):
-            cn = cert.get("csr", {}).get("cn")
-            sans = cert.get("csr", {}).get("sans", [])
-            if fqdn == cn or fqdn in sans:
-                result["found"] = True
-                break
-
-        print(f"[RESULT] CPS: {'FOUND' if result['found'] else 'NOT FOUND'}")
-    except Exception as e:
-        print(f"[ERROR] CPS lookup failed: {e}")
-        traceback.print_exc()
-    return result
-
+  while IFS= read -r fqdn || [[ -n "$fqdn" ]]; do
+    [[ -z "$fqdn" ]] && continue
+    TOTAL=$((TOTAL+1))
+    run_validation "$fqdn" && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
+    sleep 1
+  done < "$FQDN_LIST_FILE"
+fi
 
 # =====================================================
-# AppSec Lookup
+# Summary
 # =====================================================
-def check_appsec(session, base_url, contract_id, group_id, fqdn):
-    url = f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
-    print(f"[INFO] AppSec lookup: {url}")
-    result = {"found": False, "url": url}
-    try:
-        resp = session.get(url, timeout=(10, 60))
-        with open("output/appsec_raw.json", "w") as f:
-            f.write(resp.text)
+echo
+echo "====================================================="
+echo " Entitlement Validator Summary"
+echo "====================================================="
+echo " Total FQDNs : ${TOTAL}"
+echo " Authorized  : ${PASS}"
+echo " Unauthorized/Failed : ${FAIL}"
+echo " Output logs : ${OUTPUT_DIR}/"
+echo "-----------------------------------------------------"
 
-        if resp.status_code != 200:
-            print(f"[FAILURE] AppSec API returned {resp.status_code}")
-            return result
-
-        data = resp.json()
-        for cfg in data.get("configurations", []):
-            if fqdn in json.dumps(cfg):
-                result["found"] = True
-                break
-
-        print(f"[RESULT] AppSec: {'FOUND' if result['found'] else 'NOT FOUND'}")
-    except Exception as e:
-        print(f"[ERROR] AppSec lookup failed: {e}")
-        traceback.print_exc()
-    return result
-
-
-# =====================================================
-# PAPI Lookup
-# =====================================================
-def check_papi(session, base_url, fqdn):
-    url = f"{base_url}/papi/v1/hostnames"
-    print(f"[INFO] PAPI lookup: {url}")
-    result = {"found": False, "url": url}
-    try:
-        resp = session.get(url, timeout=(10, 60))
-        with open("output/papi_raw.json", "w") as f:
-            f.write(resp.text)
-
-        if resp.status_code != 200:
-            print(f"[FAILURE] PAPI API returned {resp.status_code}")
-            return result
-
-        data = resp.json()
-        for item in data.get("hostnames", []):
-            if fqdn in json.dumps(item):
-                result["found"] = True
-                break
-
-        print(f"[RESULT] PAPI: {'FOUND' if result['found'] else 'NOT FOUND'}")
-    except Exception as e:
-        print(f"[ERROR] PAPI lookup failed: {e}")
-        traceback.print_exc()
-    return result
-
-
-# =====================================================
-# Main Validation
-# =====================================================
-def validate_entitlement(section, access_group, fqdn, dry_run=False, debug=False, json_only=False):
-    print("\n=====================================================")
-    print("Akamai Entitlement Validator Suite")
-    print("=====================================================")
-    print(f"Section:      {section}")
-    print(f"Access Group: {access_group}")
-    print(f"FQDN:         {fqdn}")
-    print("-----------------------------------------------------")
-
-    os.makedirs("output", exist_ok=True)
-    region = REGION_SETTINGS.get(section.upper())
-    if not region:
-        print(f"[ERROR] Invalid section: {section}")
-        sys.exit(1)
-
-    contract_id = region["contract_id"]
-    group_id = region["group_id"]
-    session, base_url = setup_session(section)
-
-    results = {
-        "section": section,
-        "access_group": access_group,
-        "fqdn": fqdn,
-        "cps": check_cps(session, base_url, contract_id, fqdn),
-        "appsec": check_appsec(session, base_url, contract_id, group_id, fqdn),
-        "papi": check_papi(session, base_url, fqdn)
-    }
-
-    results["authorized"] = any([
-        results["cps"]["found"],
-        results["appsec"]["found"],
-        results["papi"]["found"]
-    ])
-    status = "AUTHORIZED" if results["authorized"] else "UNAUTHORIZED"
-
-    print("-----------------------------------------------------")
-    print(f"[SUMMARY] Validation result: {status}")
-    print("-----------------------------------------------------")
-
-    with open("output/entitlement_summary.json", "w") as f:
-        json.dump(results, f, indent=4)
-
-    print("[INFO] Validation summary written to output/entitlement_summary.json\n")
-    return 0 if results["authorized"] else 1
-
-
-# =====================================================
-# CLI Entry
-# =====================================================
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Akamai Entitlement Validator")
-    parser.add_argument("--section", required=True, help="Section name in .edgerc (e.g., DEV, APAC, PROD)")
-    parser.add_argument("--access-group", required=True, help="Akamai access group name")
-    parser.add_argument("--fqdn", required=True, help="Certificate common name (FQDN)")
-    parser.add_argument("--dry-run", action="store_true", help="Simulate only, no live API calls")
-    parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging")
-    parser.add_argument("--json-only", action="store_true", help="Output summary JSON only")
-
-    args = parser.parse_args()
-    sys.exit(validate_entitlement(args.section, args.access_group, args.fqdn, args.dry_run, args.debug, args.json_only))
+if [[ $FAIL -eq 0 ]]; then
+  echo "[SUMMARY] All tests PASSED."
+  exit 0
+else
+  echo "[SUMMARY] Some tests FAILED."
+  exit 1
+fi
