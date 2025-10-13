@@ -1,217 +1,149 @@
-#!/usr/bin/env python
-# ==========================================================
-#  Akamai Entitlement Validator (Level 2 Validation)
-# ==========================================================
+#!/bin/bash
+# =====================================================================
+#  Akamai Entitlement Validator - Level 2 Test Suite
+# =====================================================================
 #  Description:
-#    Validates that an FQDN and certificate enrollment belong
-#    to the specified Akamai Access Group by examining naming
-#    conventions and mapping relationships across:
-#      • CPS (Certificate Provisioning System)
-#      • AppSec (Security Configurations & Policies)
-#      • PAPI (Properties / Site Delivery Configs)
+#    Executes entitlement validation checks for one or more FQDNs
+#    and Akamai Access Groups, verifying CPS/AppSec/PAPI associations.
 #
-#  Key Features:
-#    - Full EdgeGrid-authenticated Akamai session
-#    - Lightweight, read-only lookups
-#    - Dumps raw JSON responses to ./output/
-#    - Prints a concise entitlement summary
-#    - Exports PIPELINE_RESULT=AUTHORIZED or UNAUTHORIZED
-#    - Always exits cleanly (status 0)
+#  Usage Examples:
+#    ./test_entitlement_check.sh --section APAC --fqdn login.hsbc.com --access-group AppSec
+#    ./test_entitlement_check.sh --section EMEA --fqdn portal.hsbc.com --access-group Security
+#    ./test_entitlement_check.sh --section APAC --list domains.txt
 #
-#  Usage:
-#    python akamai_entitlement_validator.py \
-#      --section APAC \
-#      --access-group AppSec \
-#      --fqdn login.hsbc.com \
-#      --enrollment-id 104532 \
-#      --debug
-#
-#  Optional:
-#    --dry-run        Simulate only (no API calls)
+#  Optional Flags:
+#    --dry-run              Simulate (skip API calls)
+#    --debug                Enable verbose output
+#    --list <file>          Run batch validation (file with fqdn,access_group per line)
 #
 #  Output:
 #    ./output/raw_cps.json
 #    ./output/raw_appsec.json
 #    ./output/raw_papi.json
 #    ./output/entitlement_summary_<fqdn>.json
-# ==========================================================
+# =====================================================================
 
-import argparse
-import json
-import os
-import sys
-import traceback
-import requests
-from akamai.edgegrid import EdgeGridAuth
-from requests.sessions import Session
+usage() { grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
-# ----------------------------------------------------------
-#  Global constants
-# ----------------------------------------------------------
-OUTPUT_DIR = "output"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# -----------------------------------------------------
+# Defaults
+# -----------------------------------------------------
+SECTION="DEV"
+ACCESS_GROUP=""
+FQDN=""
+DRY_RUN=false
+DEBUG=false
+LIST_FILE=""
+OUTPUT_DIR="output"
+mkdir -p "$OUTPUT_DIR"
+TOTAL=0; PASS=0; FAIL=0
 
-REGION_SETTINGS = {
-    "APAC": {"contractId": "ctr_ABC123", "groupId": "grp_45678"},
-    "EMEA": {"contractId": "ctr_DEF456", "groupId": "grp_98765"},
-    "AMER": {"contractId": "ctr_XYZ789", "groupId": "grp_54321"},
+# -----------------------------------------------------
+# Parse CLI args
+# -----------------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --section) SECTION="$2"; shift 2;;
+    --access-group) ACCESS_GROUP="$2"; shift 2;;
+    --fqdn) FQDN="$2"; shift 2;;
+    --list) LIST_FILE="$2"; shift 2;;
+    --dry-run) DRY_RUN=true; shift;;
+    --debug) DEBUG=true; shift;;
+    -h|--help) usage;;
+    *) echo "Unknown option: $1"; usage;;
+  esac
+done
+
+# -----------------------------------------------------
+# Helper to run validation
+# -----------------------------------------------------
+run_check() {
+  local fqdn="$1"
+  local group="$2"
+
+  if [[ -z "$fqdn" || -z "$group" ]]; then
+    echo "[WARN] Skipping empty entry (fqdn/group missing)"
+    return
+  fi
+
+  echo "====================================================="
+  echo "[CHECK] FQDN: $fqdn | Access Group: $group"
+  echo "====================================================="
+
+  local cmd="python akamai_entitlement_validator.py \
+    --section ${SECTION} \
+    --access-group ${group} \
+    --fqdn ${fqdn}"
+
+  [[ "$DRY_RUN" == true ]] && cmd="$cmd --dry-run"
+  [[ "$DEBUG" == true ]] && cmd="$cmd --debug"
+
+  echo "[INFO] Running: $cmd"
+  local start_time=$(date +%s)
+
+  set +e
+  eval $cmd >>"$OUTPUT_DIR/entitlement_test.log" 2>&1
+  local status=$?
+  set -e
+
+  local end_time=$(date +%s)
+  local duration=$((end_time - start_time))
+  TOTAL=$((TOTAL + 1))
+
+  # Detect pipeline result
+  local result_line
+  result_line=$(grep "PIPELINE_RESULT=" "$OUTPUT_DIR/entitlement_test.log" | tail -n 1)
+  if echo "$result_line" | grep -q "AUTHORIZED"; then
+    echo "[RESULT] AUTHORIZED (${duration}s)"
+    PASS=$((PASS + 1))
+  else
+    echo "[RESULT] UNAUTHORIZED (${duration}s)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  echo "-----------------------------------------------------"
 }
 
-# ----------------------------------------------------------
-#  Setup session
-# ----------------------------------------------------------
-def setup_session(section):
-    import configparser
-    from akamai.edgegrid import EdgeGridAuth
+# -----------------------------------------------------
+# Run in single or batch mode
+# -----------------------------------------------------
+echo "====================================================="
+echo " Akamai Entitlement Validation - Level 2 Suite"
+echo "====================================================="
+echo " Section:        ${SECTION}"
+[[ -n "$LIST_FILE" ]] && echo " Mode:           Batch (${LIST_FILE})" || echo " Mode:           Single"
+echo " Dry-Run:        ${DRY_RUN}"
+echo " Debug:          ${DEBUG}"
+echo "-----------------------------------------------------"
 
-    edgerc_path = os.path.expanduser("~/.edgerc")
-    if not os.path.exists(edgerc_path):
-        print(f"[FAILURE] Missing .edgerc file at {edgerc_path}")
-        sys.exit(1)
+if [[ -n "$LIST_FILE" ]]; then
+  while IFS=',' read -r fqdn group; do
+    fqdn=$(echo "$fqdn" | xargs)
+    group=$(echo "$group" | xargs)
+    run_check "$fqdn" "$group"
+  done < "$LIST_FILE"
+else
+  run_check "$FQDN" "$ACCESS_GROUP"
+fi
 
-    config = configparser.ConfigParser()
-    config.read(edgerc_path)
+# -----------------------------------------------------
+# Summary
+# -----------------------------------------------------
+echo "====================================================="
+echo " Entitlement Validation Summary"
+echo "====================================================="
+echo " Total Checks : $TOTAL"
+echo " Authorized   : $PASS"
+echo " Unauthorized : $FAIL"
+echo "-----------------------------------------------------"
 
-    if section not in config:
-        print(f"[FAILURE] Section [{section}] not found in .edgerc")
-        sys.exit(1)
+if [[ $FAIL -eq 0 ]]; then
+  PIPELINE_RESULT="AUTHORIZED"
+else
+  PIPELINE_RESULT="UNAUTHORIZED"
+fi
 
-    baseurl = "https://{}/".format(config[section].get("host"))
-    s = Session()
-    s.auth = EdgeGridAuth.from_edgerc(config, section)
-    s.headers.update({"Content-Type": "application/json"})
-    return s, baseurl
-
-# ----------------------------------------------------------
-#  Fetch helpers (CPS, AppSec, PAPI)
-# ----------------------------------------------------------
-def get_cps_enrollments(session, baseurl):
-    url = f"{baseurl}cps/v2/enrollments"
-    r = session.get(url)
-    r.raise_for_status()
-    return r.json()
-
-def get_appsec_configs(session, baseurl):
-    url = f"{baseurl}appsec/v1/configs"
-    r = session.get(url)
-    r.raise_for_status()
-    return r.json()
-
-def get_papi_properties(session, baseurl, contract_id, group_id):
-    url = f"{baseurl}papi/v1/properties?contractId={contract_id}&groupId={group_id}"
-    r = session.get(url)
-    r.raise_for_status()
-    return r.json()
-
-# ----------------------------------------------------------
-#  Entitlement discovery & validation
-# ----------------------------------------------------------
-def discover_entitlement(section, access_group, fqdn, enrollment_id=None, dry_run=False, debug=False):
-    result = {"section": section, "access_group": access_group, "fqdn": fqdn, "authorized": False}
-    try:
-        if dry_run:
-            print("[INFO] Dry-run mode enabled — skipping API calls.")
-            return result
-
-        session, baseurl = setup_session(section)
-        region_info = REGION_SETTINGS.get(section, {})
-        contract_id = region_info.get("contractId")
-        group_id = region_info.get("groupId")
-
-        # --- CPS ---
-        print("[INFO] Fetching CPS enrollments ...")
-        cps_data = get_cps_enrollments(session, baseurl)
-        with open(f"{OUTPUT_DIR}/raw_cps.json", "w") as f: json.dump(cps_data, f, indent=2)
-
-        matched_cps = [e for e in cps_data.get("enrollments", []) if fqdn in json.dumps(e)]
-        print(f"[INFO] Found {len(matched_cps)} CPS matches for {fqdn}")
-
-        # --- AppSec ---
-        print("[INFO] Fetching AppSec configurations ...")
-        appsec_data = get_appsec_configs(session, baseurl)
-        with open(f"{OUTPUT_DIR}/raw_appsec.json", "w") as f: json.dump(appsec_data, f, indent=2)
-
-        matched_appsec = [c for c in appsec_data.get("configurations", []) if access_group in json.dumps(c)]
-        print(f"[INFO] Found {len(matched_appsec)} AppSec matches for {access_group}")
-
-        # --- PAPI ---
-        print("[INFO] Fetching PAPI properties ...")
-        papi_data = get_papi_properties(session, baseurl, contract_id, group_id)
-        with open(f"{OUTPUT_DIR}/raw_papi.json", "w") as f: json.dump(papi_data, f, indent=2)
-
-        matched_papi = [p for p in papi_data.get("properties", []) if fqdn in json.dumps(p)]
-        print(f"[INFO] Found {len(matched_papi)} PAPI matches for {fqdn}")
-
-        # --- Correlate ---
-        if matched_cps and matched_appsec and matched_papi:
-            result["authorized"] = True
-            print(f"[SUCCESS] {fqdn} is fully mapped to access group {access_group}")
-        else:
-            print(f"[WARN] Entitlement incomplete for {fqdn} / {access_group}")
-
-        result.update({
-            "cps_matches": len(matched_cps),
-            "appsec_matches": len(matched_appsec),
-            "papi_matches": len(matched_papi),
-        })
-
-        # --- Dump summary ---
-        summary_path = f"{OUTPUT_DIR}/entitlement_summary_{fqdn.replace('.', '_')}.json"
-        with open(summary_path, "w") as f: json.dump(result, f, indent=2)
-        print(f"[INFO] Summary written to {summary_path}")
-
-        # --- Export pipeline result ---
-        pipeline_status = "AUTHORIZED" if result["authorized"] else "UNAUTHORIZED"
-        print(f"PIPELINE_RESULT={pipeline_status}")
-
-    except requests.HTTPError as e:
-        print(f"[FAILURE] HTTP {e.response.status_code}: {e.response.text}")
-        traceback.print_exc()
-        result["error"] = str(e)
-    except Exception as e:
-        print(f"[FAILURE] Unexpected error: {e}")
-        traceback.print_exc()
-        result["error"] = str(e)
-    finally:
-        return result
-
-# ----------------------------------------------------------
-#  CLI
-# ----------------------------------------------------------
-def parse_args():
-    parser = argparse.ArgumentParser(description="Akamai Entitlement Validator (Level 2)")
-    parser.add_argument("--section", required=True, help="Akamai .edgerc section name")
-    parser.add_argument("--access-group", required=True, help="Access group name to validate")
-    parser.add_argument("--fqdn", required=True, help="Fully Qualified Domain Name")
-    parser.add_argument("--enrollment-id", type=int, help="Optional CPS enrollment ID")
-    parser.add_argument("--dry-run", action="store_true", help="Simulate only (no API calls)")
-    parser.add_argument("--debug", action="store_true", help="Enable verbose logging")
-    return parser.parse_args()
-
-def main():
-    args = parse_args()
-    print("=====================================================")
-    print(" Akamai Entitlement Validator - Level 2 Check")
-    print("=====================================================")
-    print(f" Section:       {args.section}")
-    print(f" Access Group:  {args.access_group}")
-    print(f" FQDN:          {args.fqdn}")
-    print(f" Enrollment ID: {args.enrollment_id or '(auto)'}")
-    print(f" Dry-Run:       {args.dry_run}")
-    print("-----------------------------------------------------")
-
-    discover_entitlement(
-        args.section,
-        args.access_group,
-        args.fqdn,
-        args.enrollment_id,
-        args.dry_run,
-        args.debug
-    )
-
-    print("-----------------------------------------------------")
-    print(" Validation completed.")
-    print("=====================================================")
-
-if __name__ == "__main__":
-    main()
+echo "PIPELINE_RESULT=$PIPELINE_RESULT"
+echo "====================================================="
+echo " Validation Suite Completed ($PIPELINE_RESULT)"
+echo "====================================================="
