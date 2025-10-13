@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Akamai Certificate Dry-Run Report</title>
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            background-color: #f8f9fb;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            width: 80%;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border: 1px solid #dcdcdc;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.05);
+            padding: 20px 40px;
+        }
+        h1 {
+            color: #004080;
+            font-size: 22px;
+            margin-bottom: 10px;
+        }
+        h2 {
+            color: #004080;
+            font-size: 18px;
+            margin-top: 30px;
+            margin-bottom: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            text-align: left;
+            padding: 10px;
+            font-size: 14px;
+        }
+        th {
+            background-color: #e9eef6;
+        }
+        .footer {
+            font-size: 12px;
+            color: #666;
+            margin-top: 30px;
+            text-align: center;
+            border-top: 1px solid #ddd;
+            padding-top: 10px;
+        }
+        .tag {
+            display: inline-block;
+            background: #004080;
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Akamai Certificate Renewal — Dry Run Summary
+        <span class="tag">DRY-RUN MODE</span>
+    </h1>
+    <p>This report simulates the output of an Akamai CPS certificate renewal process.
+       No real API calls or configuration changes were made.</p>
+
+    <h2>Certificate Details</h2>
+    <table>
+        <tr><th>FQDN</th><td>{{ fqdn or 'N/A' }}</td></tr>
+        <tr><th>Enrollment ID</th><td>{{ enrollment_id or 'N/A' }}</td></tr>
+        <tr><th>Days to Expiry</th><td>{{ days_to_expiry or 'N/A' }} days</td></tr>
+        <tr><th>Expiry Date</th><td>{{ expiry_date or 'N/A' }}</td></tr>
+        <tr><th>Auto-Renewal Date</th><td>{{ auto_renewal_date or 'N/A' }}</td></tr>
+        <tr><th>Deployment Network</th><td>{{ deployment_network or 'production' }}</td></tr>
+        <tr><th>Slot Reference</th><td>{{ slot or 'N/A' }}</td></tr>
+        <tr>
+            <th>Subject Alternative Names (SANs)</th>
+            <td>
+                {% if sans %}
+                    <ul style="margin:0; padding-left:16px;">
+                    {% for san in sans %}
+                        <li>{{ san }}</li>
+                    {% endfor %}
+                    </ul>
+                {% else %}
+                    N/A
+                {% endif %}
+            </td>
+        </tr>
+    </table>
+
+    {% if renew_result %}
+    <h2>Renewal Simulation</h2>
+    <table>
+        <tr><th>Renew URL</th><td>{{ renew_result.url or 'N/A' }}</td></tr>
+        <tr><th>Retries Attempted</th><td>{{ renew_result.retries or 0 }}</td></tr>
+        <tr><th>Status</th><td>{{ renew_result.final_status or 'SimulatedSuccess' }}</td></tr>
+    </table>
+    {% endif %}
+
+    {% if deploy_result %}
+    <h2>Deployment Simulation</h2>
+    <table>
+        <tr><th>Deployment URL</th><td>{{ deploy_result.url or 'N/A' }}</td></tr>
+        <tr><th>Network</th><td>{{ deploy_result.payload.network or 'production' }}</td></tr>
+        <tr><th>Retries Attempted</th><td>{{ deploy_result.retries or 0 }}</td></tr>
+        <tr><th>Status</th><td>{{ deploy_result.final_status or 'SimulatedSuccess' }}</td></tr>
+    </table>
+    {% endif %}
+
+    {% if poll_result %}
+    <h2>Polling Simulation</h2>
+    <table>
+        <tr><th>Result</th><td>{{ poll_result.pollResult or 'SimulatedSuccess' }}</td></tr>
+        <tr><th>Attempts</th><td>{{ poll_result.attempts or 1 }}</td></tr>
+        <tr><th>Elapsed Time (s)</th><td>{{ poll_result.elapsed or 5 }}</td></tr>
+    </table>
+    {% endif %}
+
+    <div class="footer">
+        Generated automatically on {{ datetime.utcnow().strftime("%d %b %Y %H:%M UTC") }}<br>
+        <strong>No live changes were performed.</strong>
+    </div>
+</div>
+</body>
+</html>
