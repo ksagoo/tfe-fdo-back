@@ -1,12 +1,1 @@
-if days_left <= expiry_threshold:
-    cn = e.get("csr", {}).get("cn", "unknown")
-    discovered.append({
-        "enrollment_id": e.get("enrollmentId"),
-        "certificate": e.get("name", cn),          # for email {{ certificate }}
-        "common_name": cn,                         # for email {{ common_name }}
-        "fqdn": cn,
-        "days_to_expiry": days_left,
-        "expiry_date": expiry_date.strftime("%d %b %Y"),
-        "deployment_network": e.get("deploymentNetwork", "production"),
-        "sans": e.get("csr", {}).get("sans", [])
-    })
+eid = e.get("enrollment_id") or e.get("enrollmentId")
