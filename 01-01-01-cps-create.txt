@@ -1,58 +1,19 @@
 #!/usr/bin/env python3
-"""
-===============================================================================
-Akamai Entitlement Validator
-===============================================================================
-
-Purpose:
---------
-Validate that a given FQDN is correctly entitled across Akamai CPS, AppSec, and
-PAPI configurations for the specified access group and section (region).
-
-It checks:
-  - CPS enrollment (Certificate)
-  - AppSec configuration (Security Config)
-  - PAPI property (Site Delivery)
-
-Authorization Logic:
---------------------
-  * Full match on at least one API = AUTHORIZED
-  * Partial match only = PARTIAL (not authorized)
-  * No matches = UNAUTHORIZED
-
-Debug Mode:
------------
-  When `--debug` is supplied, raw API responses are written to:
-      output/cps_raw.json
-      output/appsec_raw.json
-      output/papi_raw.json
-
-Usage Example:
---------------
-  python akamai_entitlement_validator.py \
-      --section DEV \
-      --fqdn epspos-dev-059test.hsbc.com.hk \
-      --access-group ServiceNow-itilUser \
-      [--debug]
-===============================================================================
-"""
-
-import os
+import sys
 import json
 import argparse
+import os
 import requests
 from akamai.edgegrid import EdgeGridAuth
 from requests.sessions import Session
-from pathlib import Path
-
 
 # =============================================================================
-# Region mappings
+# Region Mappings
 # =============================================================================
 REGION_SETTINGS = {
     "Global": {
         "parent_group_name": "HSBC-DDoS-KSD-D-2YN4YRH",
-        "contract_id": "P-2NY4YRH",
+        "contract_id": "P-2YN4YRH",
         "group_id": "154041",
     },
     "APAC": {
@@ -82,156 +43,128 @@ REGION_SETTINGS = {
     },
 }
 
-OUTPUT_DIR = Path("output")
-OUTPUT_DIR.mkdir(exist_ok=True)
-
-
 # =============================================================================
-# Utility functions
+# Setup Akamai Session
 # =============================================================================
-def write_json_safe(filename, data, debug=False):
-    """Write JSON safely when debug mode is active."""
-    if not debug:
-        return
-    try:
-        with open(OUTPUT_DIR / filename, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print(f"[WARN] Failed to write {filename}: {e}")
+def setup_session(section: str) -> Session:
+    import configparser
 
-
-def setup_session(section):
-    """Initialize EdgeGrid-authenticated Akamai session."""
-    session = Session()
     edgerc_path = os.path.expanduser("~/.edgerc")
-    base_url = None
+    config = configparser.ConfigParser()
+    config.read(edgerc_path)
 
-    try:
-        from akamai.edgegrid import EdgeRc
+    if section not in config:
+        print(f"[ERROR] Section '{section}' not found in {edgerc_path}")
+        sys.exit(1)
 
-        edgerc = EdgeRc(edgerc_path)
-        session.auth = EdgeGridAuth.from_edgerc(edgerc, section)
-        base_url = f"https://{edgerc.get(section, 'host')}"
-    except Exception as e:
-        print(f"[ERROR] Failed to setup Akamai session: {e}")
-        exit(1)
-
+    base_url = f"https://{config[section]['host']}"
+    session = Session()
+    session.auth = EdgeGridAuth.from_edgerc(config, section)
     return session, base_url
 
 
 # =============================================================================
-# API Check Functions
+# Core Lookup Functions
 # =============================================================================
-def check_cps(session, base_url, contract_id, fqdn, debug=False):
-    """Validate CPS enrollment."""
+def check_cps(session, base_url, fqdn, contract_id):
     url = f"{base_url}/cps/v2/enrollments?contractId={contract_id}"
     print(f"[INFO] CPS lookup: {url}")
-    result = {"found": False, "partial": False, "url": url, "matches": []}
-
-    headers = {
-        "Accept": "application/vnd.akamai.cps.enrollments.v11+json",
-        "Content-Type": "application/json",
-    }
-
     try:
-        resp = session.get(url, headers=headers, timeout=(10, 60))
-        data = resp.json() if resp.status_code == 200 else {}
-        write_json_safe("cps_raw.json", data, debug)
+        response = session.get(url)
+        data = response.json()
+        matches = []
+        partial = False
 
-        for enr in data.get("enrollments", []):
-            cnames = [enr.get("cn"), *(enr.get("sans") or [])]
-            if any(fqdn.lower() in (c or "").lower() for c in cnames):
-                result["matches"].append({
-                    "id": enr.get("id"),
-                    "cn": enr.get("cn"),
+        for e in data.get("enrollments", []):
+            csr = e.get("csr") or {}
+            cn = csr.get("cn")
+            sans = csr.get("sans", [])
+            if fqdn == cn or fqdn in sans:
+                matches.append({
+                    "id": e.get("id"),
+                    "cn": cn,
+                    "networkType": e.get("networkConfiguration", {}).get("networkType"),
                     "matchType": "full"
                 })
-                result["found"] = True
-                break
+            elif any(fqdn in s for s in ([cn] if isinstance(cn, str) else []) + sans if isinstance(s, str)):
+                partial = True
 
-        if not result["found"] and data.get("enrollments"):
-            result["partial"] = True
-
-        print(f"[RESULT] CPS: {'FOUND' if result['found'] else 'PARTIAL MATCH' if result['partial'] else 'NOT FOUND'}")
+        return {"found": bool(matches), "partial": partial, "url": url, "matches": matches}
 
     except Exception as e:
         print(f"[ERROR] CPS lookup failed: {e}")
+        return {"found": False, "partial": False, "url": url, "matches": []}
 
-    return result
 
-
-def check_appsec(session, base_url, contract_id, group_id, access_group, fqdn, debug=False):
-    """Validate AppSec configuration."""
+def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group):
     url = f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
     print(f"[INFO] AppSec lookup: {url}")
-    result = {"found": False, "partial": False, "url": url, "matches": []}
-
     try:
-        resp = session.get(url, timeout=(10, 60))
-        data = resp.json() if resp.status_code == 200 else {}
-        write_json_safe("appsec_raw.json", data, debug)
+        response = session.get(url)
+        data = response.json()
+        matches = []
+        partial = False
 
-        for cfg in data.get("configurations", []):
-            if fqdn.lower() in cfg.get("name", "").lower() and access_group.lower() in cfg.get("name", "").lower():
-                result["matches"].append({
-                    "id": cfg.get("id"),
-                    "name": cfg.get("name"),
+        for c in data.get("configurations", []):
+            name = c.get("name", "")
+            if fqdn in name and access_group in name:
+                matches.append({
+                    "id": c.get("id"),
+                    "name": name,
                     "matchType": "full"
                 })
-                result["found"] = True
-                break
+            elif fqdn in name or access_group in name:
+                # mark partial only if not both conditions are met
+                if not (fqdn in name and access_group in name):
+                    partial = True
 
-        if not result["found"] and data.get("configurations"):
-            result["partial"] = True
-
-        print(f"[RESULT] AppSec: {'FOUND' if result['found'] else 'PARTIAL MATCH' if result['partial'] else 'NOT FOUND'}")
+        return {"found": bool(matches), "partial": partial, "url": url, "matches": matches}
 
     except Exception as e:
         print(f"[ERROR] AppSec lookup failed: {e}")
+        return {"found": False, "partial": False, "url": url, "matches": []}
 
-    return result
 
-
-def check_papi(session, base_url, fqdn, debug=False):
-    """Validate PAPI property hostname."""
+def check_papi(session, base_url, fqdn):
     url = f"{base_url}/papi/v1/hostnames"
     print(f"[INFO] PAPI lookup: {url}")
-    result = {"found": False, "partial": False, "url": url, "matches": []}
-
     try:
-        resp = session.get(url, timeout=(10, 60))
-        data = resp.json() if resp.status_code == 200 else {}
-        write_json_safe("papi_raw.json", data, debug)
+        response = session.get(url)
+        data = response.json()
+        matches = []
+        partial = False
 
-        for entry in data.get("hostnames", []):
-            cname = entry.get("cnameFrom", "").lower()
-            if fqdn.lower() == cname:
-                result["found"] = True
-                result["matches"].append({
-                    "propertyName": entry.get("propertyName"),
-                    "cnameFrom": cname,
-                    "contractId": entry.get("contractId"),
-                    "groupId": entry.get("groupId"),
-                })
-                break
+        # handle flexible data structures
+        if isinstance(data, dict):
+            host_list = data.get("hostnames") or data.get("items") or []
+        elif isinstance(data, list):
+            host_list = data
+        else:
+            host_list = []
 
-        print(f"[RESULT] PAPI: {'FOUND' if result['found'] else 'NOT FOUND'}")
+        for h in host_list:
+            hostname = h.get("cnameFrom") if isinstance(h, dict) else h
+            if fqdn == hostname:
+                matches.append(h if isinstance(h, dict) else {"cnameFrom": hostname, "matchType": "full"})
+            elif fqdn in str(hostname):
+                partial = True
+
+        return {"found": bool(matches), "partial": partial, "url": url, "matches": matches}
 
     except Exception as e:
         print(f"[ERROR] PAPI lookup failed: {e}")
-
-    return result
+        return {"found": False, "partial": False, "url": url, "matches": []}
 
 
 # =============================================================================
-# Main Validation Logic
+# Main Logic
 # =============================================================================
 def main():
     parser = argparse.ArgumentParser(description="Akamai Entitlement Validator")
-    parser.add_argument("--section", required=True, help="Region or section (e.g., DEV, APAC)")
-    parser.add_argument("--fqdn", required=True, help="FQDN to validate")
+    parser.add_argument("--section", required=True, help="Section / Region name (e.g., DEV, APAC)")
+    parser.add_argument("--fqdn", required=True, help="Fully qualified domain name")
     parser.add_argument("--access-group", required=True, help="Access group name")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode for raw JSON output")
+    parser.add_argument("--debug", action="store_true", help="Enable debug output")
     args = parser.parse_args()
 
     section = args.section.upper()
@@ -239,50 +172,61 @@ def main():
     access_group = args.access_group.strip()
     debug = args.debug
 
-    print("\n=============================================================")
-    print("              Akamai Entitlement Validator Suite")
-    print("=============================================================")
-    print(f"Section:     {section}")
-    print(f"Access Group:{access_group}")
-    print(f"FQDN:        {fqdn}")
-    print(f"Debug Mode:  {'ON' if debug else 'OFF'}\n")
+    print("\n==============================================================")
+    print("             Akamai Entitlement Validator Suite")
+    print("==============================================================")
+    print(f"Section:      {section}")
+    print(f"Access Group: {access_group}")
+    print(f"FQDN:         {fqdn}")
+    print(f"Debug Mode:   {'ON' if debug else 'OFF'}\n")
 
-    region = REGION_SETTINGS.get(section)
-    if not region:
-        print(f"[ERROR] Invalid section: {section}")
-        exit(1)
+    if section not in REGION_SETTINGS:
+        print(f"[ERROR] Invalid section '{section}'. Check REGION_SETTINGS.")
+        sys.exit(1)
 
-    contract_id = region["contract_id"]
-    group_id = region["group_id"]
-
+    region = REGION_SETTINGS[section]
     session, base_url = setup_session(section)
 
-    cps_result = check_cps(session, base_url, contract_id, fqdn, debug)
-    appsec_result = check_appsec(session, base_url, contract_id, group_id, access_group, fqdn, debug)
-    papi_result = check_papi(session, base_url, fqdn, debug)
+    cps = check_cps(session, base_url, fqdn, region["contract_id"])
+    appsec = check_appsec(session, base_url, fqdn, region["contract_id"], region["group_id"], access_group)
+    papi = check_papi(session, base_url, fqdn)
 
-    authorized = any(r.get("found") for r in [cps_result, appsec_result, papi_result])
-    validated_by = [k for k, r in zip(["CPS", "AppSec", "PAPI"], [cps_result, appsec_result, papi_result]) if r.get("found")]
+    authorized = cps["found"] or appsec["found"] or papi["found"]
+    validated_by = [x for x, y in zip(["CPS", "AppSec", "PAPI"], [cps, appsec, papi]) if y["found"] or y["partial"]]
 
     summary = {
         "section": section,
         "access_group": access_group,
         "fqdn": fqdn,
-        "cps": cps_result,
-        "appsec": appsec_result,
-        "papi": papi_result,
+        "cps": cps,
+        "appsec": appsec,
+        "papi": papi,
         "validated_by": validated_by,
         "authorized": authorized,
     }
 
-    with open(OUTPUT_DIR / "entitlement_summary.json", "w", encoding="utf-8") as f:
+    os.makedirs("output", exist_ok=True)
+    summary_path = "output/entitlement_summary.json"
+    with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
-    print("\n-------------------------------------------------------------")
-    print(f"[SUMMARY] Validation Result: {'AUTHORIZED' if authorized else 'UNAUTHORIZED'}")
+    print("\n--------------------------------------------------------------")
+    if authorized:
+        print("[SUMMARY] Validation Result: AUTHORIZED")
+    elif any([cps["partial"], appsec["partial"], papi["partial"]]):
+        print("[SUMMARY] Validation Result: UNAUTHORIZED (PARTIAL MATCH DETECTED)")
+    else:
+        print("[SUMMARY] Validation Result: UNAUTHORIZED")
+
     print(f"[SUMMARY] Validated by: {', '.join(validated_by) if validated_by else 'None'}")
-    print("-------------------------------------------------------------")
-    print(f"[INFO] Summary written to {OUTPUT_DIR / 'entitlement_summary.json'}\n")
+    print("--------------------------------------------------------------\n")
+    print(f"[INFO] Summary written to {summary_path}\n")
+
+    if debug:
+        raw_path = "output/raw_responses.json"
+        with open(raw_path, "w") as f:
+            json.dump({"cps": cps, "appsec": appsec, "papi": papi}, f, indent=2)
+        print(f"[DEBUG] Raw API data written to {raw_path}\n")
 
 
 if __name__ == "__main__":
