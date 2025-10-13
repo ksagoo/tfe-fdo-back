@@ -1,3 +1,5 @@
+all_enrollments = response.json().get("enrollments", [])
+
 # Debug: print all retrieved enrollment expiry dates for inspection
 if debug:
     for e in all_enrollments:
