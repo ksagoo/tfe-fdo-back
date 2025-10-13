@@ -5,37 +5,31 @@
 #  Description:
 #     Validates whether a given FQDN and access group have
 #     corresponding entitlements across:
-#       - CPS (Certificate Provisioning System)
-#       - AppSec (Web Application Firewall / Security Configs)
-#       - PAPI (Property Manager hostnames)
+#       • CPS (Certificate Provisioning System)
+#       • AppSec (Security Configurations)
+#       • PAPI (Property Manager hostnames)
 #
 #  This tool supports automated pre-validation during onboarding,
-#  ensuring each FQDN is correctly linked to its Akamai entities.
+#  ensuring that each FQDN is correctly linked to its Akamai entities.
 #
 # ---------------------------------------------------------------
-#  Usage Examples:
-# ---------------------------------------------------------------
-#  python akamai_entitlement_validator.py \
-#      --section DEV_APPSEC \
-#      --fqdn espspos-dev-059test.hsbc.com.hk \
-#      --access-group ServiceNow-itilUser
-#
-#  python akamai_entitlement_validator.py \
-#      --section PROD \
-#      --fqdn myapp.hsbc.com \
-#      --access-group CyberWasp
+#  Usage:
+#     python akamai_entitlement_validator.py \
+#        --section DEV \
+#        --fqdn espspos-dev-059test.hsbc.com.hk \
+#        --access-group ServiceNow-itilUser
 #
 # ---------------------------------------------------------------
 #  Output:
-#  - output/cps_raw.json        (raw CPS API response)
-#  - output/appsec_raw.json     (raw AppSec API response)
-#  - output/papi_raw.json       (raw PAPI API response)
-#  - output/entitlement_summary.json  (final structured summary)
+#     output/cps_raw.json
+#     output/appsec_raw.json
+#     output/papi_raw.json
+#     output/entitlement_summary.json
 #
 # ---------------------------------------------------------------
 #  Exit Codes:
-#    0 = Authorized (at least one API validated the FQDN)
-#    1 = Unauthorized (no match found)
+#     0 = Authorized (at least one match found)
+#     1 = Unauthorized (no matches found)
 # ===============================================================
 
 import os
@@ -43,30 +37,27 @@ import sys
 import json
 import argparse
 import traceback
-from datetime import datetime
-from requests.sessions import Session
+from requests import Session
 from akamai.edgegrid import EdgeGridAuth
 from configparser import ConfigParser
 from os.path import expanduser
 
 # ===============================================================
-# REGION SETTINGS
-# Update these mappings for your environments
+#  REGION SETTINGS
+#  Update with contract/group IDs for your environment
 # ===============================================================
 REGION_SETTINGS = {
-    "DEV": {
-        "contract_id": "ctr_1-5A82MTA",
-        "group_id": "grp_272095"
-    },
-    "PROD": {
-        "contract_id": "ctr_1-XXXXXXX",
-        "group_id": "grp_YYYYYYY"
-    }
+    "GLOBAL": {"contract_id": "ctr_1-2YI4WYRH", "group_id": "grp_154041"},
+    "APAC":   {"contract_id": "ctr_1-5A82LRIN", "group_id": "grp_272084"},
+    "EMEA":   {"contract_id": "ctr_1-5A82MHB8", "group_id": "grp_272093"},
+    "LATAM":  {"contract_id": "ctr_1-5A85K4K9", "group_id": "grp_272089"},
+    "AMER":   {"contract_id": "ctr_1-5A85K4K9", "group_id": "grp_272090"},
+    "DEV":    {"contract_id": "ctr_1-5A82MTA",  "group_id": "grp_272095"}
 }
 
 
 # ===============================================================
-# SESSION SETUP
+#  SESSION SETUP
 # ===============================================================
 def setup_session(section):
     """Create an authenticated Akamai session using .edgerc credentials."""
@@ -75,7 +66,7 @@ def setup_session(section):
     parser.read(edgerc)
 
     if not parser.has_section(section):
-        raise ValueError(f"[ERROR] Missing section [{section}] in .edgerc")
+        raise ValueError(f"Missing section [{section}] in .edgerc")
 
     base_url = "https://" + parser.get(section, "host")
     session = Session()
@@ -84,18 +75,32 @@ def setup_session(section):
         client_secret=parser.get(section, "client_secret"),
         access_token=parser.get(section, "access_token")
     )
-
-    # Fix CPS 'missing accept header'
     session.headers.update({
         "Content-Type": "application/json",
         "Accept": "application/json"
     })
-
     return session, base_url
 
 
 # ===============================================================
-# CPS LOOKUP
+#  JSON OUTPUT HELPER
+# ===============================================================
+def write_json_safely(filename, response):
+    """Write API response safely as JSON or text fallback."""
+    os.makedirs("output", exist_ok=True)
+    path = os.path.join("output", filename)
+    try:
+        parsed = response.json()
+        with open(path, "w") as f:
+            json.dump(parsed, f, indent=4)
+    except Exception:
+        with open(path, "w") as f:
+            f.write(response.text)
+    return path
+
+
+# ===============================================================
+#  CPS LOOKUP
 # ===============================================================
 def check_cps(session, base_url, contract_id, fqdn, access_group):
     """Query CPS for enrollments matching the FQDN and access group."""
@@ -105,20 +110,22 @@ def check_cps(session, base_url, contract_id, fqdn, access_group):
 
     try:
         resp = session.get(url, timeout=(10, 60))
-        with open("output/cps_raw.json", "w") as f:
-            f.write(resp.text)
+        write_json_safely("cps_raw.json", resp)
 
         if resp.status_code != 200:
             print(f"[FAILURE] CPS API returned {resp.status_code}")
             return result
 
         data = resp.json()
+        fqdn_lower = fqdn.lower()
+        ag_lower = access_group.lower()
+
         for cert in data.get("enrollments", []):
             cn = (cert.get("csr") or {}).get("cn", "")
             sans = (cert.get("csr") or {}).get("sans", [])
             all_values = " ".join([cn] + sans).lower()
 
-            if fqdn.lower() in all_values and access_group.lower() in json.dumps(cert).lower():
+            if fqdn_lower in all_values and ag_lower in json.dumps(cert).lower():
                 expires = (cert.get("certificate") or {}).get("notAfter", "")
                 result["matches"].append({
                     "cn": cn,
@@ -137,31 +144,35 @@ def check_cps(session, base_url, contract_id, fqdn, access_group):
 
 
 # ===============================================================
-# APPSEC LOOKUP
+#  APPSEC LOOKUP
 # ===============================================================
 def check_appsec(session, base_url, contract_id, group_id, access_group):
-    """Query AppSec configurations and match by name containing access group."""
+    """Query AppSec configurations and match by access group in name."""
     url = f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
     print(f"[INFO] AppSec lookup: {url}")
     result = {"found": False, "url": url, "matches": []}
 
     try:
         resp = session.get(url, timeout=(10, 60))
-        with open("output/appsec_raw.json", "w") as f:
-            f.write(resp.text)
+        write_json_safely("appsec_raw.json", resp)
 
         if resp.status_code != 200:
             print(f"[FAILURE] AppSec API returned {resp.status_code}")
             return result
 
         data = resp.json()
+        ag = access_group.lower()
+
         for cfg in data.get("configurations", []):
             name = cfg.get("name", "")
-            if access_group.lower() in name.lower():
+            if ag in name.lower():
                 result["matches"].append({
                     "id": cfg.get("id"),
                     "name": name,
-                    "latestVersion": cfg.get("latestVersion")
+                    "latestVersion": cfg.get("latestVersion"),
+                    "stagingVersion": cfg.get("stagingVersion"),
+                    "productionVersion": cfg.get("productionVersion"),
+                    "targetProduct": cfg.get("targetProduct")
                 })
 
         result["found"] = bool(result["matches"])
@@ -175,7 +186,7 @@ def check_appsec(session, base_url, contract_id, group_id, access_group):
 
 
 # ===============================================================
-# PAPI LOOKUP
+#  PAPI LOOKUP
 # ===============================================================
 def check_papi(session, base_url, fqdn, access_group):
     """Query PAPI for hostnames that match the given FQDN and access group."""
@@ -185,8 +196,7 @@ def check_papi(session, base_url, fqdn, access_group):
 
     try:
         resp = session.get(url, timeout=(10, 60))
-        with open("output/papi_raw.json", "w") as f:
-            f.write(resp.text)
+        write_json_safely("papi_raw.json", resp)
 
         if resp.status_code != 200:
             print(f"[FAILURE] PAPI API returned {resp.status_code}")
@@ -194,13 +204,14 @@ def check_papi(session, base_url, fqdn, access_group):
 
         data = resp.json()
         items = (data.get("hostnames") or {}).get("items", [])
-        ag = access_group.lower()
+        fqdn_lower = fqdn.lower()
+        ag_lower = access_group.lower()
 
         for entry in items:
             cname_from = entry.get("cnameFrom", "")
             property_name = entry.get("propertyName", "")
-            fqdn_match = cname_from.lower() == fqdn.lower()
-            group_match = ag in property_name.lower()
+            fqdn_match = cname_from.lower() == fqdn_lower
+            group_match = ag_lower in property_name.lower()
 
             if fqdn_match:
                 result["matches"].append({
@@ -223,17 +234,17 @@ def check_papi(session, base_url, fqdn, access_group):
 
 
 # ===============================================================
-# MAIN VALIDATION LOGIC
+#  MAIN VALIDATION LOGIC
 # ===============================================================
 def validate_entitlement(section, access_group, fqdn):
     """Perform entitlement validation across CPS, AppSec, and PAPI."""
-    print("\n=====================================================")
-    print("      Akamai Entitlement Validator Suite")
-    print("=====================================================")
+    print("==============================================================")
+    print("  Akamai Entitlement Validator Suite")
+    print("==============================================================")
     print(f"Section:      {section}")
     print(f"Access Group: {access_group}")
     print(f"FQDN:         {fqdn}")
-    print("-----------------------------------------------------")
+    print("--------------------------------------------------------------")
 
     os.makedirs("output", exist_ok=True)
 
@@ -259,170 +270,28 @@ def validate_entitlement(section, access_group, fqdn):
     results["validated_by"] = validated_by
     results["authorized"] = bool(validated_by)
 
-    print("-----------------------------------------------------")
-    print(f"[SUMMARY] Validation result: {'AUTHORIZED' if results['authorized'] else 'UNAUTHORIZED'}")
-    print(f"[SUMMARY] Validated by: {', '.join(validated_by) if validated_by else 'None'}")
-    print("-----------------------------------------------------")
+    print("--------------------------------------------------------------")
+    print(f"[SUMMARY] Validation Result: {'AUTHORIZED' if results['authorized'] else 'UNAUTHORIZED'}")
+    print(f"[SUMMARY] Validated By: {', '.join(validated_by) if validated_by else 'None'}")
+    print("--------------------------------------------------------------")
 
     with open("output/entitlement_summary.json", "w") as f:
         json.dump(results, f, indent=4)
 
-    print("[INFO] Summary written to output/entitlement_summary.json\n")
+    print("[INFO] Summary written to output/entitlement_summary.json")
+    print("==============================================================\n")
+
     return 0 if results["authorized"] else 1
 
 
 # ===============================================================
-# ENTRY POINT
+#  ENTRY POINT
 # ===============================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Akamai Entitlement Validator")
-    parser.add_argument("--section", required=True, help="Section in .edgerc (e.g., DEV_APPSEC, PROD)")
+    parser.add_argument("--section", required=True, help="Section in .edgerc (e.g., DEV, APAC, EMEA)")
     parser.add_argument("--access-group", required=True, help="Akamai Access Group name")
     parser.add_argument("--fqdn", required=True, help="FQDN to validate")
 
     args = parser.parse_args()
     sys.exit(validate_entitlement(args.section, args.access_group, args.fqdn))
-
-
-
-
-
-
-#!/bin/bash
-# ===============================================================
-#  Akamai Entitlement Validation Test Suite
-# ===============================================================
-#  Description:
-#     Wrapper script to run entitlement validation for a single
-#     FQDN against Akamai CPS, AppSec, and PAPI APIs using the
-#     Python validator.
-#
-#  The script logs the outcome to the console and generates:
-#     - output/*.json files (raw API and summary data)
-#
-# ---------------------------------------------------------------
-#  Usage Examples:
-# ---------------------------------------------------------------
-#  ./test_suite_entitlement.sh \
-#       --section DEV_APPSEC \
-#       --fqdn espspos-dev-059test.hsbc.com.hk \
-#       --access-group ServiceNow-itilUser
-#
-#  ./test_suite_entitlement.sh \
-#       --section PROD \
-#       --fqdn myapp.hsbc.com \
-#       --access-group CyberWasp
-#
-# ---------------------------------------------------------------
-#  Exit Codes:
-#     0 = Authorized
-#     1 = Unauthorized
-# ===============================================================
-
-set -euo pipefail
-IFS=$'\n\t'
-
-# -------------------------------
-# Resolve Script Directory
-# -------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_CMD="python"
-
-# -------------------------------
-# Default Variables
-# -------------------------------
-SECTION=""
-FQDN=""
-ACCESS_GROUP=""
-OUTPUT_DIR="${SCRIPT_DIR}/output"
-
-# -------------------------------
-# Parse Arguments
-# -------------------------------
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --section)
-      SECTION="$2"
-      shift 2
-      ;;
-    --fqdn)
-      FQDN="$2"
-      shift 2
-      ;;
-    --access-group)
-      ACCESS_GROUP="$2"
-      shift 2
-      ;;
-    *)
-      echo "[ERROR] Unknown argument: $1"
-      echo "Usage: $0 --section <section> --fqdn <fqdn> --access-group <access-group>"
-      exit 1
-      ;;
-  esac
-done
-
-# -------------------------------
-# Validate Inputs
-# -------------------------------
-if [[ -z "$SECTION" || -z "$FQDN" || -z "$ACCESS_GROUP" ]]; then
-  echo "[ERROR] Missing required arguments."
-  echo "Usage: $0 --section <section> --fqdn <fqdn> --access-group <access-group>"
-  exit 1
-fi
-
-# -------------------------------
-# Prepare Environment
-# -------------------------------
-mkdir -p "$OUTPUT_DIR"
-LOG_FILE="${OUTPUT_DIR}/${FQDN}.log"
-
-# -------------------------------
-# Header
-# -------------------------------
-echo "=============================================================="
-echo "  Akamai Entitlement Validation Test Suite"
-echo "=============================================================="
-echo "Section:       $SECTION"
-echo "Access Group:  $ACCESS_GROUP"
-echo "FQDN:          $FQDN"
-echo "--------------------------------------------------------------"
-
-# -------------------------------
-# Run Validation
-# -------------------------------
-echo "[INFO] Starting entitlement validation..."
-$PYTHON_CMD "${SCRIPT_DIR}/akamai_entitlement_validator.py" \
-  --section "$SECTION" \
-  --access-group "$ACCESS_GROUP" \
-  --fqdn "$FQDN" | tee "$LOG_FILE"
-
-RESULT=${PIPESTATUS[0]}
-
-# -------------------------------
-# Output Summary
-# -------------------------------
-echo "--------------------------------------------------------------"
-if [[ $RESULT -eq 0 ]]; then
-  echo "[SUMMARY] Validation Result: AUTHORIZED"
-  echo "[INFO] Entitlement confirmed for $FQDN"
-else
-  echo "[SUMMARY] Validation Result: UNAUTHORIZED"
-  echo "[INFO] No valid entitlement found for $FQDN"
-fi
-echo "--------------------------------------------------------------"
-echo "Output files written to: $OUTPUT_DIR"
-echo "Log file: $LOG_FILE"
-echo "=============================================================="
-
-exit $RESULT
-
-
-
-
-
-
-
-
-
-
-
