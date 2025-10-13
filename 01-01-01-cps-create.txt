@@ -1,9 +1,11 @@
-discovered.append({
-    "enrollment_id": e.get("enrollmentId"),
-    "name": e.get("name", e.get("csr", {}).get("cn", "unknown")),
-    "fqdn": e.get("csr", {}).get("cn", "unknown"),
-    "days_to_expiry": days_left,
-    "expiry_date": expiry_date.strftime("%d %b %Y"),
-    "sans": e.get("csr", {}).get("sans", []),
-    "deployment_network": e.get("deploymentNetwork", "production"),
-})
+
+if days_left < expiry_threshold:
+    discovered.append({
+        "enrollment_id": e.get("enrollmentId"),
+        "name": e.get("name", e.get("csr", {}).get("cn", "unknown")), 
+        "fqdn": e.get("csr", {}).get("cn", "unknown"),
+        "days_to_expiry": days_left,
+        "expiry_date": expiry_date.strftime("%d %b %Y"),
+        "sans": e.get("csr", {}).get("sans", []),
+        "deployment_network": e.get("deploymentNetwork", "production"),
+    })
