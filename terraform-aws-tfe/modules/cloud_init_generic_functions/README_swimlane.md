@@ -71,6 +71,25 @@ sequenceDiagram
 
     Note right of Jenkin: CI/CD pipeline continues (notifications, Jira updates, etc.)
 ```
+
+## Example Rendered Email (Dry-Run)
+
+Below is an example of the email summary generated in **dry-run mode** using `certEmail_dryrun.j2`.  
+It mimics the live production format but clearly displays the `DRY-RUN MODE` tag and simulated data.
+
+
+<div class="container">
+  <h1>Akamai Certificate Renewal — Dry Run Summary <span class="tag">DRY-RUN MODE</span></h1>
+  <table>
+    <tr><th>FQDN</th><td>test.example.com</td></tr>
+    <tr><th>Enrollment ID</th><td>10001</td></tr>
+    <tr><th>Expiry Date</th><td>27 Oct 2025</td></tr>
+    <tr><th>Auto-Renewal Date</th><td>24 Oct 2025 09:00 UTC</td></tr>
+    <tr><th>Deployment Network</th><td>production</td></tr>
+  </table>
+  <p><strong>No live changes were performed.</strong></p>
+</div>
+
 ---
 
 ## Key Features
