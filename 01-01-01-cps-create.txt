@@ -1,54 +1,45 @@
-"""
-=====================================================
-           Akamai Certificate Lifecycle Automation
-=====================================================
+def setup_session(edgerc_file, section_name, debug=False):
+    """
+    Initialize EdgeGrid-authenticated session using .edgerc credentials.
+    """
 
-Description:
-Automates the complete lifecycle of Akamai CPS (Certificate Provisioning System)
-certificates, including discovery, renewal, deployment, polling, and escalation
-notifications. Designed for seamless integration with Jenkins pipelines and
-Jira Front Door workflows.
+    try:
+        import configparser, os
+        from akamai.edgegrid import EdgeGridAuth
+        import requests
 
-Key Capabilities:
-- Automated certificate renewal and deployment through CPS API (v2)
-- Discovery of all enrollments or filtered expiry-based lists
-- Safe dry-run simulation (no live API calls)
-- Configurable polling with timeout and exponential backoff
-- Automatic HTML email rendering via Jinja2 templates (7/10/14-day)
-- Region-aware contract and group ID mapping (Global, APAC, EMEA, LATAM, AMER, DEV)
-- Unified structured console output ([INFO], [DEBUG], [SUCCESS], [FAILURE])
-- JSON and HTML output for audit and CI/CD visibility
-- Section-aware EdgeGrid authentication (.edgerc)
-- Compatible with Jenkins and GitLab pipeline triggers
+        edgerc_path = os.path.expanduser(edgerc_file)
+        if not os.path.exists(edgerc_path):
+            print(f"[FAILURE]: .edgerc file not found at {edgerc_path}")
+            return None, None
 
-Recent Updates:
-- Added `--expiry-threshold` for filtered discovery by expiry date
-- Extended dry-run simulation for full workflow validation
-- Added `--json-only` and `--no-email` flags for CI/CD optimization
-- Enhanced polling logic with time-based and iteration-based control
-- Added detailed summary.json reporting for Jenkins pipeline parsing
-- Improved error handling and uniform logging across dry-run and live modes
-- Introduced staging/scheduled deployment support via `--schedule-time` and
-  `--deployment-network` flags
+        config = configparser.ConfigParser()
+        config.read(edgerc_path)
 
-Usage:
-  python akamai_cert_manager.py \
-    --section <SECTION> \
-    --access_group <ACCESS_GROUP> \
-    [--fqdn <FQDN>] \
-    [--enrollment_id <ENROLLMENT_ID>] \
-    [--action <get_enrollment|renew_only|deploy_only|renew_and_deploy>] \
-    [--expiry-threshold <DAYS>] \
-    [--deployment-network <production|staging>] \
-    [--schedule-time <ISO_TIMESTAMP>] \
-    [--dry-run] [--debug] [--json-only] [--no-email]
+        if not config.has_section(section_name):
+            print(f"[FAILURE]: Section [{section_name}] not found in .edgerc. Available sections: {config.sections()}")
+            return None, None
 
-Requirements:
-- Python 3.8 or later
-- Valid Akamai EdgeGrid credentials (.edgerc) with CPS API access
+        client_token = config.get(section_name, "client_token")
+        client_secret = config.get(section_name, "client_secret")
+        access_token = config.get(section_name, "access_token")
+        host = config.get(section_name, "host")
 
-Created: October 2025
-Last Updated: October 2025 (polling, expiry filtering, JSON mode, dry-run)
-License: Internal use only – HSBC / Akamai Automation Team
-=====================================================
-"""
+        base_url = f"https://{host}"
+
+        session = requests.Session()
+        session.auth = EdgeGridAuth(
+            client_token=client_token,
+            client_secret=client_secret,
+            access_token=access_token
+        )
+        session.headers.update({"Content-Type": "application/json"})
+
+        if debug:
+            print(f"[DEBUG]: EdgeGrid session initialized for host: {base_url}")
+
+        return session, base_url
+
+    except Exception as e:
+        print(f"[FAILURE]: EdgeGrid init error: {e}")
+        return None, None
