@@ -1,1 +1,6 @@
-"enrollment_id": e.get("id") or e.get("enrollmentId"),
+<td>{{ enrollment_id }}</td>
+<td>{{ certificate }}</td>
+<td>{{ common_name }}</td>
+<td>{{ sans | join(', ') }}</td>
+<td>{{ deployment_network }}</td>
+<td>{{ expiry_date }}</td>
