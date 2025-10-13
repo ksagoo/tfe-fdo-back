@@ -1,6 +1,26 @@
-<td>{{ enrollment_id }}</td>
-<td>{{ certificate }}</td>
-<td>{{ common_name }}</td>
-<td>{{ sans | join(', ') }}</td>
-<td>{{ deployment_network }}</td>
-<td>{{ expiry_date }}</td>
+if not args.no_email:
+    # Inject missing placeholders for Jinja2 email template rendering
+    entry.update({
+        "contactNames": ", ".join(entry.get("contacts", [])) if entry.get("contacts") else "Cyber WASP Team",
+        "certType": entry.get("certType", "RSA"),
+        "cert1": entry.get("cert1", ""),
+        "cert2Type": entry.get("cert2Type", "ECDSA"),
+        "cert2": entry.get("cert2", "")
+    })
+
+    # If running dry-run, inject dummy certificate blocks for visual confirmation
+    if args.dry_run:
+        entry["cert1"] = (
+            "-----BEGIN CERTIFICATE-----\n"
+            "DRYRUN_RSA_FAKE_CERT_BLOCK\n"
+            "-----END CERTIFICATE-----"
+        )
+        entry["cert2"] = (
+            "-----BEGIN CERTIFICATE-----\n"
+            "DRYRUN_ECDSA_FAKE_CERT_BLOCK\n"
+            "-----END CERTIFICATE-----"
+        )
+
+    # Render the email using enriched entry data
+    email_path = render_email(entry, days, dry_run=args.dry_run, debug=args.debug)
+    entry["email_output"] = email_path
