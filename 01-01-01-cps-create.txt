@@ -1,6 +1,6 @@
 #!/bin/bash
 # =====================================================
-#  Akamai Certificate Lifecycle Automation - Live Test Suite (v2.4)
+#  Akamai Certificate Lifecycle Automation
 # =====================================================
 #  Description:
 #    Executes live Akamai CPS API operations:
@@ -148,7 +148,7 @@ echo "-----------------------------------------------------"
 # 1. Get All Expiring Enrollments
 # =====================================================
 run_test "Get All Expiring Enrollments" \
-"python3 akamai_cert_manager.py \
+"python akamai_cert_manager.py \
   --section ${SECTION} \
   --access_group ${ACCESS_GROUP} \
   --action get_enrollment \
@@ -179,7 +179,7 @@ fi
 # 2. Renew Only
 # =====================================================
 run_test "Renew Only" \
-"python3 akamai_cert_manager.py \
+"python akamai_cert_manager.py \
   --section ${SECTION} \
   --access_group ${ACCESS_GROUP} \
   --fqdn ${FQDN} \
@@ -192,7 +192,7 @@ run_test "Renew Only" \
 # 3. Deploy Only
 # =====================================================
 run_test "Deploy Only" \
-"python3 akamai_cert_manager.py \
+"python akamai_cert_manager.py \
   --section ${SECTION} \
   --access_group ${ACCESS_GROUP} \
   --fqdn ${FQDN} \
@@ -205,7 +205,7 @@ run_test "Deploy Only" \
 # 4. Full Renew + Deploy + Poll
 # =====================================================
 run_test "Full Lifecycle (Renew + Deploy + Poll)" \
-"python3 akamai_cert_manager.py \
+"python akamai_cert_manager.py \
   --section ${SECTION} \
   --access_group ${ACCESS_GROUP} \
   --fqdn ${FQDN} \
@@ -223,7 +223,7 @@ SCHEDULE_TIME=$(date -u -d '+1 hour' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -
 echo "[INFO] Scheduled deployment time (UTC): ${SCHEDULE_TIME}"
 
 run_test "Scheduled Deployment (Future Start Time)" \
-"python3 akamai_cert_manager.py \
+"python akamai_cert_manager.py \
   --section ${SECTION} \
   --access_group ${ACCESS_GROUP} \
   --fqdn ${FQDN} \
@@ -253,4 +253,220 @@ fi
 echo "PIPELINE_RESULT=$PIPELINE_RESULT"
 echo "====================================================="
 echo " Live Test Suite Completed ($PIPELINE_RESULT)"
+echo "====================================================="
+
+
+
+
+
+
+
+
+
+
+#!/bin/bash
+# ===================================================================
+#  Akamai Certificate Lifecycle Automation - Dry-Run Test Suite
+# ===================================================================
+#  Description:
+#    Simulates all major CPS lifecycle operations safely with --dry-run mode.
+#    Exercises every logical path in akamai_cert_manager.py without real API calls.
+#
+#  Default Behavior:
+#    • Executes 12 test cases covering renew, deploy, schedule, expiry windows, etc.
+#    • Writes outputs to ./output/ for inspection
+#    • Exports PIPELINE_RESULT for CI/CD pipelines
+#
+#  Typical Usage:
+#    ./test_suite_dryrun.sh                      # Run all tests
+#    ./test_suite_dryrun.sh --test 7             # Run specific test case
+#    ./test_suite_dryrun.sh --section DEV --access-group AppSec
+#
+#  Options:
+#    --section SECTION            Akamai .edgerc section (default: DEV)
+#    --access-group GROUP         Access group name (default: AppSec)
+#    --test N                     Run specific test (1–12) or 'all' (default: all)
+#    --help                       Show usage
+#
+#  Output:
+#    • Logs: ./output/test_dryrun.log
+#    • JSON outputs: ./output/result_*.json
+#    • PIPELINE_RESULT exported for CI/CD
+#
+# =====================================================
+
+usage() { grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+
+# -----------------------------------------------------
+# Defaults
+# -----------------------------------------------------
+SECTION="DEV"
+ACCESS_GROUP="AppSec"
+TEST="all"
+OUTPUT_DIR="output"
+mkdir -p "$OUTPUT_DIR"
+set -Eeo pipefail
+TOTAL=0; PASS=0; FAIL=0
+
+# -----------------------------------------------------
+# Argument parsing
+# -----------------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --section) SECTION="$2"; shift 2;;
+    --access-group) ACCESS_GROUP="$2"; shift 2;;
+    --test) TEST="$2"; shift 2;;
+    -h|--help) usage;;
+    *) echo "Unknown option: $1"; usage;;
+  esac
+done
+
+# -----------------------------------------------------
+# Helper to run tests safely
+# -----------------------------------------------------
+run_test() {
+  local name="$1"; local cmd="$2"; local id="$3"
+  if [[ "$TEST" != "all" && "$TEST" != "$id" ]]; then return; fi
+  echo -e "\n[TEST $id]: $name"
+  echo "-----------------------------------------------------"
+  echo "COMMAND: $cmd"
+  local start_time=$(date +%s)
+  set +e; eval $cmd >>"$OUTPUT_DIR/test_dryrun.log" 2>&1; local status=$?; set -e
+  local end_time=$(date +%s); local duration=$((end_time - start_time))
+  TOTAL=$((TOTAL + 1))
+  if [[ $status -ne 0 ]] || grep -q "\[FAILURE\]" "$OUTPUT_DIR/debug.log" 2>/dev/null; then
+    echo "[RESULT]: FAIL (${duration}s)"; FAIL=$((FAIL + 1))
+  else
+    echo "[RESULT]: SUCCESS (${duration}s)"; PASS=$((PASS + 1))
+  fi
+  echo "-----------------------------------------------------"; sleep 1
+}
+
+# -----------------------------------------------------
+# Header
+# -----------------------------------------------------
+echo "====================================================="
+echo " Akamai CPS Certificate Dry-Run Simulation Suite"
+echo "====================================================="
+echo " Section:       ${SECTION}"
+echo " Access Group:  ${ACCESS_GROUP}"
+echo " Selected Test: ${TEST}"
+echo "-----------------------------------------------------"
+
+# =====================================================
+# 1. Basic Dry-Run Full Flow
+# =====================================================
+run_test "Basic Dry-Run" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn dryrun-basic.example.com --enrollment_id 10001 --action renew_and_deploy \
+ --dry-run --json-only" "1"
+
+# =====================================================
+# 2. Get Enrollment (Discovery Simulation)
+# =====================================================
+run_test "Get Enrollment Only" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --action get_enrollment --dry-run --json-only" "2"
+
+# =====================================================
+# 3. Renew Only
+# =====================================================
+run_test "Renew Only" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn renewonly.example.com --enrollment_id 10002 --action renew_only \
+ --dry-run --json-only" "3"
+
+# =====================================================
+# 4. Deploy Only
+# =====================================================
+run_test "Deploy Only" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn deployonly.example.com --enrollment_id 10003 --action deploy_only \
+ --dry-run --json-only" "4"
+
+# =====================================================
+# 5. Scheduled Deployment
+# =====================================================
+SCHEDULE_TIME=$(date -u -d '+2 hours' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -v+2H -u '+%Y-%m-%dT%H:%M:%SZ')
+run_test "Scheduled Deployment (Future Start)" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn schedule.example.com --enrollment_id 10004 --action renew_and_deploy \
+ --schedule-time ${SCHEDULE_TIME} --dry-run --json-only" "5"
+
+# =====================================================
+# 6. Staging Network
+# =====================================================
+run_test "Staging Network Simulation" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn staging.example.com --enrollment_id 10005 --action renew_and_deploy \
+ --deployment-network staging --dry-run --json-only" "6"
+
+# =====================================================
+# 7. Debug Logging Enabled
+# =====================================================
+run_test "Debug Logging Enabled" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn debug.example.com --enrollment_id 10006 --action renew_and_deploy \
+ --dry-run --debug" "7"
+
+# =====================================================
+# 8. Expiry Template (7-Day Escalation)
+# =====================================================
+run_test "Expiry Template (7-Day)" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn seven.example.com --enrollment_id 10007 --action renew_and_deploy \
+ --days-to-expiry 7 --dry-run --json-only" "8"
+
+# =====================================================
+# 9. Expiry Template (10-Day Escalation)
+# =====================================================
+run_test "Expiry Template (10-Day)" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn ten.example.com --enrollment_id 10008 --action renew_and_deploy \
+ --days-to-expiry 10 --dry-run --json-only" "9"
+
+# =====================================================
+# 10. Expiry Template (14-Day Notification)
+# =====================================================
+run_test "Expiry Template (14-Day)" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn fourteen.example.com --enrollment_id 10009 --action renew_and_deploy \
+ --days-to-expiry 14 --dry-run --json-only" "10"
+
+# =====================================================
+# 11. Full Integration (Poll Simulation)
+# =====================================================
+run_test "Full Integration (Poll Simulation)" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn poll.example.com --enrollment_id 10010 --action renew_and_deploy \
+ --poll-interval 10 --poll-timeout 120 --dry-run --debug" "11"
+
+# =====================================================
+# 12. Default Template (certEmail.html Fallback)
+# =====================================================
+run_test "Default Template (Fallback)" \
+"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
+ --fqdn fallback.example.com --enrollment_id 10011 --action renew_and_deploy \
+ --days-to-expiry 30 --dry-run --json-only" "12"
+
+# =====================================================
+# Summary
+# =====================================================
+echo "====================================================="
+echo " Dry-Run Simulation Suite Summary"
+echo "====================================================="
+echo " Total Tests : $TOTAL"
+echo " Passed      : $PASS"
+echo " Failed      : $FAIL"
+echo "-----------------------------------------------------"
+
+if [[ $FAIL -eq 0 ]]; then
+  PIPELINE_RESULT="SUCCESS"
+else
+  PIPELINE_RESULT="FAILURE"
+fi
+
+echo "PIPELINE_RESULT=$PIPELINE_RESULT"
+echo "====================================================="
+echo " Dry-Run Test Suite Completed ($PIPELINE_RESULT)"
 echo "====================================================="
