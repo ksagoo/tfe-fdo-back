@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Akamai Entitlement Validator Suite (Final Rebuild)
+Akamai Entitlement Validator Suite (Final v3)
 Validates FQDN and Access Group entitlements in CPS, AppSec, and PAPI.
 """
 
@@ -16,7 +16,7 @@ from configparser import ConfigParser
 from os.path import expanduser
 
 # =============================================================================
-# Region Mappings
+# Region Settings
 # =============================================================================
 REGION_SETTINGS = {
     "GLOBAL": {"contract_id": "P-2YN4YRH", "group_id": "154041"},
@@ -27,9 +27,8 @@ REGION_SETTINGS = {
     "DEV": {"contract_id": "V-5A82MTA", "group_id": "272095"},
 }
 
-
 # =============================================================================
-# Setup Akamai Session
+# Setup Session
 # =============================================================================
 def setup_session(section: str):
     edgerc = os.path.join(expanduser("~"), ".edgerc")
@@ -38,7 +37,6 @@ def setup_session(section: str):
     if not parser.has_section(section):
         print(f"[ERROR] Missing section [{section}] in {edgerc}")
         sys.exit(1)
-
     base_url = f"https://{parser.get(section, 'host')}"
     session = Session()
     session.auth = EdgeGridAuth(
@@ -49,9 +47,8 @@ def setup_session(section: str):
     session.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
     return session, base_url
 
-
 # =============================================================================
-# Utility Functions
+# Utils
 # =============================================================================
 def safe_json(resp):
     try:
@@ -59,51 +56,57 @@ def safe_json(resp):
     except Exception:
         return {}
 
-
 def sanitize_filename(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", name)
-
 
 def write_json(data, filename):
     os.makedirs("output", exist_ok=True)
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
+# ANSI colors for terminal summary
+class Color:
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    END = "\033[0m"
 
 # =============================================================================
-# CPS Lookup
+# CPS Check
 # =============================================================================
 def check_cps(session, base_url, fqdn, contract_id, debug=False):
     url = f"{base_url}/cps/v2/enrollments?contractId={contract_id}"
     print(f"[INFO] CPS lookup: {url}")
-    matches, partials = [], []
+    partials = []
     try:
-        resp = session.get(
-            url,
-            headers={"Accept": "application/vnd.akamai.cps.enrollments.v11+json"},
-            timeout=(10, 60)
-        )
+        resp = session.get(url, headers={
+            "Accept": "application/vnd.akamai.cps.enrollments.v11+json",
+        }, timeout=(10, 60))
         data = safe_json(resp)
         if debug:
             write_json(data, f"output/raw_cps_{sanitize_filename(fqdn)}.json")
 
+        fqdn_l = fqdn.lower()
         for e in data.get("enrollments", []):
-            cn = e.get("csr", {}).get("cn", "")
-            sans = e.get("csr", {}).get("sans", [])
-            all_names = [cn] + sans
-            if fqdn in all_names:
-                matches.append({"id": e.get("id"), "cn": cn, "matchType": "full"})
-            elif any(fqdn in n for n in all_names if isinstance(n, str)):
-                partials.append({"id": e.get("id"), "cn": cn, "matchType": "partial"})
+            csr = e.get("csr", {}) or {}
+            cn = (csr.get("cn") or "").lower()
+            sans = [s.lower() for s in (csr.get("sans") or []) if isinstance(s, str)]
+            if fqdn_l == cn or fqdn_l in sans:
+                partials.append({
+                    "id": e.get("id"),
+                    "cn": cn,
+                    "matchType": "partial",
+                    "reason": "fqdn_only"
+                })
 
         result = {
-            "found": bool(matches),
-            "partial": bool(partials) and not matches,
+            "found": False,
+            "partial": bool(partials),
             "url": url,
-            "matches": matches,
+            "matches": [],
             "partial_matches": partials
         }
-        print(f"[RESULT] CPS: {'FOUND' if matches else ('PARTIAL MATCH' if partials else 'NOT FOUND')}")
+        print(f"[RESULT] CPS: {'PARTIAL MATCH' if partials else 'NOT FOUND'}")
         return result
     except Exception as e:
         print(f"[ERROR] CPS lookup failed: {e}")
@@ -111,9 +114,8 @@ def check_cps(session, base_url, fqdn, contract_id, debug=False):
             traceback.print_exc()
         return {"found": False, "partial": False, "url": url, "matches": [], "partial_matches": []}
 
-
 # =============================================================================
-# AppSec Lookup
+# AppSec Check
 # =============================================================================
 def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group, debug=False):
     url = f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
@@ -125,15 +127,28 @@ def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group, d
         if debug:
             write_json(data, f"output/raw_appsec_{sanitize_filename(fqdn)}.json")
 
+        fqdn_l = fqdn.lower()
+        ag_l = access_group.lower()
+
         for c in data.get("configurations", []):
-            name = c.get("name", "").lower()
-            fqdn_match = fqdn.lower() in name
-            ag_match = access_group.lower() in name
+            name = (c.get("name") or "").lower()
+            fqdn_match = fqdn_l in name
+            ag_match = ag_l in name
+
             if fqdn_match and ag_match:
-                matches.append({"id": c.get("id"), "name": c.get("name"), "matchType": "full"})
+                matches.append({
+                    "id": c.get("id"),
+                    "name": c.get("name"),
+                    "matchType": "full"
+                })
             elif fqdn_match or ag_match:
                 reason = "fqdn_only" if fqdn_match else "access_group_only"
-                partials.append({"id": c.get("id"), "name": c.get("name"), "matchType": "partial", "reason": reason})
+                partials.append({
+                    "id": c.get("id"),
+                    "name": c.get("name"),
+                    "matchType": "partial",
+                    "reason": reason
+                })
 
         result = {
             "found": bool(matches),
@@ -150,9 +165,8 @@ def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group, d
             traceback.print_exc()
         return {"found": False, "partial": False, "url": url, "matches": [], "partial_matches": []}
 
-
 # =============================================================================
-# PAPI Lookup
+# PAPI Check
 # =============================================================================
 def check_papi(session, base_url, fqdn, access_group, debug=False):
     url = f"{base_url}/papi/v1/hostnames"
@@ -164,21 +178,35 @@ def check_papi(session, base_url, fqdn, access_group, debug=False):
         if debug:
             write_json(data, f"output/raw_papi_{sanitize_filename(fqdn)}.json")
 
-        raw_hosts = data.get("hostnames") or data.get("items") or []
-        for h in raw_hosts:
+        fqdn_l = fqdn.lower()
+        ag_l = access_group.lower()
+        hosts = data.get("hostnames") or data.get("items") or []
+
+        for h in hosts:
             if isinstance(h, str):
-                hostname, prop_name = h.lower(), ""
+                cname_from = h.lower()
+                prop_name = ""
             else:
-                hostname = str(h.get("cnameFrom", "")).lower()
+                cname_from = str(h.get("cnameFrom", "")).lower()
                 prop_name = str(h.get("propertyName", "")).lower()
 
-            fqdn_match = fqdn.lower() in hostname
-            ag_match = access_group.lower() in prop_name
+            fqdn_match = fqdn_l == cname_from
+            ag_match = ag_l in prop_name
 
             if fqdn_match and ag_match:
-                matches.append({"hostname": hostname, "propertyName": prop_name, "matchType": "full"})
+                matches.append({
+                    "propertyName": h.get("propertyName"),
+                    "cnameFrom": h.get("cnameFrom"),
+                    "matchType": "full"
+                })
             elif fqdn_match or ag_match:
-                partials.append({"hostname": hostname, "propertyName": prop_name, "matchType": "partial"})
+                reason = "fqdn_only" if fqdn_match else "access_group_only"
+                partials.append({
+                    "propertyName": h.get("propertyName"),
+                    "cnameFrom": h.get("cnameFrom"),
+                    "matchType": "partial",
+                    "reason": reason
+                })
 
         result = {
             "found": bool(matches),
@@ -195,12 +223,11 @@ def check_papi(session, base_url, fqdn, access_group, debug=False):
             traceback.print_exc()
         return {"found": False, "partial": False, "url": url, "matches": [], "partial_matches": []}
 
-
 # =============================================================================
 # Main
 # =============================================================================
 def main():
-    parser = argparse.ArgumentParser(description="Akamai Entitlement Validator")
+    parser = argparse.ArgumentParser(description="Akamai Entitlement Validator Suite (Final v3)")
     parser.add_argument("--section", required=True)
     parser.add_argument("--fqdn", required=True)
     parser.add_argument("--access-group", required=True)
@@ -258,16 +285,15 @@ def main():
 
     print("\n--------------------------------------------------------------")
     if full_found:
-        print("[SUMMARY] Validation Result: AUTHORIZED")
+        print(f"{Color.GREEN}[SUMMARY] Validation Result: AUTHORIZED{Color.END}")
     elif partial_only:
-        print("[SUMMARY] Validation Result: UNAUTHORIZED (PARTIAL MATCH DETECTED)")
+        print(f"{Color.YELLOW}[SUMMARY] Validation Result: UNAUTHORIZED (PARTIAL MATCH DETECTED){Color.END}")
     else:
-        print("[SUMMARY] Validation Result: UNAUTHORIZED")
+        print(f"{Color.RED}[SUMMARY] Validation Result: UNAUTHORIZED{Color.END}")
 
     print(f"[SUMMARY] Validated by: {', '.join(validated_by) if validated_by else 'None'}")
     print("--------------------------------------------------------------\n")
     print(f"[INFO] Summary written to {file}\n")
-
 
 if __name__ == "__main__":
     main()
