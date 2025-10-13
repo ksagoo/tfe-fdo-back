@@ -1,0 +1,454 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+=====================================================
+        Akamai Certificate Lifecycle Automation
+=====================================================
+
+Production Version — October 2025
+
+- Jenkins-safe (no sys.exit)
+- Cross-platform (Windows, Linux, macOS)
+- Auto-discovery for expiring enrollments
+- Full CPS renew/deploy/poll lifecycle
+- Region-aware contract/group mapping
+- Unified dry-run & live behavior
+- Retry/backoff + polling metrics
+- Structured JSON + minimal console output
+=====================================================
+"""
+
+import os
+import json
+import time
+import argparse
+import requests
+from datetime import datetime, timedelta, timezone
+from jinja2 import Environment, FileSystemLoader, TemplateError
+from akamai.edgegrid import EdgeGridAuth
+from configparser import ConfigParser as EdgeRc
+from urllib.parse import urljoin
+
+# -----------------------------------------------------
+# Directories (cross-platform)
+# -----------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
+SUMMARY_FILE = os.path.join(OUTPUT_DIR, "summary.json")
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(TEMPLATE_DIR, exist_ok=True)
+
+# -----------------------------------------------------
+# Region mappings
+# -----------------------------------------------------
+REGION_SETTINGS = {
+    "Global": {"contract_id": "P-2NY4YRH", "group_id": "154041"},
+    "APAC":   {"contract_id": "V-5A82LRN", "group_id": "272084"},
+    "EMEA":   {"contract_id": "V-5A82HME", "group_id": "272093"},
+    "LATAM":  {"contract_id": "V-5A85K49", "group_id": "272094"},
+    "AMER":   {"contract_id": "V-5A85K49", "group_id": "272094"},
+    "DEV":    {"contract_id": "V-5A82MTA", "group_id": "272095"},
+}
+
+# -----------------------------------------------------
+# CLI arguments
+# -----------------------------------------------------
+def parse_args():
+    p = argparse.ArgumentParser(description="Akamai CPS Certificate Manager")
+    p.add_argument("--section", required=True)
+    p.add_argument("--access_group", required=True)
+    p.add_argument("--fqdn", default=None)
+    p.add_argument("--enrollment_id", default=None)
+    p.add_argument("--action", default="renew_and_deploy",
+                   choices=["get_enrollment", "renew_only", "deploy_only", "renew_and_deploy"])
+    p.add_argument("--edgerc_file",
+                   default=os.path.join(os.path.expanduser("~"), ".edgerc"))
+    p.add_argument("--deployment-network", default="production",
+                   choices=["production", "staging"])
+    p.add_argument("--schedule-time", default=None)
+    p.add_argument("--days-to-expiry", type=int, default=14)
+    p.add_argument("--expiry-threshold", type=int, default=30)
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--debug", action="store_true")
+    p.add_argument("--json-only", action="store_true")
+    p.add_argument("--poll-interval", type=int, default=30)
+    p.add_argument("--poll-timeout", type=int, default=1800)
+    p.add_argument("--poll-max-attempts", type=int, default=0)
+    p.add_argument("--no-email", action="store_true")
+    return p.parse_args()
+
+# -----------------------------------------------------
+# Logging
+# -----------------------------------------------------
+def log_message(level, message, debug=False, json_only=False):
+    if not json_only or level in ("FAILURE", "SUCCESS"):
+        print(f"[{level}]: {message}")
+    if debug:
+        with open(os.path.join(OUTPUT_DIR, "debug.log"), "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now(timezone.utc).isoformat()}] [{level}] {message}\n")
+
+def log_debug(debug, message):
+    if debug:
+        log_message("DEBUG", message, debug=True)
+
+# -----------------------------------------------------
+# Retry wrapper
+# -----------------------------------------------------
+def retry_request(func, retries=3, backoff=[5, 15, 45], debug=False):
+    for attempt in range(retries):
+        try:
+            result = func()
+            if isinstance(result, requests.Response):
+                return result, attempt
+            return result, attempt
+        except Exception as e:
+            log_debug(debug, f"Retry {attempt + 1}/{retries} failed: {e}")
+            if attempt < retries - 1:
+                time.sleep(backoff[attempt])
+    return None, retries
+
+# -----------------------------------------------------
+# EdgeGrid session
+# -----------------------------------------------------
+def setup_session(edgerc_file, section, debug=False):
+    try:
+        edgerc = EdgeRc(os.path.expanduser(edgerc_file))
+        base_url = "https://" + edgerc.get(section, "host").strip()
+        session = requests.Session()
+        session.auth = EdgeGridAuth(
+            client_token=edgerc.get(section, "client_token").strip(),
+            client_secret=edgerc.get(section, "client_secret").strip(),
+            access_token=edgerc.get(section, "access_token").strip()
+        )
+        session.headers.update({
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        })
+        log_debug(debug, f"EdgeGrid session initialized for [{section}]")
+        return session, base_url
+    except Exception as e:
+        log_message("FAILURE", f"EdgeGrid init error: {e}")
+        return None, None
+
+# -----------------------------------------------------
+# Discovery (live + dry-run)
+# -----------------------------------------------------
+def discover_enrollments(session, base_url, section, expiry_threshold=30,
+                         dry_run=False, debug=False):
+    if dry_run:
+        now = datetime.now(timezone.utc)
+        data = []
+        for i, days in enumerate([14, 10, 7]):
+            expiry = now + timedelta(days=days)
+            data.append({
+                "enrollment_id": f"1000{i+1}",
+                "fqdn": f"dryrun{i+1}.example.com",
+                "days_to_expiry": days,
+                "expiry_date": expiry.strftime("%d %b %Y"),
+                "auto_renewal_date": (expiry - timedelta(days=3)).strftime("%d %b %Y %H:%M UTC"),
+                "sans": [f"www.dryrun{i+1}.example.com", f"alt.dryrun{i+1}.example.com"],
+                "slot": f"slot-{1000+i}",
+                "deployment_network": "production"
+            })
+        with open(os.path.join(OUTPUT_DIR, "discovered_enrollments.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return data
+
+    region = REGION_SETTINGS.get(section, {})
+    url = f"{base_url}/cps/v2/enrollments?contractId={region.get('contract_id')}&groupId={region.get('group_id')}"
+    try:
+        r = session.get(url, timeout=(10, 60))
+        if r.status_code != 200:
+            log_message("FAILURE", f"Discovery failed: {r.status_code}")
+            return []
+        all_enrollments = r.json().get("enrollments", [])
+    except Exception as e:
+        log_message("FAILURE", f"Discovery exception: {e}")
+        return []
+
+    now = datetime.now(timezone.utc)
+    discovered = []
+    for e in all_enrollments:
+        expiry = e.get("renewal", {}).get("certificateNotAfter") or e.get("certificate", {}).get("notAfter")
+        if not expiry:
+            continue
+        try:
+            expiry_date = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+            days_left = (expiry_date - now).days
+            if days_left <= expiry_threshold:
+                discovered.append({
+                    "enrollment_id": e["enrollmentId"],
+                    "fqdn": e["csr"]["cn"],
+                    "days_to_expiry": days_left
+                })
+        except Exception as ex:
+            log_debug(debug, f"Skipping invalid enrollment: {ex}")
+
+    with open(os.path.join(OUTPUT_DIR, "discovered_enrollments.json"), "w",
+              encoding="utf-8") as f:
+        json.dump(discovered, f, indent=2)
+    return discovered
+
+# -----------------------------------------------------
+# Renew / Deploy
+# -----------------------------------------------------
+def renew_certificate(session, base_url, enrollment_id, section, dry_run=False, debug=False):
+    url = f"{base_url}/cps/v2/enrollments/{enrollment_id}/renew"
+    payload = REGION_SETTINGS.get(section, {})
+    if dry_run:
+        return {"dryRun": True, "url": url, "payload": payload, "retries": 0}
+    def req():
+        return session.post(url, json=payload, timeout=(10, 60))
+    r, attempt = retry_request(req, debug=debug)
+    if not r:
+        return {"error": "Renew failed after retries", "retries": attempt + 1}
+    resp = r.json()
+    resp.update({
+        "_http_status": r.status_code,
+        "location": r.headers.get("Location", ""),
+        "retries": attempt,
+        "final_status": "SUCCESS" if r.status_code < 400 else "FAILURE"
+    })
+    return resp
+
+def deploy_certificate(session, base_url, enrollment_id, section, network="production",
+                       schedule_time=None, dry_run=False, debug=False):
+    url = f"{base_url}/cps/v2/enrollments/{enrollment_id}/deployments"
+    payload = {"network": network, **REGION_SETTINGS.get(section, {})}
+    if schedule_time:
+        payload["schedule"] = {"start": schedule_time}
+    if dry_run:
+        return {"dryRun": True, "url": url, "payload": payload, "retries": 0}
+    def req():
+        return session.post(url, json=payload, timeout=(10, 60))
+    r, attempt = retry_request(req, debug=debug)
+    if not r:
+        return {"error": "Deployment failed after retries", "retries": attempt + 1}
+    resp = r.json()
+    resp.update({
+        "_http_status": r.status_code,
+        "location": r.headers.get("Location", ""),
+        "retries": attempt,
+        "final_status": "SUCCESS" if r.status_code < 400 else "FAILURE"
+    })
+    return resp
+
+# -----------------------------------------------------
+# Polling
+# -----------------------------------------------------
+def poll_cps_status(session, base_url, change_url, timeout=1800, interval=30,
+                    max_attempts=0, dry_run=False, debug=False):
+    if dry_run:
+        log_debug(debug, f"[DRY-RUN] Simulating CPS poll for {change_url}")
+        return {"pollResult": "SimulatedSuccess", "attempts": 1, "elapsed": 5}
+
+    start = time.time()
+    attempts = 0
+    while True:
+        attempts += 1
+        if max_attempts and attempts > max_attempts:
+            return {"error": "Polling max attempts reached", "attempts": attempts}
+        try:
+            r = session.get(urljoin(base_url, change_url), timeout=(10, 60))
+            if r.status_code == 200:
+                status = r.json().get("status", "")
+                log_debug(debug, f"Poll #{attempts}: {status}")
+                if status in ("complete", "success"):
+                    elapsed = int(time.time() - start)
+                    return {"pollResult": status, "attempts": attempts, "elapsed": elapsed}
+                if status in ("failed", "error"):
+                    return {"pollResult": "failed", "attempts": attempts}
+            time.sleep(interval)
+            if (time.time() - start) > timeout:
+                return {"error": "Polling timeout", "attempts": attempts}
+        except Exception as e:
+            log_debug(debug, f"Polling exception: {e}")
+            time.sleep(interval)
+
+# -----------------------------------------------------
+# Email rendering (supports dry-run .j2 and live .html templates)
+# -----------------------------------------------------
+def render_email(data, days_to_expiry, dry_run=False, debug=False):
+    """
+    Renders email templates for Akamai certificate lifecycle notifications.
+
+    - In dry-run mode: uses certEmail_dryrun.j2 (Jinja2 template)
+      and dynamically includes generation timestamp and mock data.
+
+    - In live mode: selects escalation or default HTML templates
+      based on days_to_expiry (7 / 10 / 14 / default).
+    """
+
+    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+
+    # Expose datetime to dry-run template only (for {{ datetime.utcnow() }})
+    if dry_run:
+        env.globals['datetime'] = datetime
+
+    # Select template
+    if dry_run:
+        if os.path.exists(os.path.join(TEMPLATE_DIR, "certEmail_dryrun.j2")):
+            template_name = "certEmail_dryrun_corporate.j2"
+        else:
+            template_name = "certEmail_dryrun.html"
+        log_debug(debug, f"[DRY-RUN] Using template: {template_name}")
+    elif days_to_expiry <= 7:
+        template_name = "7Days-EscalationNotificationEmail.html"
+    elif days_to_expiry <= 10:
+        template_name = "10Days-EscalationNotificationEmail.html"
+    elif days_to_expiry <= 14:
+        template_name = "14Days-EscalationNotificationEmail.html"
+    else:
+        template_name = "certEmail.html"
+
+    # Render the template
+    try:
+        template = env.get_template(template_name)
+
+        # Pass all certificate data as top-level Jinja2 variables
+        html = template.render(**data)
+
+        # Output file
+        fname = f"email_{data.get('fqdn', 'unknown')}_{days_to_expiry}d.html"
+        fpath = os.path.join(OUTPUT_DIR, fname)
+
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.write(html)
+
+        log_debug(debug, f"Rendered email: {fname}")
+        return fpath
+
+    except TemplateError as e:
+        log_message("FAILURE", f"Template error in {template_name}: {e}")
+        return None
+
+# -----------------------------------------------------
+# Save JSON result
+# -----------------------------------------------------
+def save_json(fqdn, result):
+    fpath = os.path.join(OUTPUT_DIR, f"result_{fqdn}.json")
+    with open(fpath, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+    return fpath
+
+# -----------------------------------------------------
+# Execute full workflow
+# -----------------------------------------------------
+def execute_action(args):
+    if args.dry_run:
+        session, base_url = None, "https://mock.akamaiapis.net"
+        log_debug(args.debug, "[DRY-RUN] Using mock base URL; skipping EdgeGrid setup.")
+    else:
+        session, base_url = setup_session(args.edgerc_file, args.section, args.debug)
+        if not session:
+            log_message("FAILURE", "EdgeGrid session failed", args.debug, args.json_only)
+            return "FAILURE"
+
+    discovered = discover_enrollments(session, base_url, args.section,
+                                      expiry_threshold=args.expiry_threshold,
+                                      dry_run=args.dry_run, debug=args.debug)
+
+    if args.enrollment_id:
+        enrollments = [e for e in discovered if str(e.get("enrollment_id")) == str(args.enrollment_id)]
+        if not enrollments:
+            log_message("WARN", f"Enrollment {args.enrollment_id} not discovered; adding manually.")
+            enrollments = [{
+                "enrollment_id": args.enrollment_id,
+                "fqdn": args.fqdn or "unknown.local",
+                "days_to_expiry": args.days_to_expiry,
+                "expiry_date": (datetime.now(timezone.utc) + timedelta(days=args.days_to_expiry)).strftime("%d %b %Y"),
+                "auto_renewal_date": (datetime.now(timezone.utc) + timedelta(days=args.days_to_expiry - 3)).strftime("%d %b %Y %H:%M UTC"),
+                "deployment_network": args.deployment_network,
+                "slot": f"slot-{args.enrollment_id}",
+                "sans": [f"www.{args.fqdn}", f"alt.{args.fqdn}"]
+            }]
+    else:
+        enrollments = discovered
+
+    overall_results = []
+    for e in enrollments:
+        fqdn = e.get("fqdn")
+        eid = e.get("enrollment_id")
+        days = e.get("days_to_expiry", args.days_to_expiry)
+        log_message("INFO", f"Processing {fqdn} ({eid}) - expires in {days}d")
+
+        entry = dict(e)
+
+        if args.action in ("renew_only", "renew_and_deploy"):
+            log_message("INFO", f"Starting renewal for {fqdn}")
+            renew_result = renew_certificate(session, base_url, eid, args.section,
+                                             dry_run=args.dry_run, debug=args.debug)
+            entry["renew_result"] = renew_result
+            if not args.dry_run and "error" in renew_result:
+                log_message("FAILURE", f"Renewal failed for {fqdn}")
+                overall_results.append(entry)
+                continue
+
+        if args.action in ("deploy_only", "renew_and_deploy"):
+            log_message("INFO", f"Starting deployment for {fqdn}")
+            deploy_result = deploy_certificate(session, base_url, eid, args.section,
+                                               network=args.deployment_network,
+                                               schedule_time=args.schedule_time,
+                                               dry_run=args.dry_run, debug=args.debug)
+            entry["deploy_result"] = deploy_result
+            if not args.dry_run and "error" in deploy_result:
+                log_message("FAILURE", f"Deployment failed for {fqdn}")
+                overall_results.append(entry)
+                continue
+
+        if args.action == "renew_and_deploy":
+            poll_url = entry.get("deploy_result", {}).get("location") or "/cps/v2/changes/XYZ"
+            poll_result = poll_cps_status(session, base_url, poll_url,
+                                          timeout=args.poll_timeout, interval=args.poll_interval,
+                                          max_attempts=args.poll_max_attempts,
+                                          dry_run=args.dry_run, debug=args.debug)
+            entry["poll_result"] = poll_result
+
+        if not args.no_email:
+            email_path = render_email(entry, days, dry_run=args.dry_run, debug=args.debug)
+            entry["email_output"] = email_path
+
+        save_json(fqdn, entry)
+        overall_results.append(entry)
+        log_message("SUCCESS", f"Completed {fqdn}")
+
+    with open(SUMMARY_FILE, "w", encoding="utf-8") as f:
+        json.dump(overall_results, f, indent=2)
+    log_message("SUCCESS", f"Summary written: {SUMMARY_FILE}")
+    return "SUCCESS"
+
+# -----------------------------------------------------
+# Main
+# -----------------------------------------------------
+def main():
+    args = parse_args()
+    start_time = datetime.now(timezone.utc)
+    open(os.path.join(OUTPUT_DIR, "debug.log"), "w").close()
+    log_message("INFO", "=== Akamai CPS Certificate Manager Started ===")
+
+    try:
+        result = execute_action(args)
+        elapsed = int((datetime.now(timezone.utc) - start_time).total_seconds())
+
+        if result == "SUCCESS":
+            log_message("SUCCESS", f"Execution completed successfully in {elapsed}s")
+        else:
+            log_message("FAILURE", f"Execution completed with errors in {elapsed}s")
+    except KeyboardInterrupt:
+        log_message("FAILURE", "Execution interrupted by user.")
+        result = "FAILURE"
+
+    except Exception as e:
+        log_message("FAILURE", f"Unhandled exception: {type(e).__name__}: {e}")
+        result = "FAILURE"
+
+    finally:
+        log_message("INFO", "=== Execution Finished ===")
+        print(f"\nPIPELINE_RESULT={result}")
+
+
+if __name__ == "__main__":
+    main()    

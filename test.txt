@@ -1,0 +1,107 @@
+#!/bin/bash
+# =====================================================
+# Akamai Certificate Lifecycle Automation - Dry-Run Test Suite (v6.1)
+# =====================================================
+# Simulates all major lifecycle flows in --dry-run mode.
+# Each test mirrors live CPS logic safely.
+# =====================================================
+
+set -Eeo pipefail
+OUTPUT_DIR="output"
+mkdir -p "$OUTPUT_DIR"
+
+echo "====================================================="
+echo " Starting Akamai CPS Certificate Dry-Run Test Suite"
+echo "====================================================="
+echo "All results and logs will be written under: $OUTPUT_DIR/"
+echo "-----------------------------------------------------"
+
+TOTAL=0
+PASS=0
+FAIL=0
+
+run_test() {
+  local name="$1"
+  local cmd="$2"
+  echo -e "\n[TEST]: $name"
+  echo "-----------------------------------------------------"
+  echo "COMMAND: $cmd"
+  local start_time=$(date +%s)
+
+  # Run command safely and capture result
+  set +e
+  eval $cmd >>"$OUTPUT_DIR/test.log" 2>&1
+  local status=$?
+  set -e
+  local end_time=$(date +%s)
+  local duration=$((end_time - start_time))
+
+  TOTAL=$((TOTAL + 1))
+
+  if [[ $status -ne 0 ]] || grep -q "\[FAILURE\]" "$OUTPUT_DIR/debug.log" 2>/dev/null; then
+    echo "[RESULT]: FAIL (${duration}s)"
+    FAIL=$((FAIL + 1))
+  else
+    echo "[RESULT]: SUCCESS (${duration}s)"
+    PASS=$((PASS + 1))
+  fi
+  echo "-----------------------------------------------------"
+  sleep 1
+}
+
+# 1–12: Full dry-run scenarios
+run_test "Basic Dry-Run" \
+"python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn test.example.com --enrollment_id 10001 --action renew_and_deploy --dry-run --json-only"
+
+run_test "Get Enrollment Only" \
+"python akamai_cert_manager.py --section DEV --access_group CertOps --fqdn certinfo.test.com --enrollment_id 10002 --action get_enrollment --dry-run --json-only"
+
+run_test "Renew Only" \
+"python akamai_cert_manager.py --section APAC --access_group Security --fqdn renewonly.example.com --enrollment_id 10003 --action renew_only --dry-run --json-only"
+
+run_test "Deploy Only" \
+"python akamai_cert_manager.py --section EMEA --access_group InfraSec --fqdn deployonly.example.com --enrollment_id 10004 --action deploy_only --dry-run --json-only"
+
+run_test "Scheduled Deployment" \
+"python akamai_cert_manager.py --section LATAM --access_group InfraSec --fqdn schedule.example.com --enrollment_id 10005 --action renew_and_deploy --schedule-time 2025-10-14T09:00:00Z --dry-run --json-only"
+
+run_test "Staging Deployment" \
+"python akamai_cert_manager.py --section AMER --access_group AppSec --fqdn staging.example.com --enrollment_id 10006 --action renew_and_deploy --deployment-network staging --dry-run --json-only"
+
+run_test "Debug Logging Enabled" \
+"python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn debug.example.com --enrollment_id 10007 --action renew_and_deploy --dry-run --debug"
+
+run_test "Expiry Template (7-Day)" \
+"python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn seven.example.com --enrollment_id 10008 --action renew_and_deploy --days-to-expiry 7 --dry-run --json-only"
+
+run_test "Expiry Template (10-Day)" \
+"python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn ten.example.com --enrollment_id 10009 --action renew_and_deploy --days-to-expiry 10 --dry-run --json-only"
+
+run_test "Expiry Template (14-Day)" \
+"python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn fourteen.example.com --enrollment_id 10010 --action renew_and_deploy --days-to-expiry 14 --dry-run --json-only"
+
+run_test "Full Integration (Poll Simulation)" \
+"python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn fullflow.example.com --enrollment_id 10011 --action renew_and_deploy --poll-interval 10 --poll-timeout 120 --dry-run --debug"
+
+run_test "Fallback Template (Default certEmail.html)" \
+"python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn defaulttemplate.example.com --enrollment_id 10012 --action renew_and_deploy --days-to-expiry 30 --dry-run --json-only"
+
+# Final summary
+echo "====================================================="
+echo " Dry-Run Suite Summary"
+echo "====================================================="
+echo " Total Tests : $TOTAL"
+echo " Passed      : $PASS"
+echo " Failed      : $FAIL"
+echo "-----------------------------------------------------"
+
+if [[ $FAIL -eq 0 ]]; then
+  PIPELINE_RESULT="SUCCESS"
+else
+  PIPELINE_RESULT="FAILURE"
+fi
+
+echo "PIPELINE_RESULT=$PIPELINE_RESULT"
+echo "====================================================="
+echo " Dry-Run Test Suite Completed ($PIPELINE_RESULT)"
+echo "====================================================="

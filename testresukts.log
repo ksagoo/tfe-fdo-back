@@ -1,0 +1,88 @@
+=====================================================
+ Starting Akamai CPS Certificate Dry-Run Test Suite
+=====================================================
+All results and logs will be written under: output/
+-----------------------------------------------------
+
+[TEST]: Basic Dry-Run
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn test.example.com --enrollment_id 10001 --action renew_and_deploy --dry-run --json-only
+[RESULT]: SUCCESS (5s)
+-----------------------------------------------------
+
+[TEST]: Get Enrollment Only
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section DEV --access_group CertOps --fqdn certinfo.test.com --enrollment_id 10002 --action get_enrollment --dry-run --json-only
+[RESULT]: SUCCESS (1s)
+-----------------------------------------------------
+
+[TEST]: Renew Only
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section APAC --access_group Security --fqdn renewonly.example.com --enrollment_id 10003 --action renew_only --dry-run --json-only
+[RESULT]: SUCCESS (2s)
+-----------------------------------------------------
+
+[TEST]: Deploy Only
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section EMEA --access_group InfraSec --fqdn deployonly.example.com --enrollment_id 10004 --action deploy_only --dry-run --json-only
+[RESULT]: SUCCESS (1s)
+-----------------------------------------------------
+
+[TEST]: Scheduled Deployment
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section LATAM --access_group InfraSec --fqdn schedule.example.com --enrollment_id 10005 --action renew_and_deploy --schedule-time 2025-10-14T09:00:00Z --dry-run --json-only
+[RESULT]: SUCCESS (2s)
+-----------------------------------------------------
+
+[TEST]: Staging Deployment
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section AMER --access_group AppSec --fqdn staging.example.com --enrollment_id 10006 --action renew_and_deploy --deployment-network staging --dry-run --json-only
+[RESULT]: SUCCESS (1s)
+-----------------------------------------------------
+
+[TEST]: Debug Logging Enabled
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn debug.example.com --enrollment_id 10007 --action renew_and_deploy --dry-run --debug
+[RESULT]: SUCCESS (2s)
+-----------------------------------------------------
+
+[TEST]: Expiry Template (7-Day)
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn seven.example.com --enrollment_id 10008 --action renew_and_deploy --days-to-expiry 7 --dry-run --json-only
+[RESULT]: SUCCESS (1s)
+-----------------------------------------------------
+
+[TEST]: Expiry Template (10-Day)
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn ten.example.com --enrollment_id 10009 --action renew_and_deploy --days-to-expiry 10 --dry-run --json-only
+[RESULT]: SUCCESS (2s)
+-----------------------------------------------------
+
+[TEST]: Expiry Template (14-Day)
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn fourteen.example.com --enrollment_id 10010 --action renew_and_deploy --days-to-expiry 14 --dry-run --json-only
+[RESULT]: SUCCESS (1s)
+-----------------------------------------------------
+
+[TEST]: Full Integration (Poll Simulation)
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn fullflow.example.com --enrollment_id 10011 --action renew_and_deploy --poll-interval 10 --poll-timeout 120 --dry-run --debug
+[RESULT]: SUCCESS (2s)
+-----------------------------------------------------
+
+[TEST]: Fallback Template (Default certEmail.html)
+-----------------------------------------------------
+COMMAND: python akamai_cert_manager.py --section DEV --access_group AppSec --fqdn defaulttemplate.example.com --enrollment_id 10012 --action renew_and_deploy --days-to-expiry 30 --dry-run --json-only
+[RESULT]: SUCCESS (1s)
+-----------------------------------------------------
+=====================================================
+ Dry-Run Suite Summary
+=====================================================
+ Total Tests : 12
+ Passed      : 12
+ Failed      : 0
+-----------------------------------------------------
+PIPELINE_RESULT=SUCCESS
+=====================================================
+ Dry-Run Test Suite Completed (SUCCESS)
+=====================================================
