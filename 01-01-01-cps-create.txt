@@ -5,31 +5,37 @@
 #  Description:
 #     Validates whether a given FQDN and access group have
 #     corresponding entitlements across:
-#       • CPS (Certificate Provisioning System)
-#       • AppSec (Security Configurations)
-#       • PAPI (Property Manager hostnames)
+#       - CPS (Certificate Provisioning System)
+#       - AppSec (Web Application Firewall / Security Configs)
+#       - PAPI (Property Manager hostnames)
 #
 #  This tool supports automated pre-validation during onboarding,
-#  ensuring that each FQDN is correctly linked to its Akamai entities.
+#  ensuring each FQDN is correctly linked to its Akamai entities.
 #
 # ---------------------------------------------------------------
-#  Usage:
-#     python akamai_entitlement_validator.py \
-#        --section DEV \
-#        --fqdn espspos-dev-059test.hsbc.com.hk \
-#        --access-group ServiceNow-itilUser
+#  Usage Examples:
+# ---------------------------------------------------------------
+#  python akamai_entitlement_validator.py \
+#      --section DEV_APPSEC \
+#      --fqdn espspos-dev-059test.hsbc.com.hk \
+#      --access-group ServiceNow-itilUser
+#
+#  python akamai_entitlement_validator.py \
+#      --section PROD \
+#      --fqdn myapp.hsbc.com \
+#      --access-group CyberWasp
 #
 # ---------------------------------------------------------------
 #  Output:
-#     output/cps_raw.json
-#     output/appsec_raw.json
-#     output/papi_raw.json
-#     output/entitlement_summary.json
+#  - output/cps_raw.json        (raw CPS API response)
+#  - output/appsec_raw.json     (raw AppSec API response)
+#  - output/papi_raw.json       (raw PAPI API response)
+#  - output/entitlement_summary.json  (final structured summary)
 #
 # ---------------------------------------------------------------
 #  Exit Codes:
-#     0 = Authorized (at least one match found)
-#     1 = Unauthorized (no matches found)
+#    0 = Authorized (at least one API validated the FQDN)
+#    1 = Unauthorized (no match found)
 # ===============================================================
 
 import os
@@ -37,27 +43,30 @@ import sys
 import json
 import argparse
 import traceback
-from requests import Session
+from datetime import datetime
+from requests.sessions import Session
 from akamai.edgegrid import EdgeGridAuth
 from configparser import ConfigParser
 from os.path import expanduser
 
 # ===============================================================
-#  REGION SETTINGS
-#  Update with contract/group IDs for your environment
+# REGION SETTINGS
+# Update these mappings for your environments
 # ===============================================================
 REGION_SETTINGS = {
-    "GLOBAL": {"contract_id": "ctr_1-2YI4WYRH", "group_id": "grp_154041"},
-    "APAC":   {"contract_id": "ctr_1-5A82LRIN", "group_id": "grp_272084"},
-    "EMEA":   {"contract_id": "ctr_1-5A82MHB8", "group_id": "grp_272093"},
-    "LATAM":  {"contract_id": "ctr_1-5A85K4K9", "group_id": "grp_272089"},
-    "AMER":   {"contract_id": "ctr_1-5A85K4K9", "group_id": "grp_272090"},
-    "DEV":    {"contract_id": "ctr_1-5A82MTA",  "group_id": "grp_272095"}
+    "DEV": {
+        "contract_id": "ctr_1-5A82MTA",
+        "group_id": "grp_272095"
+    },
+    "PROD": {
+        "contract_id": "ctr_1-XXXXXXX",
+        "group_id": "grp_YYYYYYY"
+    }
 }
 
 
 # ===============================================================
-#  SESSION SETUP
+# SESSION SETUP
 # ===============================================================
 def setup_session(section):
     """Create an authenticated Akamai session using .edgerc credentials."""
@@ -66,7 +75,7 @@ def setup_session(section):
     parser.read(edgerc)
 
     if not parser.has_section(section):
-        raise ValueError(f"Missing section [{section}] in .edgerc")
+        raise ValueError(f"[ERROR] Missing section [{section}] in .edgerc")
 
     base_url = "https://" + parser.get(section, "host")
     session = Session()
@@ -75,32 +84,18 @@ def setup_session(section):
         client_secret=parser.get(section, "client_secret"),
         access_token=parser.get(section, "access_token")
     )
+
+    # Fix CPS 'missing accept header'
     session.headers.update({
         "Content-Type": "application/json",
         "Accept": "application/json"
     })
+
     return session, base_url
 
 
 # ===============================================================
-#  JSON OUTPUT HELPER
-# ===============================================================
-def write_json_safely(filename, response):
-    """Write API response safely as JSON or text fallback."""
-    os.makedirs("output", exist_ok=True)
-    path = os.path.join("output", filename)
-    try:
-        parsed = response.json()
-        with open(path, "w") as f:
-            json.dump(parsed, f, indent=4)
-    except Exception:
-        with open(path, "w") as f:
-            f.write(response.text)
-    return path
-
-
-# ===============================================================
-#  CPS LOOKUP
+# CPS LOOKUP
 # ===============================================================
 def check_cps(session, base_url, contract_id, fqdn, access_group):
     """Query CPS for enrollments matching the FQDN and access group."""
@@ -110,22 +105,20 @@ def check_cps(session, base_url, contract_id, fqdn, access_group):
 
     try:
         resp = session.get(url, timeout=(10, 60))
-        write_json_safely("cps_raw.json", resp)
+        with open("output/cps_raw.json", "w") as f:
+            f.write(resp.text)
 
         if resp.status_code != 200:
             print(f"[FAILURE] CPS API returned {resp.status_code}")
             return result
 
         data = resp.json()
-        fqdn_lower = fqdn.lower()
-        ag_lower = access_group.lower()
-
         for cert in data.get("enrollments", []):
             cn = (cert.get("csr") or {}).get("cn", "")
             sans = (cert.get("csr") or {}).get("sans", [])
             all_values = " ".join([cn] + sans).lower()
 
-            if fqdn_lower in all_values and ag_lower in json.dumps(cert).lower():
+            if fqdn.lower() in all_values and access_group.lower() in json.dumps(cert).lower():
                 expires = (cert.get("certificate") or {}).get("notAfter", "")
                 result["matches"].append({
                     "cn": cn,
@@ -144,35 +137,31 @@ def check_cps(session, base_url, contract_id, fqdn, access_group):
 
 
 # ===============================================================
-#  APPSEC LOOKUP
+# APPSEC LOOKUP
 # ===============================================================
 def check_appsec(session, base_url, contract_id, group_id, access_group):
-    """Query AppSec configurations and match by access group in name."""
+    """Query AppSec configurations and match by name containing access group."""
     url = f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
     print(f"[INFO] AppSec lookup: {url}")
     result = {"found": False, "url": url, "matches": []}
 
     try:
         resp = session.get(url, timeout=(10, 60))
-        write_json_safely("appsec_raw.json", resp)
+        with open("output/appsec_raw.json", "w") as f:
+            f.write(resp.text)
 
         if resp.status_code != 200:
             print(f"[FAILURE] AppSec API returned {resp.status_code}")
             return result
 
         data = resp.json()
-        ag = access_group.lower()
-
         for cfg in data.get("configurations", []):
             name = cfg.get("name", "")
-            if ag in name.lower():
+            if access_group.lower() in name.lower():
                 result["matches"].append({
                     "id": cfg.get("id"),
                     "name": name,
-                    "latestVersion": cfg.get("latestVersion"),
-                    "stagingVersion": cfg.get("stagingVersion"),
-                    "productionVersion": cfg.get("productionVersion"),
-                    "targetProduct": cfg.get("targetProduct")
+                    "latestVersion": cfg.get("latestVersion")
                 })
 
         result["found"] = bool(result["matches"])
@@ -186,7 +175,7 @@ def check_appsec(session, base_url, contract_id, group_id, access_group):
 
 
 # ===============================================================
-#  PAPI LOOKUP
+# PAPI LOOKUP
 # ===============================================================
 def check_papi(session, base_url, fqdn, access_group):
     """Query PAPI for hostnames that match the given FQDN and access group."""
@@ -196,7 +185,8 @@ def check_papi(session, base_url, fqdn, access_group):
 
     try:
         resp = session.get(url, timeout=(10, 60))
-        write_json_safely("papi_raw.json", resp)
+        with open("output/papi_raw.json", "w") as f:
+            f.write(resp.text)
 
         if resp.status_code != 200:
             print(f"[FAILURE] PAPI API returned {resp.status_code}")
@@ -204,14 +194,13 @@ def check_papi(session, base_url, fqdn, access_group):
 
         data = resp.json()
         items = (data.get("hostnames") or {}).get("items", [])
-        fqdn_lower = fqdn.lower()
-        ag_lower = access_group.lower()
+        ag = access_group.lower()
 
         for entry in items:
             cname_from = entry.get("cnameFrom", "")
             property_name = entry.get("propertyName", "")
-            fqdn_match = cname_from.lower() == fqdn_lower
-            group_match = ag_lower in property_name.lower()
+            fqdn_match = cname_from.lower() == fqdn.lower()
+            group_match = ag in property_name.lower()
 
             if fqdn_match:
                 result["matches"].append({
@@ -234,17 +223,17 @@ def check_papi(session, base_url, fqdn, access_group):
 
 
 # ===============================================================
-#  MAIN VALIDATION LOGIC
+# MAIN VALIDATION LOGIC
 # ===============================================================
 def validate_entitlement(section, access_group, fqdn):
     """Perform entitlement validation across CPS, AppSec, and PAPI."""
-    print("==============================================================")
-    print("  Akamai Entitlement Validator Suite")
-    print("==============================================================")
+    print("\n=====================================================")
+    print("      Akamai Entitlement Validator Suite")
+    print("=====================================================")
     print(f"Section:      {section}")
     print(f"Access Group: {access_group}")
     print(f"FQDN:         {fqdn}")
-    print("--------------------------------------------------------------")
+    print("-----------------------------------------------------")
 
     os.makedirs("output", exist_ok=True)
 
@@ -270,26 +259,24 @@ def validate_entitlement(section, access_group, fqdn):
     results["validated_by"] = validated_by
     results["authorized"] = bool(validated_by)
 
-    print("--------------------------------------------------------------")
-    print(f"[SUMMARY] Validation Result: {'AUTHORIZED' if results['authorized'] else 'UNAUTHORIZED'}")
-    print(f"[SUMMARY] Validated By: {', '.join(validated_by) if validated_by else 'None'}")
-    print("--------------------------------------------------------------")
+    print("-----------------------------------------------------")
+    print(f"[SUMMARY] Validation result: {'AUTHORIZED' if results['authorized'] else 'UNAUTHORIZED'}")
+    print(f"[SUMMARY] Validated by: {', '.join(validated_by) if validated_by else 'None'}")
+    print("-----------------------------------------------------")
 
     with open("output/entitlement_summary.json", "w") as f:
         json.dump(results, f, indent=4)
 
-    print("[INFO] Summary written to output/entitlement_summary.json")
-    print("==============================================================\n")
-
+    print("[INFO] Summary written to output/entitlement_summary.json\n")
     return 0 if results["authorized"] else 1
 
 
 # ===============================================================
-#  ENTRY POINT
+# ENTRY POINT
 # ===============================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Akamai Entitlement Validator")
-    parser.add_argument("--section", required=True, help="Section in .edgerc (e.g., DEV, APAC, EMEA)")
+    parser.add_argument("--section", required=True, help="Section in .edgerc (e.g., DEV_APPSEC, PROD)")
     parser.add_argument("--access-group", required=True, help="Akamai Access Group name")
     parser.add_argument("--fqdn", required=True, help="FQDN to validate")
 
