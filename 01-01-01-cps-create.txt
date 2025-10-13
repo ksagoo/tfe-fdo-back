@@ -6,9 +6,6 @@ Validates whether an FQDN and access group have existing entitlements in:
 - CPS (Certificates)
 - AppSec (Security Configurations)
 - PAPI (Property Hostnames)
-
-Usage:
-  python akamai_entitlement_validator.py --section DEV --fqdn example.hsbc.com.hk --access-group ServiceNow-itilUser [--debug]
 """
 
 import sys
@@ -35,9 +32,9 @@ REGION_SETTINGS = {
 }
 
 # =============================================================================
-# Setup Akamai Session
+# Session Setup
 # =============================================================================
-def setup_session(section: str) -> tuple:
+def setup_session(section: str):
     edgerc = os.path.join(expanduser("~"), ".edgerc")
     parser = ConfigParser()
     parser.read(edgerc)
@@ -58,7 +55,7 @@ def setup_session(section: str) -> tuple:
 
 
 # =============================================================================
-# Utility
+# Utilities
 # =============================================================================
 def safe_json(response):
     try:
@@ -87,9 +84,16 @@ def check_cps(session, base_url, fqdn, contract_id, debug=False):
     matches, partials = [], []
 
     try:
-        resp = session.get(url, timeout=(10, 60))
+        # Proper CPS headers
+        resp = session.get(
+            url,
+            headers={
+                "Accept": "application/vnd.akamai.cps.enrollments.v11+json",
+                "Content-Type": "application/json"
+            },
+            timeout=(10, 60)
+        )
         data = safe_json(resp)
-
         if debug:
             write_json(data, f"output/raw_cps_{sanitize_filename(fqdn)}.json")
 
@@ -141,7 +145,6 @@ def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group, d
     try:
         resp = session.get(url, timeout=(10, 60))
         data = safe_json(resp)
-
         if debug:
             write_json(data, f"output/raw_appsec_{sanitize_filename(fqdn)}.json")
 
@@ -199,19 +202,26 @@ def check_papi(session, base_url, fqdn, access_group, debug=False):
     try:
         resp = session.get(url, timeout=(10, 60))
         data = safe_json(resp)
-
         if debug:
             write_json(data, f"output/raw_papi_{sanitize_filename(fqdn)}.json")
 
         fqdn_lower = fqdn.lower()
         ag_lower = access_group.lower()
 
-        hostnames = data.get("hostnames") or data.get("items") or []
+        # Handle both dicts and strings
+        raw_hosts = data.get("hostnames") or data.get("items") or []
+        hostnames = []
+        for h in raw_hosts:
+            if isinstance(h, str):
+                hostnames.append({"cnameFrom": h, "propertyName": ""})
+            elif isinstance(h, dict):
+                hostnames.append(h)
+
         for h in hostnames:
             cname = h.get("cnameFrom", "").lower()
             prop_name = h.get("propertyName", "").lower()
 
-            fqdn_match = cname == fqdn_lower
+            fqdn_match = fqdn_lower in cname
             ag_match = ag_lower in prop_name
 
             if fqdn_match and ag_match:
@@ -220,12 +230,13 @@ def check_papi(session, base_url, fqdn, access_group, debug=False):
                     "cnameFrom": h.get("cnameFrom"),
                     "matchType": "full"
                 })
-            elif fqdn_lower in cname or ag_match:
+            elif fqdn_match or ag_match:
+                reason = "fqdn_or_access_group_only"
                 partials.append({
                     "propertyName": h.get("propertyName"),
                     "cnameFrom": h.get("cnameFrom"),
                     "matchType": "partial",
-                    "reason": "fqdn_or_access_group_only"
+                    "reason": reason
                 })
 
         result = {
@@ -247,7 +258,7 @@ def check_papi(session, base_url, fqdn, access_group, debug=False):
 
 
 # =============================================================================
-# Main Validation Logic
+# Main Logic
 # =============================================================================
 def main():
     parser = argparse.ArgumentParser(description="Akamai Entitlement Validator")
