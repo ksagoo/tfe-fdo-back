@@ -14,21 +14,22 @@ This implementation fully replaces the previous Ansible-based automation by prov
 ```mermaid
 flowchart TD
     A[Jenkins Trigger] --> B{Dry-run Mode?}
-    B -->|Yes| C[Simulate CPS discovery]
-    B -->|No| D[Live CPS API discovery]
-    C --> E[Render dry-run emails]
+    B -->|Yes| C[Simulate CPS discovery and renewal]
+    B -->|No| D[Live CPS API discovery and renewal]
+    C --> E[Render dry-run emails and save results]
     D --> F[Filter expiring enrollments]
-    F --> G[Renew certificates]
-    G --> H[Deploy certificates]
-    H --> I[Poll CPS status]
-    I --> J[Render live notification emails]
+    F --> G[Renew certificates via CPS API]
+    G --> H[Deploy certificates to target network]
+    H --> I[Poll CPS status until complete or timeout]
+    I --> J[Render escalation email notifications]
     J --> K[Write results and summary JSON]
     E --> K
-    K --> L[Notify Jenkins of SUCCESS/FAILURE]
+    K --> L[Notify Jenkins of SUCCESS or FAILURE]
 ```
+
 ---
 
-## Secquence Diagram
+## Sequence Diagram
 
 ```mermaid
 sequenceDiagram
@@ -48,29 +49,29 @@ sequenceDiagram
 
     loop For each discovered enrollment
         Note over Script: Step 2 — Renewal
-        Script->>AkamaiAPI: POST /cps/v2/enrollments/{id}/renew (simulated in dry-run)
+        Script->>AkamaiAPI: POST /cps/v2/enrollments/{id}/renew (simulated if dry-run)
         AkamaiAPI-->>Script: Renewal accepted or simulated response
-        Script->>AkamaiAPI: Poll CPS change status until complete or failed
+        Script->>AkamaiAPI: Poll CPS status until complete or failed
         AkamaiAPI-->>Script: Renewal completed or simulated result
 
         Note over Script: Step 3 — Deployment
-        Script->>AkamaiAPI: POST /cps/v2/enrollments/{id}/deployments (simulated in dry-run)
+        Script->>AkamaiAPI: POST /cps/v2/enrollments/{id}/deployments (simulated if dry-run)
         AkamaiAPI-->>Script: Deployment accepted or simulated response
-        Script->>AkamaiAPI: Poll CPS change status until complete or failed
+        Script->>AkamaiAPI: Poll CPS status until complete or failed
         AkamaiAPI-->>Script: Deployment completed or simulated result
 
         Note over Script: Step 4 — Notification
         Script->>EmailTemplate: Render escalation or dry-run HTML template
-        EmailTemplate-->>Script: Generated HTML email content
-        Script->>Output: Save email and result JSON
+        EmailTemplate-->>Script: Generated HTML content
+        Script->>Output: Save rendered email and JSON results
     end
 
     Note over Script: Step 5 — Finalization
     Script->>Output: Write result_<fqdn>.json, summary.json, debug.log
-    Script-->>Jenkins/GitLab: Print SUCCESS / FAILURE status for CI/CD
-
-    Note right of Jenkin: CI/CD pipeline continues (notifications, Jira updates, etc.)
+    Script-->>Jenkins/GitLab: Print SUCCESS or FAILURE for CI/CD parsing
 ```
+
+---
 
 ## Example Rendered Email (Dry-Run)
 
@@ -89,6 +90,7 @@ It mimics the live production format but clearly displays the `DRY-RUN MODE` tag
   </table>
   <p><strong>No live changes were performed.</strong></p>
 </div>
+
 
 ---
 
