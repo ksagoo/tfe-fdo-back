@@ -1,72 +1,3 @@
-#!/bin/bash
-# =====================================================
-# Akamai Entitlement Validation Test Suite
-# =====================================================
-# Usage:
-#   ./test_suite_entitlement.sh --section DEV --fqdn epspos-dev-059test.hsbc.com.hk --access-group ServiceNow-itilUser
-# =====================================================
-
-set -euo pipefail
-IFS=$'\n\t'
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_CMD="python"
-
-SECTION=""
-FQDN=""
-ACCESS_GROUP=""
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --section) SECTION="$2"; shift 2 ;;
-    --fqdn) FQDN="$2"; shift 2 ;;
-    --access-group) ACCESS_GROUP="$2"; shift 2 ;;
-    *) echo "Unknown argument: $1"; exit 1 ;;
-  esac
-done
-
-if [[ -z "$SECTION" || -z "$FQDN" || -z "$ACCESS_GROUP" ]]; then
-  echo "Usage: $0 --section <section> --fqdn <fqdn> --access-group <access-group>"
-  exit 1
-fi
-
-OUTPUT_DIR="${SCRIPT_DIR}/output"
-mkdir -p "$OUTPUT_DIR"
-
-echo "====================================================="
-echo " Entitlement Validator Summary"
-echo "====================================================="
-echo "Section:      $SECTION"
-echo "Access Group: $ACCESS_GROUP"
-echo "FQDN:         $FQDN"
-echo "-----------------------------------------------------"
-
-$PYTHON_CMD "${SCRIPT_DIR}/akamai_entitlement_validator.py" \
-  --section "$SECTION" \
-  --access-group "$ACCESS_GROUP" \
-  --fqdn "$FQDN"
-
-RESULT=$?
-
-if [[ $RESULT -eq 0 ]]; then
-  echo "[SUMMARY] - Entitlement validated successfully."
-else
-  echo "[SUMMARY] - Entitlement validation failed."
-fi
-
-echo "-----------------------------------------------------"
-echo "Logs and JSON written to: $OUTPUT_DIR"
-echo "====================================================="
-
-
-
-
-
--------------------------------------------
-
-
-
-
 #!/usr/bin/env python
 import os
 import sys
@@ -289,4 +220,3 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     sys.exit(validate_entitlement(args.section, args.access_group, args.fqdn, args.dry_run, args.debug, args.json_only))
-exit $RESULT
