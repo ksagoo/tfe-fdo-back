@@ -12,3 +12,10 @@ if not expiry and "deployments" in e:
         if cert.get("notAfter"):
             expiry = cert["notAfter"]
             break
+
+
+cn = (
+    e.get("csr", {}).get("cn")
+    or (e.get("csr", {}).get("sans", [])[0] if e.get("csr", {}).get("sans") else None)
+    or e.get("networkConfiguration", {}).get("dnsNameSettings", {}).get("dnsNames", [None])[0]
+)
