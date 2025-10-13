@@ -1,1 +1,282 @@
-bash -x ./test_entitlement_check.sh --section APAC --fqdn login.hsbc.com --access-group AppSec
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+=====================================================
+      Akamai Entitlement Validator
+=====================================================
+Production Version — October 2025
+
+- Validates FQDN ↔ Access Group entitlement using Akamai APIs
+- Performs multi-domain checks:
+    • CPS Certificates (enrollments)
+    • AppSec Configurations (policies)
+    • PAPI Properties (hostname mapping)
+- Region-aware: uses same REGION_SETTINGS as CPS automation
+- Outputs structured JSON + human-readable summary
+- Dumps all raw API responses for validation
+=====================================================
+"""
+
+import os
+import sys
+import json
+import argparse
+import requests
+from datetime import datetime, timezone
+from akamai.edgegrid import EdgeGridAuth
+from configparser import ConfigParser as EdgeRc
+
+# -----------------------------------------------------
+# Constants
+# -----------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+REGION_SETTINGS = {
+    "Global": {"contract_id": "P-2NY4YRH", "group_id": "154041"},
+    "APAC":   {"contract_id": "V-5A82LRN", "group_id": "272084"},
+    "EMEA":   {"contract_id": "V-5A82HME", "group_id": "272093"},
+    "LATAM":  {"contract_id": "V-5A85K49", "group_id": "272094"},
+    "AMER":   {"contract_id": "V-5A85K49", "group_id": "272094"},
+    "DEV":    {"contract_id": "V-5A82MTA", "group_id": "272095"},
+}
+
+# -----------------------------------------------------
+# Logging Helpers
+# -----------------------------------------------------
+def log(level, msg):
+    print(f"[{level}]: {msg}")
+    with open(os.path.join(OUTPUT_DIR, "validator_debug.log"), "a", encoding="utf-8") as f:
+        f.write(f"[{datetime.now(timezone.utc).isoformat()}] [{level}] {msg}\n")
+
+# -----------------------------------------------------
+# EdgeGrid Session Setup
+# -----------------------------------------------------
+def setup_session(edgerc_file, section):
+    try:
+        edgerc = EdgeRc(os.path.expanduser(edgerc_file))
+        base_url = "https://" + edgerc.get(section, "host").strip()
+        session = requests.Session()
+        session.auth = EdgeGridAuth(
+            client_token=edgerc.get(section, "client_token").strip(),
+            client_secret=edgerc.get(section, "client_secret").strip(),
+            access_token=edgerc.get(section, "access_token").strip()
+        )
+        session.headers.update({"Content-Type": "application/json", "Accept": "application/json"})
+        log("INFO", f"EdgeGrid session established for section [{section}]")
+        return session, base_url
+    except Exception as e:
+        log("FAILURE", f"EdgeGrid setup failed: {e}")
+        return None, None
+
+# -----------------------------------------------------
+# CPS Enrollment Lookup
+# -----------------------------------------------------
+def check_cps_entitlement(session, base_url, region, access_group, fqdn):
+    url = f"{base_url}/cps/v2/enrollments?contractId={region['contract_id']}&groupId={region['group_id']}"
+    try:
+        r = session.get(url, timeout=(10, 60))
+        data = r.json()
+        with open(os.path.join(OUTPUT_DIR, "cps_raw.json"), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        matches = [
+            e for e in data.get("enrollments", [])
+            if fqdn.lower() in e.get("csr", {}).get("cn", "").lower()
+            or any(fqdn.lower() in san.lower() for san in e.get("csr", {}).get("sans", []))
+        ]
+        return {"found": len(matches) > 0, "matches": matches, "status": r.status_code}
+    except Exception as e:
+        log("FAILURE", f"CPS lookup error: {e}")
+        return {"found": False, "error": str(e)}
+
+# -----------------------------------------------------
+# AppSec Configuration Lookup
+# -----------------------------------------------------
+def check_appsec_entitlement(session, base_url, region, access_group, fqdn):
+    url = f"{base_url}/appsec/v1/configs?contractId={region['contract_id']}&groupId={region['group_id']}"
+    try:
+        r = session.get(url, timeout=(10, 60))
+        data = r.json()
+        with open(os.path.join(OUTPUT_DIR, "appsec_raw.json"), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        matches = [
+            c for c in data.get("configurations", [])
+            if access_group.lower() in c.get("name", "").lower() or fqdn.lower() in c.get("name", "").lower()
+        ]
+        return {"found": len(matches) > 0, "matches": matches, "status": r.status_code}
+    except Exception as e:
+        log("FAILURE", f"AppSec lookup error: {e}")
+        return {"found": False, "error": str(e)}
+
+# -----------------------------------------------------
+# PAPI Property Lookup
+# -----------------------------------------------------
+def check_papi_entitlement(session, base_url, region, access_group, fqdn):
+    url = f"{base_url}/papi/v1/search/find-by-value?value={fqdn}"
+    try:
+        r = session.post(url, timeout=(10, 60))
+        data = r.json()
+        with open(os.path.join(OUTPUT_DIR, "papi_raw.json"), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        matches = [
+            p for p in data.get("versions", [])
+            if access_group.lower() in str(p).lower() or fqdn.lower() in str(p).lower()
+        ]
+        return {"found": len(matches) > 0, "matches": matches, "status": r.status_code}
+    except Exception as e:
+        log("FAILURE", f"PAPI lookup error: {e}")
+        return {"found": False, "error": str(e)}
+
+# -----------------------------------------------------
+# Main Execution Logic
+# -----------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser(description="Akamai Entitlement Validator")
+    parser.add_argument("--section", required=True)
+    parser.add_argument("--access-group", required=True)
+    parser.add_argument("--fqdn", required=True)
+    parser.add_argument("--edgerc-file", default=os.path.expanduser("~/.edgerc"))
+    parser.add_argument("--json-only", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    args = parser.parse_args()
+
+    open(os.path.join(OUTPUT_DIR, "validator_debug.log"), "w").close()
+    log("INFO", "=== Akamai Entitlement Validator Started ===")
+
+    if args.dry_run:
+        log("INFO", f"[DRY-RUN] Simulating entitlement check for {args.fqdn}")
+        result = {
+            "cps": {"found": True, "simulated": True},
+            "appsec": {"found": True, "simulated": True},
+            "papi": {"found": True, "simulated": True},
+            "summary": {"status": "SUCCESS", "reason": "Dry-run simulation complete"}
+        }
+        print(json.dumps(result, indent=2))
+        return
+
+    session, base_url = setup_session(args.edgerc_file, args.section)
+    if not session:
+        sys.exit(1)
+
+    region = REGION_SETTINGS.get(args.section, {})
+    cps = check_cps_entitlement(session, base_url, region, args.access_group, args.fqdn)
+    appsec = check_appsec_entitlement(session, base_url, region, args.access_group, args.fqdn)
+    papi = check_papi_entitlement(session, base_url, region, args.access_group, args.fqdn)
+
+    overall_pass = all(x.get("found") for x in [cps, appsec, papi])
+    summary = {
+        "status": "SUCCESS" if overall_pass else "FAILURE",
+        "details": {
+            "cps": cps.get("found"),
+            "appsec": appsec.get("found"),
+            "papi": papi.get("found")
+        }
+    }
+
+    result = {"cps": cps, "appsec": appsec, "papi": papi, "summary": summary}
+    with open(os.path.join(OUTPUT_DIR, "entitlement_summary.json"), "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+
+    print(json.dumps(result, indent=2))
+    log("INFO", f"Validation completed with status: {summary['status']}")
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+------------------------
+
+
+
+
+
+#!/bin/bash
+# =====================================================
+#  Akamai Entitlement Validation Test Suite
+# =====================================================
+#  Description:
+#    Validates FQDN entitlement across CPS, AppSec, and PAPI
+#    using the akamai_entitlement_validator.py module.
+#
+#  Typical Usage:
+#    ./test_suite_entitlement.sh --section APAC --access-group AppSec --fqdn login.hsbc.com
+#    ./test_suite_entitlement.sh --section EMEA --access-group InfraSec --fqdn api.hsbc.com
+#    ./test_suite_entitlement.sh --dry-run
+#
+#  Output:
+#    • Raw API results under ./output/
+#    • Summary in entitlement_summary.json
+# =====================================================
+
+usage() {
+  echo ""
+  echo "Usage: $0 --section SECTION --access-group GROUP --fqdn DOMAIN [OPTIONS]"
+  echo ""
+  echo "Options:"
+  echo "  --section SECTION        Akamai .edgerc section (e.g. APAC, EMEA)"
+  echo "  --access-group GROUP     Access group to validate"
+  echo "  --fqdn DOMAIN            Fully qualified domain name"
+  echo "  --dry-run                Simulate entitlement validation"
+  echo "  --help                   Show this help message"
+  echo ""
+  exit 0
+}
+
+# -----------------------------------------------------
+# Defaults
+# -----------------------------------------------------
+SECTION="APAC"
+ACCESS_GROUP="AppSec"
+FQDN=""
+DRY_RUN=false
+OUTPUT_DIR="output"
+mkdir -p "$OUTPUT_DIR"
+
+# -----------------------------------------------------
+# Parse arguments
+# -----------------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --section) SECTION="$2"; shift 2;;
+    --access-group) ACCESS_GROUP="$2"; shift 2;;
+    --fqdn) FQDN="$2"; shift 2;;
+    --dry-run) DRY_RUN=true; shift;;
+    -h|--help) usage;;
+    *) echo "Unknown option: $1"; usage;;
+  esac
+done
+
+if [[ -z "$FQDN" && "$DRY_RUN" != true ]]; then
+  echo "[ERROR] --fqdn is required in live mode."
+  exit 1
+fi
+
+# -----------------------------------------------------
+# Execution
+# -----------------------------------------------------
+echo "====================================================="
+echo " Akamai Entitlement Validator Suite"
+echo "====================================================="
+echo " Section:       ${SECTION}"
+echo " Access Group:  ${ACCESS_GROUP}"
+echo " FQDN:          ${FQDN:-(dry-run)}"
+echo "-----------------------------------------------------"
+
+if [[ "$DRY_RUN" == true ]]; then
+  CMD="python akamai_entitlement_validator.py --section ${SECTION} --access-group ${ACCESS_GROUP} --fqdn dryrun.test.com --dry-run"
+else
+  CMD="python akamai_entitlement_validator.py --section ${SECTION} --access-group ${ACCESS_GROUP} --fqdn ${FQDN}"
+fi
+
+echo "[INFO] Executing: $CMD"
+eval $CMD
+
+echo "-----------------------------------------------------"
+echo "[INFO] Validation summary written to output/entitlement_summary.json"
+echo "====================================================="
+echo " Validation Completed"
+echo "====================================================="
