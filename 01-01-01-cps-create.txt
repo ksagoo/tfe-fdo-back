@@ -6,6 +6,7 @@ import os
 import requests
 from akamai.edgegrid import EdgeGridAuth
 from requests.sessions import Session
+from datetime import datetime
 
 # =============================================================================
 # Region Mappings
@@ -66,14 +67,22 @@ def setup_session(section: str) -> Session:
 # =============================================================================
 # Core Lookup Functions
 # =============================================================================
+def safe_json(response):
+    """Safely parse JSON responses and handle invalid content."""
+    try:
+        return response.json()
+    except Exception:
+        print("[ERROR] Invalid JSON response received")
+        return {}
+
 def check_cps(session, base_url, fqdn, contract_id):
     url = f"{base_url}/cps/v2/enrollments?contractId={contract_id}"
     print(f"[INFO] CPS lookup: {url}")
     try:
         response = session.get(url)
-        data = response.json()
-        matches = []
-        partial = False
+        print(f"[DEBUG] CPS HTTP status: {response.status_code}")
+        data = safe_json(response)
+        matches, partial = [], False
 
         for e in data.get("enrollments", []):
             csr = e.get("csr") or {}
@@ -89,11 +98,20 @@ def check_cps(session, base_url, fqdn, contract_id):
             elif any(fqdn in s for s in ([cn] if isinstance(cn, str) else []) + sans if isinstance(s, str)):
                 partial = True
 
-        return {"found": bool(matches), "partial": partial, "url": url, "matches": matches}
+        if matches:
+            print(f"[RESULT] CPS: FOUND {len(matches)} match(es)")
+            for m in matches:
+                print(f"         → ID {m['id']} | CN: {m['cn']} | Type: {m.get('networkType')}")
+        elif partial:
+            print("[RESULT] CPS: PARTIAL MATCH")
+        else:
+            print("[RESULT] CPS: NOT FOUND")
+
+        return {"found": bool(matches), "partial": partial, "url": url, "matches": matches, "raw": data}
 
     except Exception as e:
         print(f"[ERROR] CPS lookup failed: {e}")
-        return {"found": False, "partial": False, "url": url, "matches": []}
+        return {"found": False, "partial": False, "url": url, "matches": [], "raw": {}}
 
 
 def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group):
@@ -101,28 +119,31 @@ def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group):
     print(f"[INFO] AppSec lookup: {url}")
     try:
         response = session.get(url)
-        data = response.json()
-        matches = []
-        partial = False
+        print(f"[DEBUG] AppSec HTTP status: {response.status_code}")
+        data = safe_json(response)
+        matches, partial = [], False
 
         for c in data.get("configurations", []):
             name = c.get("name", "")
             if fqdn in name and access_group in name:
-                matches.append({
-                    "id": c.get("id"),
-                    "name": name,
-                    "matchType": "full"
-                })
+                matches.append({"id": c.get("id"), "name": name, "matchType": "full"})
             elif fqdn in name or access_group in name:
-                # mark partial only if not both conditions are met
-                if not (fqdn in name and access_group in name):
-                    partial = True
+                partial = True
 
-        return {"found": bool(matches), "partial": partial, "url": url, "matches": matches}
+        if matches:
+            print(f"[RESULT] AppSec: FOUND {len(matches)} match(es)")
+            for m in matches:
+                print(f"         → ID {m['id']} | Name: {m['name']}")
+        elif partial:
+            print("[RESULT] AppSec: PARTIAL MATCH")
+        else:
+            print("[RESULT] AppSec: NOT FOUND")
+
+        return {"found": bool(matches), "partial": partial, "url": url, "matches": matches, "raw": data}
 
     except Exception as e:
         print(f"[ERROR] AppSec lookup failed: {e}")
-        return {"found": False, "partial": False, "url": url, "matches": []}
+        return {"found": False, "partial": False, "url": url, "matches": [], "raw": {}}
 
 
 def check_papi(session, base_url, fqdn):
@@ -130,17 +151,15 @@ def check_papi(session, base_url, fqdn):
     print(f"[INFO] PAPI lookup: {url}")
     try:
         response = session.get(url)
-        data = response.json()
-        matches = []
-        partial = False
+        print(f"[DEBUG] PAPI HTTP status: {response.status_code}")
+        data = safe_json(response)
+        matches, partial = [], False
 
-        # handle flexible data structures
+        host_list = []
         if isinstance(data, dict):
             host_list = data.get("hostnames") or data.get("items") or []
         elif isinstance(data, list):
             host_list = data
-        else:
-            host_list = []
 
         for h in host_list:
             hostname = h.get("cnameFrom") if isinstance(h, dict) else h
@@ -149,11 +168,22 @@ def check_papi(session, base_url, fqdn):
             elif fqdn in str(hostname):
                 partial = True
 
-        return {"found": bool(matches), "partial": partial, "url": url, "matches": matches}
+        if matches:
+            print(f"[RESULT] PAPI: FOUND {len(matches)} match(es)")
+            for m in matches:
+                cname = m.get("cnameFrom", "")
+                prop = m.get("propertyName", "")
+                print(f"         → CNAME: {cname} | Property: {prop}")
+        elif partial:
+            print("[RESULT] PAPI: PARTIAL MATCH")
+        else:
+            print("[RESULT] PAPI: NOT FOUND")
+
+        return {"found": bool(matches), "partial": partial, "url": url, "matches": matches, "raw": data}
 
     except Exception as e:
         print(f"[ERROR] PAPI lookup failed: {e}")
-        return {"found": False, "partial": False, "url": url, "matches": []}
+        return {"found": False, "partial": False, "url": url, "matches": [], "raw": {}}
 
 
 # =============================================================================
@@ -198,15 +228,17 @@ def main():
         "section": section,
         "access_group": access_group,
         "fqdn": fqdn,
-        "cps": cps,
-        "appsec": appsec,
-        "papi": papi,
+        "cps": {k: v for k, v in cps.items() if k != "raw"},
+        "appsec": {k: v for k, v in appsec.items() if k != "raw"},
+        "papi": {k: v for k, v in papi.items() if k != "raw"},
         "validated_by": validated_by,
         "authorized": authorized,
     }
 
     os.makedirs("output", exist_ok=True)
-    summary_path = "output/entitlement_summary.json"
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
+    summary_path = f"output/entitlement_summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
@@ -217,16 +249,21 @@ def main():
         print("[SUMMARY] Validation Result: UNAUTHORIZED (PARTIAL MATCH DETECTED)")
     else:
         print("[SUMMARY] Validation Result: UNAUTHORIZED")
-
     print(f"[SUMMARY] Validated by: {', '.join(validated_by) if validated_by else 'None'}")
     print("--------------------------------------------------------------\n")
     print(f"[INFO] Summary written to {summary_path}\n")
 
     if debug:
-        raw_path = "output/raw_responses.json"
-        with open(raw_path, "w") as f:
-            json.dump({"cps": cps, "appsec": appsec, "papi": papi}, f, indent=2)
-        print(f"[DEBUG] Raw API data written to {raw_path}\n")
+        debug_files = {
+            "cps": f"output/raw_cps_{timestamp}.json",
+            "appsec": f"output/raw_appsec_{timestamp}.json",
+            "papi": f"output/raw_papi_{timestamp}.json",
+        }
+        for name, path in debug_files.items():
+            with open(path, "w") as f:
+                json.dump(locals()[name]["raw"], f, indent=2)
+            print(f"[DEBUG] Raw {name.upper()} data written to {path}")
+        print()
 
 
 if __name__ == "__main__":
