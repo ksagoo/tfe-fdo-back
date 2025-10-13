@@ -1,12 +1,5 @@
-all_enrollments = response.json().get("enrollments", [])
-
-# Debug: print all retrieved enrollment expiry dates for inspection
-if debug:
-    for e in all_enrollments:
-        expiry = (
-            e.get("renewal", {}).get("certificateNotAfter")
-            or e.get("certificate", {}).get("notAfter")
-            or (e.get("certificateChain", [{}])[0].get("notAfter") if e.get("certificateChain") else None)
-        )
-        cn = e.get("csr", {}).get("cn")
-        print(f"[DEBUG] Enrollment: {cn}, Expiry: {expiry}")
+expiry = (
+    e.get("renewal", {}).get("certificateNotAfter")
+    or e.get("certificate", {}).get("notAfter")
+    or (e.get("certificateChain", [{}])[0].get("notAfter") if e.get("certificateChain") else None)
+)
