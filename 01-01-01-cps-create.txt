@@ -1,472 +1,217 @@
-#!/bin/bash
-# =====================================================
-#  Akamai Certificate Lifecycle Automation
-# =====================================================
+#!/usr/bin/env python
+# ==========================================================
+#  Akamai Entitlement Validator (Level 2 Validation)
+# ==========================================================
 #  Description:
-#    Executes live Akamai CPS API operations:
-#      • Discover expiring enrollments
-#      • Renew certificates
-#      • Deploy certificates (immediate or scheduled)
-#      • Poll CPS status for completion
+#    Validates that an FQDN and certificate enrollment belong
+#    to the specified Akamai Access Group by examining naming
+#    conventions and mapping relationships across:
+#      • CPS (Certificate Provisioning System)
+#      • AppSec (Security Configurations & Policies)
+#      • PAPI (Properties / Site Delivery Configs)
 #
-#  Default Behavior:
-#    - Automatically discovers the first expiring enrollment from API results
-#    - Uses that enrollment for renew/deploy/poll tests
-#    - Manual override supported via --enrollment-id and --fqdn
+#  Key Features:
+#    - Full EdgeGrid-authenticated Akamai session
+#    - Lightweight, read-only lookups
+#    - Dumps raw JSON responses to ./output/
+#    - Prints a concise entitlement summary
+#    - Exports PIPELINE_RESULT=AUTHORIZED or UNAUTHORIZED
+#    - Always exits cleanly (status 0)
 #
-#  Typical Usage:
-#    ./test_suite_live.sh --section APAC --network production --test all
-#    ./test_suite_live.sh --section EMEA --network staging --expiry-threshold 30
-#    ./test_suite_live.sh --test 2                          # Run only Renew test
-#    ./test_suite_live.sh --enrollment-id 105672 --fqdn portal.hsbc.com --test 4
+#  Usage:
+#    python akamai_entitlement_validator.py \
+#      --section APAC \
+#      --access-group AppSec \
+#      --fqdn login.hsbc.com \
+#      --enrollment-id 104532 \
+#      --debug
 #
-#  Notes:
-#    - Results are written under ./output/
-#    - PIPELINE_RESULT exported for CI/CD
-#    - Safe for use in Jenkins, GitLab, or local validation
-# =====================================================
-
-usage() {
-  echo ""
-  echo "Usage: $0 [OPTIONS]"
-  echo ""
-  echo "Options:"
-  echo "  --section SECTION            Akamai API .edgerc section (default: APAC)"
-  echo "  --access-group GROUP         Access group name (default: AppSec)"
-  echo "  --fqdn DOMAIN                FQDN (auto-discovered if not specified)"
-  echo "  --enrollment-id ID           Enrollment ID (auto-discovered if not specified)"
-  echo "  --network [staging|production] Deployment network (default: production)"
-  echo "  --expiry-threshold DAYS      Days before expiry to include (default: 45)"
-  echo "  --poll-interval SECONDS      Interval between poll checks (default: 30)"
-  echo "  --poll-timeout SECONDS       Max poll duration (default: 900)"
-  echo "  --test N                     Run a specific test (1–5) or 'all' (default: all)"
-  echo "  --help                       Show this help message"
-  echo ""
-  echo "Examples:"
-  echo "  $0 --section APAC --network production --test all"
-  echo "  $0 --section EMEA --network staging --expiry-threshold 30"
-  echo "  $0 --test 3                          # Deploy only"
-  echo "  $0 --enrollment-id 105672 --fqdn portal.hsbc.com --test 4"
-  echo ""
-  exit 0
-}
-
-# -----------------------------------------------------
-# Default configuration
-# -----------------------------------------------------
-SECTION="APAC"
-ACCESS_GROUP="AppSec"
-FQDN=""
-ENROLLMENT_ID=""
-NETWORK="production"
-EXPIRY_THRESHOLD=45
-POLL_INTERVAL=30
-POLL_TIMEOUT=900
-DEBUG=true
-JSON_ONLY=true
-TEST="all"
-
-# -----------------------------------------------------
-# Parse CLI arguments
-# -----------------------------------------------------
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --section) SECTION="$2"; shift 2;;
-    --access-group) ACCESS_GROUP="$2"; shift 2;;
-    --fqdn) FQDN="$2"; shift 2;;
-    --enrollment-id) ENROLLMENT_ID="$2"; shift 2;;
-    --network) NETWORK="$2"; shift 2;;
-    --expiry-threshold) EXPIRY_THRESHOLD="$2"; shift 2;;
-    --poll-interval) POLL_INTERVAL="$2"; shift 2;;
-    --poll-timeout) POLL_TIMEOUT="$2"; shift 2;;
-    --test) TEST="$2"; shift 2;;
-    -h|--help) usage;;
-    *) echo "Unknown option: $1"; usage;;
-  esac
-done
-
-# -----------------------------------------------------
-# Environment setup
-# -----------------------------------------------------
-set -Eeo pipefail
-OUTPUT_DIR="output"
-mkdir -p "$OUTPUT_DIR"
-TOTAL=0
-PASS=0
-FAIL=0
-
-# -----------------------------------------------------
-# Test runner helper
-# -----------------------------------------------------
-run_test() {
-  local name="$1"
-  local cmd="$2"
-  local id="$3"
-
-  if [[ "$TEST" != "all" && "$TEST" != "$id" ]]; then
-    return
-  fi
-
-  echo -e "\n[TEST $id]: $name"
-  echo "-----------------------------------------------------"
-  echo "COMMAND: $cmd"
-  local start_time=$(date +%s)
-
-  set +e
-  eval $cmd >>"$OUTPUT_DIR/test_live.log" 2>&1
-  local status=$?
-  set -e
-  local end_time=$(date +%s)
-  local duration=$((end_time - start_time))
-
-  TOTAL=$((TOTAL + 1))
-  if [[ $status -ne 0 ]] || grep -q "\[FAILURE\]" "$OUTPUT_DIR/debug.log" 2>/dev/null; then
-    echo "[RESULT]: FAIL (${duration}s)"
-    FAIL=$((FAIL + 1))
-  else
-    echo "[RESULT]: SUCCESS (${duration}s)"
-    PASS=$((PASS + 1))
-  fi
-  echo "-----------------------------------------------------"
-  sleep 1
-}
-
-# -----------------------------------------------------
-# Suite header
-# -----------------------------------------------------
-echo "====================================================="
-echo " Akamai CPS Certificate Live Test Suite"
-echo "====================================================="
-echo " Section:            ${SECTION}"
-echo " Access Group:       ${ACCESS_GROUP}"
-echo " Deployment Network: ${NETWORK}"
-echo " Expiry Threshold:   ${EXPIRY_THRESHOLD} days"
-echo " Selected Test:      ${TEST}"
-echo "-----------------------------------------------------"
-
-# =====================================================
-# 1. Get All Expiring Enrollments
-# =====================================================
-run_test "Get All Expiring Enrollments" \
-"python akamai_cert_manager.py \
-  --section ${SECTION} \
-  --access_group ${ACCESS_GROUP} \
-  --action get_enrollment \
-  --deployment-network ${NETWORK} \
-  --expiry-threshold ${EXPIRY_THRESHOLD} \
-  --json-only --debug" "1"
-
-# =====================================================
-# Auto-detect enrollment and FQDN (unless manually provided)
-# =====================================================
-if [[ -z "$ENROLLMENT_ID" || -z "$FQDN" ]]; then
-  if [[ -f "$OUTPUT_DIR/discovered_enrollments.json" ]]; then
-    echo "[INFO] Attempting to auto-select first enrollment from discovery output..."
-    ENROLLMENT_ID=$(jq -r '.[0].enrollment_id' "$OUTPUT_DIR/discovered_enrollments.json" 2>/dev/null)
-    FQDN=$(jq -r '.[0].fqdn' "$OUTPUT_DIR/discovered_enrollments.json" 2>/dev/null)
-    if [[ "$ENROLLMENT_ID" == "null" || -z "$ENROLLMENT_ID" ]]; then
-      echo "[WARN] No valid enrollment found in discovery output; manual override required."
-    else
-      echo "[INFO] Auto-selected Enrollment ID: $ENROLLMENT_ID"
-      echo "[INFO] Auto-selected FQDN:          $FQDN"
-    fi
-  else
-    echo "[WARN] Discovery output not found; skipping auto-selection."
-  fi
-fi
-
-# =====================================================
-# 2. Renew Only
-# =====================================================
-run_test "Renew Only" \
-"python akamai_cert_manager.py \
-  --section ${SECTION} \
-  --access_group ${ACCESS_GROUP} \
-  --fqdn ${FQDN} \
-  --enrollment_id ${ENROLLMENT_ID} \
-  --action renew_only \
-  --deployment-network ${NETWORK} \
-  --json-only --debug" "2"
-
-# =====================================================
-# 3. Deploy Only
-# =====================================================
-run_test "Deploy Only" \
-"python akamai_cert_manager.py \
-  --section ${SECTION} \
-  --access_group ${ACCESS_GROUP} \
-  --fqdn ${FQDN} \
-  --enrollment_id ${ENROLLMENT_ID} \
-  --action deploy_only \
-  --deployment-network ${NETWORK} \
-  --json-only --debug" "3"
-
-# =====================================================
-# 4. Full Renew + Deploy + Poll
-# =====================================================
-run_test "Full Lifecycle (Renew + Deploy + Poll)" \
-"python akamai_cert_manager.py \
-  --section ${SECTION} \
-  --access_group ${ACCESS_GROUP} \
-  --fqdn ${FQDN} \
-  --enrollment_id ${ENROLLMENT_ID} \
-  --action renew_and_deploy \
-  --deployment-network ${NETWORK} \
-  --poll-interval ${POLL_INTERVAL} \
-  --poll-timeout ${POLL_TIMEOUT} \
-  --json-only --debug" "4"
-
-# =====================================================
-# 5. Scheduled Deployment (1 hour ahead)
-# =====================================================
-SCHEDULE_TIME=$(date -u -d '+1 hour' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -v+1H -u '+%Y-%m-%dT%H:%M:%SZ')
-echo "[INFO] Scheduled deployment time (UTC): ${SCHEDULE_TIME}"
-
-run_test "Scheduled Deployment (Future Start Time)" \
-"python akamai_cert_manager.py \
-  --section ${SECTION} \
-  --access_group ${ACCESS_GROUP} \
-  --fqdn ${FQDN} \
-  --enrollment_id ${ENROLLMENT_ID} \
-  --action deploy_only \
-  --deployment-network ${NETWORK} \
-  --schedule-time ${SCHEDULE_TIME} \
-  --json-only --debug" "5"
-
-# =====================================================
-# Summary
-# =====================================================
-echo "====================================================="
-echo " Live Test Suite Summary"
-echo "====================================================="
-echo " Total Tests Executed : $TOTAL"
-echo " Passed               : $PASS"
-echo " Failed               : $FAIL"
-echo "-----------------------------------------------------"
-
-if [[ $FAIL -eq 0 ]]; then
-  PIPELINE_RESULT="SUCCESS"
-else
-  PIPELINE_RESULT="FAILURE"
-fi
-
-echo "PIPELINE_RESULT=$PIPELINE_RESULT"
-echo "====================================================="
-echo " Live Test Suite Completed ($PIPELINE_RESULT)"
-echo "====================================================="
-
-
-
-
-
-
-
-
-
-
-#!/bin/bash
-# ===================================================================
-#  Akamai Certificate Lifecycle Automation - Dry-Run Test Suite
-# ===================================================================
-#  Description:
-#    Simulates all major CPS lifecycle operations safely with --dry-run mode.
-#    Exercises every logical path in akamai_cert_manager.py without real API calls.
-#
-#  Default Behavior:
-#    • Executes 12 test cases covering renew, deploy, schedule, expiry windows, etc.
-#    • Writes outputs to ./output/ for inspection
-#    • Exports PIPELINE_RESULT for CI/CD pipelines
-#
-#  Typical Usage:
-#    ./test_suite_dryrun.sh                      # Run all tests
-#    ./test_suite_dryrun.sh --test 7             # Run specific test case
-#    ./test_suite_dryrun.sh --section DEV --access-group AppSec
-#
-#  Options:
-#    --section SECTION            Akamai .edgerc section (default: DEV)
-#    --access-group GROUP         Access group name (default: AppSec)
-#    --test N                     Run specific test (1–12) or 'all' (default: all)
-#    --help                       Show usage
+#  Optional:
+#    --dry-run        Simulate only (no API calls)
 #
 #  Output:
-#    • Logs: ./output/test_dryrun.log
-#    • JSON outputs: ./output/result_*.json
-#    • PIPELINE_RESULT exported for CI/CD
-#
-# =====================================================
+#    ./output/raw_cps.json
+#    ./output/raw_appsec.json
+#    ./output/raw_papi.json
+#    ./output/entitlement_summary_<fqdn>.json
+# ==========================================================
 
-usage() { grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+import argparse
+import json
+import os
+import sys
+import traceback
+import requests
+from akamai.edgegrid import EdgeGridAuth
+from requests.sessions import Session
 
-# -----------------------------------------------------
-# Defaults
-# -----------------------------------------------------
-SECTION="DEV"
-ACCESS_GROUP="AppSec"
-TEST="all"
-OUTPUT_DIR="output"
-mkdir -p "$OUTPUT_DIR"
-set -Eeo pipefail
-TOTAL=0; PASS=0; FAIL=0
+# ----------------------------------------------------------
+#  Global constants
+# ----------------------------------------------------------
+OUTPUT_DIR = "output"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# -----------------------------------------------------
-# Argument parsing
-# -----------------------------------------------------
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --section) SECTION="$2"; shift 2;;
-    --access-group) ACCESS_GROUP="$2"; shift 2;;
-    --test) TEST="$2"; shift 2;;
-    -h|--help) usage;;
-    *) echo "Unknown option: $1"; usage;;
-  esac
-done
-
-# -----------------------------------------------------
-# Helper to run tests safely
-# -----------------------------------------------------
-run_test() {
-  local name="$1"; local cmd="$2"; local id="$3"
-  if [[ "$TEST" != "all" && "$TEST" != "$id" ]]; then return; fi
-  echo -e "\n[TEST $id]: $name"
-  echo "-----------------------------------------------------"
-  echo "COMMAND: $cmd"
-  local start_time=$(date +%s)
-  set +e; eval $cmd >>"$OUTPUT_DIR/test_dryrun.log" 2>&1; local status=$?; set -e
-  local end_time=$(date +%s); local duration=$((end_time - start_time))
-  TOTAL=$((TOTAL + 1))
-  if [[ $status -ne 0 ]] || grep -q "\[FAILURE\]" "$OUTPUT_DIR/debug.log" 2>/dev/null; then
-    echo "[RESULT]: FAIL (${duration}s)"; FAIL=$((FAIL + 1))
-  else
-    echo "[RESULT]: SUCCESS (${duration}s)"; PASS=$((PASS + 1))
-  fi
-  echo "-----------------------------------------------------"; sleep 1
+REGION_SETTINGS = {
+    "APAC": {"contractId": "ctr_ABC123", "groupId": "grp_45678"},
+    "EMEA": {"contractId": "ctr_DEF456", "groupId": "grp_98765"},
+    "AMER": {"contractId": "ctr_XYZ789", "groupId": "grp_54321"},
 }
 
-# -----------------------------------------------------
-# Header
-# -----------------------------------------------------
-echo "====================================================="
-echo " Akamai CPS Certificate Dry-Run Simulation Suite"
-echo "====================================================="
-echo " Section:       ${SECTION}"
-echo " Access Group:  ${ACCESS_GROUP}"
-echo " Selected Test: ${TEST}"
-echo "-----------------------------------------------------"
+# ----------------------------------------------------------
+#  Setup session
+# ----------------------------------------------------------
+def setup_session(section):
+    import configparser
+    from akamai.edgegrid import EdgeGridAuth
 
-# =====================================================
-# 1. Basic Dry-Run Full Flow
-# =====================================================
-run_test "Basic Dry-Run" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn dryrun-basic.example.com --enrollment_id 10001 --action renew_and_deploy \
- --dry-run --json-only" "1"
+    edgerc_path = os.path.expanduser("~/.edgerc")
+    if not os.path.exists(edgerc_path):
+        print(f"[FAILURE] Missing .edgerc file at {edgerc_path}")
+        sys.exit(1)
 
-# =====================================================
-# 2. Get Enrollment (Discovery Simulation)
-# =====================================================
-run_test "Get Enrollment Only" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --action get_enrollment --dry-run --json-only" "2"
+    config = configparser.ConfigParser()
+    config.read(edgerc_path)
 
-# =====================================================
-# 3. Renew Only
-# =====================================================
-run_test "Renew Only" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn renewonly.example.com --enrollment_id 10002 --action renew_only \
- --dry-run --json-only" "3"
+    if section not in config:
+        print(f"[FAILURE] Section [{section}] not found in .edgerc")
+        sys.exit(1)
 
-# =====================================================
-# 4. Deploy Only
-# =====================================================
-run_test "Deploy Only" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn deployonly.example.com --enrollment_id 10003 --action deploy_only \
- --dry-run --json-only" "4"
+    baseurl = "https://{}/".format(config[section].get("host"))
+    s = Session()
+    s.auth = EdgeGridAuth.from_edgerc(config, section)
+    s.headers.update({"Content-Type": "application/json"})
+    return s, baseurl
 
-# =====================================================
-# 5. Scheduled Deployment
-# =====================================================
-SCHEDULE_TIME=$(date -u -d '+2 hours' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -v+2H -u '+%Y-%m-%dT%H:%M:%SZ')
-run_test "Scheduled Deployment (Future Start)" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn schedule.example.com --enrollment_id 10004 --action renew_and_deploy \
- --schedule-time ${SCHEDULE_TIME} --dry-run --json-only" "5"
+# ----------------------------------------------------------
+#  Fetch helpers (CPS, AppSec, PAPI)
+# ----------------------------------------------------------
+def get_cps_enrollments(session, baseurl):
+    url = f"{baseurl}cps/v2/enrollments"
+    r = session.get(url)
+    r.raise_for_status()
+    return r.json()
 
-# =====================================================
-# 6. Staging Network
-# =====================================================
-run_test "Staging Network Simulation" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn staging.example.com --enrollment_id 10005 --action renew_and_deploy \
- --deployment-network staging --dry-run --json-only" "6"
+def get_appsec_configs(session, baseurl):
+    url = f"{baseurl}appsec/v1/configs"
+    r = session.get(url)
+    r.raise_for_status()
+    return r.json()
 
-# =====================================================
-# 7. Debug Logging Enabled
-# =====================================================
-run_test "Debug Logging Enabled" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn debug.example.com --enrollment_id 10006 --action renew_and_deploy \
- --dry-run --debug" "7"
+def get_papi_properties(session, baseurl, contract_id, group_id):
+    url = f"{baseurl}papi/v1/properties?contractId={contract_id}&groupId={group_id}"
+    r = session.get(url)
+    r.raise_for_status()
+    return r.json()
 
-# =====================================================
-# 8. Expiry Template (7-Day Escalation)
-# =====================================================
-run_test "Expiry Template (7-Day)" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn seven.example.com --enrollment_id 10007 --action renew_and_deploy \
- --days-to-expiry 7 --dry-run --json-only" "8"
+# ----------------------------------------------------------
+#  Entitlement discovery & validation
+# ----------------------------------------------------------
+def discover_entitlement(section, access_group, fqdn, enrollment_id=None, dry_run=False, debug=False):
+    result = {"section": section, "access_group": access_group, "fqdn": fqdn, "authorized": False}
+    try:
+        if dry_run:
+            print("[INFO] Dry-run mode enabled — skipping API calls.")
+            return result
 
-# =====================================================
-# 9. Expiry Template (10-Day Escalation)
-# =====================================================
-run_test "Expiry Template (10-Day)" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn ten.example.com --enrollment_id 10008 --action renew_and_deploy \
- --days-to-expiry 10 --dry-run --json-only" "9"
+        session, baseurl = setup_session(section)
+        region_info = REGION_SETTINGS.get(section, {})
+        contract_id = region_info.get("contractId")
+        group_id = region_info.get("groupId")
 
-# =====================================================
-# 10. Expiry Template (14-Day Notification)
-# =====================================================
-run_test "Expiry Template (14-Day)" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn fourteen.example.com --enrollment_id 10009 --action renew_and_deploy \
- --days-to-expiry 14 --dry-run --json-only" "10"
+        # --- CPS ---
+        print("[INFO] Fetching CPS enrollments ...")
+        cps_data = get_cps_enrollments(session, baseurl)
+        with open(f"{OUTPUT_DIR}/raw_cps.json", "w") as f: json.dump(cps_data, f, indent=2)
 
-# =====================================================
-# 11. Full Integration (Poll Simulation)
-# =====================================================
-run_test "Full Integration (Poll Simulation)" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn poll.example.com --enrollment_id 10010 --action renew_and_deploy \
- --poll-interval 10 --poll-timeout 120 --dry-run --debug" "11"
+        matched_cps = [e for e in cps_data.get("enrollments", []) if fqdn in json.dumps(e)]
+        print(f"[INFO] Found {len(matched_cps)} CPS matches for {fqdn}")
 
-# =====================================================
-# 12. Default Template (certEmail.html Fallback)
-# =====================================================
-run_test "Default Template (Fallback)" \
-"python akamai_cert_manager.py --section ${SECTION} --access_group ${ACCESS_GROUP} \
- --fqdn fallback.example.com --enrollment_id 10011 --action renew_and_deploy \
- --days-to-expiry 30 --dry-run --json-only" "12"
+        # --- AppSec ---
+        print("[INFO] Fetching AppSec configurations ...")
+        appsec_data = get_appsec_configs(session, baseurl)
+        with open(f"{OUTPUT_DIR}/raw_appsec.json", "w") as f: json.dump(appsec_data, f, indent=2)
 
-# =====================================================
-# Summary
-# =====================================================
-echo "====================================================="
-echo " Dry-Run Simulation Suite Summary"
-echo "====================================================="
-echo " Total Tests : $TOTAL"
-echo " Passed      : $PASS"
-echo " Failed      : $FAIL"
-echo "-----------------------------------------------------"
+        matched_appsec = [c for c in appsec_data.get("configurations", []) if access_group in json.dumps(c)]
+        print(f"[INFO] Found {len(matched_appsec)} AppSec matches for {access_group}")
 
-if [[ $FAIL -eq 0 ]]; then
-  PIPELINE_RESULT="SUCCESS"
-else
-  PIPELINE_RESULT="FAILURE"
-fi
+        # --- PAPI ---
+        print("[INFO] Fetching PAPI properties ...")
+        papi_data = get_papi_properties(session, baseurl, contract_id, group_id)
+        with open(f"{OUTPUT_DIR}/raw_papi.json", "w") as f: json.dump(papi_data, f, indent=2)
 
-echo "PIPELINE_RESULT=$PIPELINE_RESULT"
-echo "====================================================="
-echo " Dry-Run Test Suite Completed ($PIPELINE_RESULT)"
-echo "====================================================="
+        matched_papi = [p for p in papi_data.get("properties", []) if fqdn in json.dumps(p)]
+        print(f"[INFO] Found {len(matched_papi)} PAPI matches for {fqdn}")
+
+        # --- Correlate ---
+        if matched_cps and matched_appsec and matched_papi:
+            result["authorized"] = True
+            print(f"[SUCCESS] {fqdn} is fully mapped to access group {access_group}")
+        else:
+            print(f"[WARN] Entitlement incomplete for {fqdn} / {access_group}")
+
+        result.update({
+            "cps_matches": len(matched_cps),
+            "appsec_matches": len(matched_appsec),
+            "papi_matches": len(matched_papi),
+        })
+
+        # --- Dump summary ---
+        summary_path = f"{OUTPUT_DIR}/entitlement_summary_{fqdn.replace('.', '_')}.json"
+        with open(summary_path, "w") as f: json.dump(result, f, indent=2)
+        print(f"[INFO] Summary written to {summary_path}")
+
+        # --- Export pipeline result ---
+        pipeline_status = "AUTHORIZED" if result["authorized"] else "UNAUTHORIZED"
+        print(f"PIPELINE_RESULT={pipeline_status}")
+
+    except requests.HTTPError as e:
+        print(f"[FAILURE] HTTP {e.response.status_code}: {e.response.text}")
+        traceback.print_exc()
+        result["error"] = str(e)
+    except Exception as e:
+        print(f"[FAILURE] Unexpected error: {e}")
+        traceback.print_exc()
+        result["error"] = str(e)
+    finally:
+        return result
+
+# ----------------------------------------------------------
+#  CLI
+# ----------------------------------------------------------
+def parse_args():
+    parser = argparse.ArgumentParser(description="Akamai Entitlement Validator (Level 2)")
+    parser.add_argument("--section", required=True, help="Akamai .edgerc section name")
+    parser.add_argument("--access-group", required=True, help="Access group name to validate")
+    parser.add_argument("--fqdn", required=True, help="Fully Qualified Domain Name")
+    parser.add_argument("--enrollment-id", type=int, help="Optional CPS enrollment ID")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate only (no API calls)")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose logging")
+    return parser.parse_args()
+
+def main():
+    args = parse_args()
+    print("=====================================================")
+    print(" Akamai Entitlement Validator - Level 2 Check")
+    print("=====================================================")
+    print(f" Section:       {args.section}")
+    print(f" Access Group:  {args.access_group}")
+    print(f" FQDN:          {args.fqdn}")
+    print(f" Enrollment ID: {args.enrollment_id or '(auto)'}")
+    print(f" Dry-Run:       {args.dry_run}")
+    print("-----------------------------------------------------")
+
+    discover_entitlement(
+        args.section,
+        args.access_group,
+        args.fqdn,
+        args.enrollment_id,
+        args.dry_run,
+        args.debug
+    )
+
+    print("-----------------------------------------------------")
+    print(" Validation completed.")
+    print("=====================================================")
+
+if __name__ == "__main__":
+    main()
