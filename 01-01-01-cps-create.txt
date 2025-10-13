@@ -1,26 +1,256 @@
-if not args.no_email:
-    # Inject missing placeholders for Jinja2 email template rendering
-    entry.update({
-        "contactNames": ", ".join(entry.get("contacts", [])) if entry.get("contacts") else "Cyber WASP Team",
-        "certType": entry.get("certType", "RSA"),
-        "cert1": entry.get("cert1", ""),
-        "cert2Type": entry.get("cert2Type", "ECDSA"),
-        "cert2": entry.get("cert2", "")
-    })
+#!/bin/bash
+# =====================================================
+#  Akamai Certificate Lifecycle Automation - Live Test Suite (v2.4)
+# =====================================================
+#  Description:
+#    Executes live Akamai CPS API operations:
+#      • Discover expiring enrollments
+#      • Renew certificates
+#      • Deploy certificates (immediate or scheduled)
+#      • Poll CPS status for completion
+#
+#  Default Behavior:
+#    - Automatically discovers the first expiring enrollment from API results
+#    - Uses that enrollment for renew/deploy/poll tests
+#    - Manual override supported via --enrollment-id and --fqdn
+#
+#  Typical Usage:
+#    ./test_suite_live.sh --section APAC --network production --test all
+#    ./test_suite_live.sh --section EMEA --network staging --expiry-threshold 30
+#    ./test_suite_live.sh --test 2                          # Run only Renew test
+#    ./test_suite_live.sh --enrollment-id 105672 --fqdn portal.hsbc.com --test 4
+#
+#  Notes:
+#    - Results are written under ./output/
+#    - PIPELINE_RESULT exported for CI/CD
+#    - Safe for use in Jenkins, GitLab, or local validation
+# =====================================================
 
-    # If running dry-run, inject dummy certificate blocks for visual confirmation
-    if args.dry_run:
-        entry["cert1"] = (
-            "-----BEGIN CERTIFICATE-----\n"
-            "DRYRUN_RSA_FAKE_CERT_BLOCK\n"
-            "-----END CERTIFICATE-----"
-        )
-        entry["cert2"] = (
-            "-----BEGIN CERTIFICATE-----\n"
-            "DRYRUN_ECDSA_FAKE_CERT_BLOCK\n"
-            "-----END CERTIFICATE-----"
-        )
+usage() {
+  echo ""
+  echo "Usage: $0 [OPTIONS]"
+  echo ""
+  echo "Options:"
+  echo "  --section SECTION            Akamai API .edgerc section (default: APAC)"
+  echo "  --access-group GROUP         Access group name (default: AppSec)"
+  echo "  --fqdn DOMAIN                FQDN (auto-discovered if not specified)"
+  echo "  --enrollment-id ID           Enrollment ID (auto-discovered if not specified)"
+  echo "  --network [staging|production] Deployment network (default: production)"
+  echo "  --expiry-threshold DAYS      Days before expiry to include (default: 45)"
+  echo "  --poll-interval SECONDS      Interval between poll checks (default: 30)"
+  echo "  --poll-timeout SECONDS       Max poll duration (default: 900)"
+  echo "  --test N                     Run a specific test (1–5) or 'all' (default: all)"
+  echo "  --help                       Show this help message"
+  echo ""
+  echo "Examples:"
+  echo "  $0 --section APAC --network production --test all"
+  echo "  $0 --section EMEA --network staging --expiry-threshold 30"
+  echo "  $0 --test 3                          # Deploy only"
+  echo "  $0 --enrollment-id 105672 --fqdn portal.hsbc.com --test 4"
+  echo ""
+  exit 0
+}
 
-    # Render the email using enriched entry data
-    email_path = render_email(entry, days, dry_run=args.dry_run, debug=args.debug)
-    entry["email_output"] = email_path
+# -----------------------------------------------------
+# Default configuration
+# -----------------------------------------------------
+SECTION="APAC"
+ACCESS_GROUP="AppSec"
+FQDN=""
+ENROLLMENT_ID=""
+NETWORK="production"
+EXPIRY_THRESHOLD=45
+POLL_INTERVAL=30
+POLL_TIMEOUT=900
+DEBUG=true
+JSON_ONLY=true
+TEST="all"
+
+# -----------------------------------------------------
+# Parse CLI arguments
+# -----------------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --section) SECTION="$2"; shift 2;;
+    --access-group) ACCESS_GROUP="$2"; shift 2;;
+    --fqdn) FQDN="$2"; shift 2;;
+    --enrollment-id) ENROLLMENT_ID="$2"; shift 2;;
+    --network) NETWORK="$2"; shift 2;;
+    --expiry-threshold) EXPIRY_THRESHOLD="$2"; shift 2;;
+    --poll-interval) POLL_INTERVAL="$2"; shift 2;;
+    --poll-timeout) POLL_TIMEOUT="$2"; shift 2;;
+    --test) TEST="$2"; shift 2;;
+    -h|--help) usage;;
+    *) echo "Unknown option: $1"; usage;;
+  esac
+done
+
+# -----------------------------------------------------
+# Environment setup
+# -----------------------------------------------------
+set -Eeo pipefail
+OUTPUT_DIR="output"
+mkdir -p "$OUTPUT_DIR"
+TOTAL=0
+PASS=0
+FAIL=0
+
+# -----------------------------------------------------
+# Test runner helper
+# -----------------------------------------------------
+run_test() {
+  local name="$1"
+  local cmd="$2"
+  local id="$3"
+
+  if [[ "$TEST" != "all" && "$TEST" != "$id" ]]; then
+    return
+  fi
+
+  echo -e "\n[TEST $id]: $name"
+  echo "-----------------------------------------------------"
+  echo "COMMAND: $cmd"
+  local start_time=$(date +%s)
+
+  set +e
+  eval $cmd >>"$OUTPUT_DIR/test_live.log" 2>&1
+  local status=$?
+  set -e
+  local end_time=$(date +%s)
+  local duration=$((end_time - start_time))
+
+  TOTAL=$((TOTAL + 1))
+  if [[ $status -ne 0 ]] || grep -q "\[FAILURE\]" "$OUTPUT_DIR/debug.log" 2>/dev/null; then
+    echo "[RESULT]: FAIL (${duration}s)"
+    FAIL=$((FAIL + 1))
+  else
+    echo "[RESULT]: SUCCESS (${duration}s)"
+    PASS=$((PASS + 1))
+  fi
+  echo "-----------------------------------------------------"
+  sleep 1
+}
+
+# -----------------------------------------------------
+# Suite header
+# -----------------------------------------------------
+echo "====================================================="
+echo " Akamai CPS Certificate Live Test Suite"
+echo "====================================================="
+echo " Section:            ${SECTION}"
+echo " Access Group:       ${ACCESS_GROUP}"
+echo " Deployment Network: ${NETWORK}"
+echo " Expiry Threshold:   ${EXPIRY_THRESHOLD} days"
+echo " Selected Test:      ${TEST}"
+echo "-----------------------------------------------------"
+
+# =====================================================
+# 1. Get All Expiring Enrollments
+# =====================================================
+run_test "Get All Expiring Enrollments" \
+"python3 akamai_cert_manager.py \
+  --section ${SECTION} \
+  --access_group ${ACCESS_GROUP} \
+  --action get_enrollment \
+  --deployment-network ${NETWORK} \
+  --expiry-threshold ${EXPIRY_THRESHOLD} \
+  --json-only --debug" "1"
+
+# =====================================================
+# Auto-detect enrollment and FQDN (unless manually provided)
+# =====================================================
+if [[ -z "$ENROLLMENT_ID" || -z "$FQDN" ]]; then
+  if [[ -f "$OUTPUT_DIR/discovered_enrollments.json" ]]; then
+    echo "[INFO] Attempting to auto-select first enrollment from discovery output..."
+    ENROLLMENT_ID=$(jq -r '.[0].enrollment_id' "$OUTPUT_DIR/discovered_enrollments.json" 2>/dev/null)
+    FQDN=$(jq -r '.[0].fqdn' "$OUTPUT_DIR/discovered_enrollments.json" 2>/dev/null)
+    if [[ "$ENROLLMENT_ID" == "null" || -z "$ENROLLMENT_ID" ]]; then
+      echo "[WARN] No valid enrollment found in discovery output; manual override required."
+    else
+      echo "[INFO] Auto-selected Enrollment ID: $ENROLLMENT_ID"
+      echo "[INFO] Auto-selected FQDN:          $FQDN"
+    fi
+  else
+    echo "[WARN] Discovery output not found; skipping auto-selection."
+  fi
+fi
+
+# =====================================================
+# 2. Renew Only
+# =====================================================
+run_test "Renew Only" \
+"python3 akamai_cert_manager.py \
+  --section ${SECTION} \
+  --access_group ${ACCESS_GROUP} \
+  --fqdn ${FQDN} \
+  --enrollment_id ${ENROLLMENT_ID} \
+  --action renew_only \
+  --deployment-network ${NETWORK} \
+  --json-only --debug" "2"
+
+# =====================================================
+# 3. Deploy Only
+# =====================================================
+run_test "Deploy Only" \
+"python3 akamai_cert_manager.py \
+  --section ${SECTION} \
+  --access_group ${ACCESS_GROUP} \
+  --fqdn ${FQDN} \
+  --enrollment_id ${ENROLLMENT_ID} \
+  --action deploy_only \
+  --deployment-network ${NETWORK} \
+  --json-only --debug" "3"
+
+# =====================================================
+# 4. Full Renew + Deploy + Poll
+# =====================================================
+run_test "Full Lifecycle (Renew + Deploy + Poll)" \
+"python3 akamai_cert_manager.py \
+  --section ${SECTION} \
+  --access_group ${ACCESS_GROUP} \
+  --fqdn ${FQDN} \
+  --enrollment_id ${ENROLLMENT_ID} \
+  --action renew_and_deploy \
+  --deployment-network ${NETWORK} \
+  --poll-interval ${POLL_INTERVAL} \
+  --poll-timeout ${POLL_TIMEOUT} \
+  --json-only --debug" "4"
+
+# =====================================================
+# 5. Scheduled Deployment (1 hour ahead)
+# =====================================================
+SCHEDULE_TIME=$(date -u -d '+1 hour' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -v+1H -u '+%Y-%m-%dT%H:%M:%SZ')
+echo "[INFO] Scheduled deployment time (UTC): ${SCHEDULE_TIME}"
+
+run_test "Scheduled Deployment (Future Start Time)" \
+"python3 akamai_cert_manager.py \
+  --section ${SECTION} \
+  --access_group ${ACCESS_GROUP} \
+  --fqdn ${FQDN} \
+  --enrollment_id ${ENROLLMENT_ID} \
+  --action deploy_only \
+  --deployment-network ${NETWORK} \
+  --schedule-time ${SCHEDULE_TIME} \
+  --json-only --debug" "5"
+
+# =====================================================
+# Summary
+# =====================================================
+echo "====================================================="
+echo " Live Test Suite Summary"
+echo "====================================================="
+echo " Total Tests Executed : $TOTAL"
+echo " Passed               : $PASS"
+echo " Failed               : $FAIL"
+echo "-----------------------------------------------------"
+
+if [[ $FAIL -eq 0 ]]; then
+  PIPELINE_RESULT="SUCCESS"
+else
+  PIPELINE_RESULT="FAILURE"
+fi
+
+echo "PIPELINE_RESULT=$PIPELINE_RESULT"
+echo "====================================================="
+echo " Live Test Suite Completed ($PIPELINE_RESULT)"
+echo "====================================================="
