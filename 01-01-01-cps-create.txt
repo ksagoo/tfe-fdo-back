@@ -282,3 +282,133 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     sys.exit(validate_entitlement(args.section, args.access_group, args.fqdn))
+
+
+
+#!/bin/bash
+# ===============================================================
+#  Akamai Entitlement Validation Test Suite
+# ===============================================================
+#  Description:
+#     Wrapper script to run entitlement validation for a single
+#     FQDN against Akamai CPS, AppSec, and PAPI APIs using the
+#     Python validator.
+#
+#  The script logs the outcome to the console and generates:
+#     - output/*.json files (raw API and summary data)
+#
+# ---------------------------------------------------------------
+#  Usage Examples:
+# ---------------------------------------------------------------
+#  ./test_suite_entitlement.sh \
+#       --section DEV_APPSEC \
+#       --fqdn espspos-dev-059test.hsbc.com.hk \
+#       --access-group ServiceNow-itilUser
+#
+#  ./test_suite_entitlement.sh \
+#       --section PROD \
+#       --fqdn myapp.hsbc.com \
+#       --access-group CyberWasp
+#
+# ---------------------------------------------------------------
+#  Exit Codes:
+#     0 = Authorized
+#     1 = Unauthorized
+# ===============================================================
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# -------------------------------
+# Resolve Script Directory
+# -------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_CMD="python"
+
+# -------------------------------
+# Default Variables
+# -------------------------------
+SECTION=""
+FQDN=""
+ACCESS_GROUP=""
+OUTPUT_DIR="${SCRIPT_DIR}/output"
+
+# -------------------------------
+# Parse Arguments
+# -------------------------------
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --section)
+      SECTION="$2"
+      shift 2
+      ;;
+    --fqdn)
+      FQDN="$2"
+      shift 2
+      ;;
+    --access-group)
+      ACCESS_GROUP="$2"
+      shift 2
+      ;;
+    *)
+      echo "[ERROR] Unknown argument: $1"
+      echo "Usage: $0 --section <section> --fqdn <fqdn> --access-group <access-group>"
+      exit 1
+      ;;
+  esac
+done
+
+# -------------------------------
+# Validate Inputs
+# -------------------------------
+if [[ -z "$SECTION" || -z "$FQDN" || -z "$ACCESS_GROUP" ]]; then
+  echo "[ERROR] Missing required arguments."
+  echo "Usage: $0 --section <section> --fqdn <fqdn> --access-group <access-group>"
+  exit 1
+fi
+
+# -------------------------------
+# Prepare Environment
+# -------------------------------
+mkdir -p "$OUTPUT_DIR"
+LOG_FILE="${OUTPUT_DIR}/${FQDN}.log"
+
+# -------------------------------
+# Header
+# -------------------------------
+echo "=============================================================="
+echo "  Akamai Entitlement Validation Test Suite"
+echo "=============================================================="
+echo "Section:       $SECTION"
+echo "Access Group:  $ACCESS_GROUP"
+echo "FQDN:          $FQDN"
+echo "--------------------------------------------------------------"
+
+# -------------------------------
+# Run Validation
+# -------------------------------
+echo "[INFO] Starting entitlement validation..."
+$PYTHON_CMD "${SCRIPT_DIR}/akamai_entitlement_validator.py" \
+  --section "$SECTION" \
+  --access-group "$ACCESS_GROUP" \
+  --fqdn "$FQDN" | tee "$LOG_FILE"
+
+RESULT=${PIPESTATUS[0]}
+
+# -------------------------------
+# Output Summary
+# -------------------------------
+echo "--------------------------------------------------------------"
+if [[ $RESULT -eq 0 ]]; then
+  echo "[SUMMARY] Validation Result: AUTHORIZED"
+  echo "[INFO] Entitlement confirmed for $FQDN"
+else
+  echo "[SUMMARY] Validation Result: UNAUTHORIZED"
+  echo "[INFO] No valid entitlement found for $FQDN"
+fi
+echo "--------------------------------------------------------------"
+echo "Output files written to: $OUTPUT_DIR"
+echo "Log file: $LOG_FILE"
+echo "=============================================================="
+
+exit $RESULT
