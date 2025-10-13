@@ -1,5 +1,5 @@
 # =============================================================================
-# PAPI Check (Final Full Match Logic)
+# PAPI Check (Universal parser with full + nested formats)
 # =============================================================================
 def check_papi(session, base_url, fqdn, access_group, debug=False):
     url = f"{base_url}/papi/v1/hostnames"
@@ -13,17 +13,30 @@ def check_papi(session, base_url, fqdn, access_group, debug=False):
 
         fqdn_l = fqdn.lower().rstrip(".")
         ag_l = access_group.lower()
-        hosts = data.get("hostnames") or data.get("items") or []
 
+        # --- Flatten all possible hostname entries ---
+        hosts = []
+        if isinstance(data, dict):
+            if "hostnames" in data:
+                # hostnames may be a list or a dict containing items
+                if isinstance(data["hostnames"], list):
+                    hosts.extend(data["hostnames"])
+                elif isinstance(data["hostnames"], dict):
+                    hosts.extend(data["hostnames"].get("items", []))
+            elif "items" in data:
+                hosts.extend(data["items"])
+        elif isinstance(data, list):
+            hosts.extend(data)
+
+        if debug:
+            print(f"[DEBUG] PAPI host entries found: {len(hosts)}")
+
+        # --- Evaluate matches ---
         for h in hosts:
-            if isinstance(h, str):
-                cname_from = h.lower().rstrip(".")
-                prop_name = ""
-            else:
-                cname_from = str(h.get("cnameFrom", "")).lower().rstrip(".")
-                prop_name = str(h.get("propertyName", "")).lower()
+            cname_from = str(h.get("cnameFrom", "") if isinstance(h, dict) else h).lower().rstrip(".")
+            prop_name = str(h.get("propertyName", "") if isinstance(h, dict) else "").lower()
 
-            fqdn_match = (fqdn_l == cname_from) or (fqdn_l in cname_from)
+            fqdn_match = fqdn_l == cname_from or fqdn_l in cname_from
             ag_match = ag_l in prop_name
 
             if fqdn_match and ag_match:
@@ -33,7 +46,7 @@ def check_papi(session, base_url, fqdn, access_group, debug=False):
                     "matchType": "full"
                 })
                 if debug:
-                    print(f"[DEBUG] PAPI full match → cnameFrom={cname_from}, property={prop_name}")
+                    print(f"[DEBUG] PAPI FULL → cnameFrom={cname_from}, property={prop_name}")
             elif fqdn_match or ag_match:
                 reason = "fqdn_only" if fqdn_match else "access_group_only"
                 partials.append({
@@ -43,7 +56,7 @@ def check_papi(session, base_url, fqdn, access_group, debug=False):
                     "reason": reason
                 })
                 if debug:
-                    print(f"[DEBUG] PAPI partial → cnameFrom={cname_from}, property={prop_name}, reason={reason}")
+                    print(f"[DEBUG] PAPI PARTIAL → cnameFrom={cname_from}, property={prop_name}, reason={reason}")
 
         result = {
             "found": bool(matches),
