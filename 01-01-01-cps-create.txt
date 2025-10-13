@@ -1,100 +1,19 @@
-def check_appsec(session, base_url, contract_id, group_id, access_group, fqdn):
-    """
-    Query AppSec configurations and validate that BOTH:
-      - Access group name is present in configuration name
-      - FQDN appears in configuration payload (e.g. hostnames, notes, etc.)
-    """
-    url = f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
-    print(f"[INFO] AppSec lookup: {url}")
-    result = {"found": False, "url": url, "matches": []}
+import json
+import os
 
+def write_json_safely(filename, resp):
+    """
+    Writes an API response safely as formatted JSON to the output directory.
+    Handles invalid or non-JSON responses gracefully.
+    """
+    os.makedirs("output", exist_ok=True)
+    path = os.path.join("output", filename)
     try:
-        resp = session.get(url, timeout=(10, 60))
-        write_json_safely("appsec_raw.json", resp)
-
-        if resp.status_code != 200:
-            print(f"[FAILURE] AppSec API returned {resp.status_code}")
-            return result
-
-        try:
-            data = resp.json()
-        except Exception:
-            print("[WARNING] AppSec returned non-JSON data.")
-            return result
-
-        fqdn_lower = fqdn.lower()
-        ag_lower = access_group.lower()
-
-        for cfg in data.get("configurations", []):
-            name = cfg.get("name", "")
-            full_payload = json.dumps(cfg).lower()
-
-            # Require both criteria
-            if ag_lower in name.lower() and fqdn_lower in full_payload:
-                result["matches"].append({
-                    "id": cfg.get("id"),
-                    "name": name,
-                    "latestVersion": cfg.get("latestVersion"),
-                    "stagingVersion": cfg.get("stagingVersion"),
-                    "productionVersion": cfg.get("productionVersion"),
-                    "targetProduct": cfg.get("targetProduct")
-                })
-
-        result["found"] = bool(result["matches"])
-        print(f"[RESULT] AppSec: {'FOUND' if result['found'] else 'NOT FOUND'}")
-
-    except Exception as e:
-        print(f"[ERROR] AppSec lookup failed: {e}")
-        traceback.print_exc()
-
-    return result
-
-"appsec": check_appsec(session, base_url, contract_id, group_id, access_group, fqdn),
-
-def check_cps(session, base_url, contract_id, access_group, fqdn):
-    """
-    Validate CPS enrollment by ensuring both FQDN and access group exist
-    within the enrollment metadata.
-    """
-    url = f"{base_url}/cps/v2/enrollments?contractId={contract_id}"
-    print(f"[INFO] CPS lookup: {url}")
-    result = {"found": False, "url": url, "matches": []}
-
-    try:
-        # Correct CPS-specific headers
-        cps_headers = {
-            "Accept": "application/vnd.akamai.cps.enrollments.v1+json",
-            "Content-Type": "application/json"
-        }
-
-        resp = session.get(url, headers=cps_headers, timeout=(10, 60))
-        write_json_safely("cps_raw.json", resp)
-
-        if resp.status_code != 200:
-            print(f"[FAILURE] CPS API returned {resp.status_code}")
-            return result
-
+        # Try JSON first
         data = resp.json()
-        fqdn_lower = fqdn.lower()
-        ag_lower = access_group.lower()
-
-        for enr in data.get("enrollments", []):
-            cnames = json.dumps(enr).lower()
-            if fqdn_lower in cnames and ag_lower in cnames:
-                result["matches"].append({
-                    "id": enr.get("id"),
-                    "cn": enr.get("cn"),
-                    "networkType": enr.get("networkType"),
-                    "expiresInDays": enr.get("daysToExpiration"),
-                })
-
-        result["found"] = bool(result["matches"])
-        print(f"[RESULT] CPS: {'FOUND' if result['found'] else 'NOT FOUND'}")
-
-    except Exception as e:
-        print(f"[ERROR] CPS lookup failed: {e}")
-        traceback.print_exc()
-
-    return result
-
-
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        # Fall back to plain text if not valid JSON
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(resp.text)
