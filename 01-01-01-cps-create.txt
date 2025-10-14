@@ -1,51 +1,43 @@
 from urllib.parse import urljoin
 
-
-if not check_group_exists(session, base_url, access_group, debug=debug):
-    print(f"[ERROR] Access Group '{access_group}' does not exist — aborting validation.")
-    return
-
 def check_group_exists(session, base_url, group_name, debug=False):
     """
-    Checks if an Akamai Access Group already exists in the account.
+    Checks if an Akamai Access Group already exists using the AppSec groups endpoint.
+    This avoids IAM permission issues from user-admin APIs.
 
     Args:
         session: Authenticated Akamai EdgeGrid session
-        base_url (str): Base API hostname (e.g., https://akab-xxxx.luna.akamaiapis.net/)
+        base_url (str): Base API hostname
         group_name (str): Target access group name
-        debug (bool): Optional debug output toggle
+        debug (bool): Enable verbose logging
 
     Returns:
-        bool: True if the group exists, False otherwise
+        bool: True if group exists, False otherwise
     """
     try:
-        url = urljoin(base_url, "identity-management/v3/user-admin/groups")
+        url = urljoin(base_url, "appsec/v1/groups")
         headers = {"accept": "application/json"}
 
-        response = session.get(url, headers=headers, timeout=30)
         if debug:
             print(f"[INFO] Access Group lookup: {url}")
-            print(f"[DEBUG] HTTP {response.status_code}")
 
-        if response.status_code != 200:
-            print(f"[ERROR] Failed to fetch groups: {response.status_code} - {response.text[:300]}")
+        resp = session.get(url, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            print(f"[ERROR] Failed to fetch groups: {resp.status_code} - {resp.text[:300]}")
             return False
 
-        groups_data = response.json()
+        groups = resp.json().get("groups", [])
+        target = group_name.lower().strip()
 
-        # Some tenants return an object like {"groups": [...]}, handle both
-        groups = groups_data.get("groups", groups_data)
-
-        group_name_l = group_name.lower().strip()
         for g in groups:
-            if group_name_l == g.get("groupName", "").lower().strip():
+            name = g.get("groupName", "").lower().strip()
+            if name == target:
                 if debug:
                     print(f"[DEBUG] Group found: {g.get('groupName')} (ID: {g.get('groupId')})")
                 return True
 
         if debug:
-            print(f"[DEBUG] Group '{group_name}' not found in {len(groups)} entries.")
-
+            print(f"[DEBUG] Group '{group_name}' not found in {len(groups)} AppSec groups.")
         return False
 
     except Exception as e:
