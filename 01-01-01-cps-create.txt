@@ -1,160 +1,119 @@
-import re
-import time
-import requests
+import argparse
+import csv
+import os
+import sys
+from datetime import datetime
+from requests import Session
 
-SEP = "—" * 68  # separator line
+# import your function
+from reverse_fqdn_lookup import reverse_fqdn_lookup
 
 
-def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
-    """
-    Performs Akamai reverse lookup for a given FQDN and validates property name
-    against the access group using normalized comparison rules.
+def main():
+    parser = argparse.ArgumentParser(description="Akamai Entitlement Validator Suite")
+    parser.add_argument("--section", required=True, help="Section name (e.g., DEV, PROD)")
+    parser.add_argument("--fqdn", required=True, help="FQDN to validate")
+    parser.add_argument("--access-group", required=True, help="Access group name")
+    parser.add_argument("--all-fqdn", action="store_true", help="Check all related FQDNs from PAPI")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    args = parser.parse_args()
 
-    Returns:
-        dict: {
-            found: bool,
-            groupId: str,
-            propertyName: str,
-            accessGroupName: str,
-            strippedPropertyName: str,
-            matchAccessGroup: bool,
-            matchType: str ('full'|'partial'|'none')
-        }
-    """
+    print("\n" + "=" * 60)
+    print("Akamai Entitlement Validator Suite")
+    print("=" * 60)
+    print(f"Section:       {args.section}")
+    print(f"Access Group:  {args.access_group}")
+    print(f"FQDN:          {args.fqdn}")
+    print(f"Debug Mode:    {'ON' if args.debug else 'OFF'}\n")
 
-    # ------------------------ helper functions ------------------------
+    base_url = "https://akab-g4z5cm6hrbi64j2v-v2fvfyprabsvw5sd.luna.akamaiapis.net"
+    session = Session()
+    fqdn_input = args.fqdn.strip().lower()
 
-    def get_group_name_by_id(sess, base, gid):
-        """Resolve group name from groupId via PAPI."""
-        if not gid:
-            return None
-        gid_clean = str(gid).replace("grp_", "")
-        try:
-            r = sess.get(f"{base}/papi/v1/groups",
-                         headers={"accept": "application/json", "PAPI-Use-Prefixes": "true"},
-                         timeout=20)
-            if r.status_code == 200:
-                data = r.json() or {}
-                for g in (data.get("groups", {}).get("items", []) or []):
-                    if str(g.get("groupId", "")).replace("grp_", "") == gid_clean:
-                        return g.get("groupName")
-        except Exception:
-            pass
-        return None
+    # Single lookup for initial FQDN
+    result_main = reverse_fqdn_lookup(session, base_url, fqdn_input, args.access_group, args.debug)
 
-    def normalize_name(name: str) -> str:
-        """
-        Normalize property/access group name for comparison:
-        - Lowercase
-        - Remove leading 'sd-' (first 3 chars only)
-        - Remove '-prod', '-nonprod', '-non-prod', '_prod', etc.
-        - Remove all non-alphanumeric characters
-        """
-        if not name:
-            return ""
-        n = name.strip().lower()
-        if n.startswith("sd-"):  # first 3 chars only
-            n = n[3:]
-        # remove any prod/nonprod variant at end
-        n = re.sub(r"(-|_)?non[-_]?prod$", "", n)
-        n = re.sub(r"(-|_)?prod$", "", n)
-        # remove punctuation and spaces
-        n = re.sub(r"[^a-z0-9]", "", n)
-        return n
+    fqdn_results = [result_main]
+    fqdn_list = [fqdn_input]
 
-    def print_card(fqdn_disp, ag_disp, prop_disp, match_flag):
-        """Clean and consistent formatted printout for each FQDN."""
-        print(SEP)
-        print(f"{'FQDN:':13} {fqdn_disp}")
-        print(f"{'Access Group:':13} {ag_disp}")
-        print(f"{'Property:':13} {prop_disp}")
-        print(f"{'Match:':13} {'TRUE' if match_flag else 'FALSE'}")
-        print(SEP)
+    # If --all-fqdn is specified, fetch all related hostnames from the PAPI response
+    if args.all_fqdn and result_main.get("found"):
+        print(f"[INFO] Reverse lookup successful for {fqdn_input}")
+        print(f"[INFO] Fetching all hostnames via {base_url}/papi/v1/hostnames")
 
-    # ------------------------ setup ------------------------
-
-    fqdn_l = fqdn.strip().lower()
-    ag_display = access_group or ""
-    ag_norm = normalize_name(ag_display)
-
-    result = {
-        "found": False,
-        "groupId": None,
-        "propertyName": None,
-        "accessGroupName": None,
-        "strippedPropertyName": None,
-        "matchAccessGroup": False,
-        "matchType": "none",
-    }
-
-    url = f"{base_url}/papi/v1/hostnames?search={fqdn_l}"
-    if debug:
-        print(f"\n[INFO] Performing reverse lookup for: {fqdn_l}")
-        print(f"[DEBUG] PAPI URL: {url}")
-
-    # ------------------------ API call with retry ------------------------
-    for attempt in range(3):
         try:
             resp = session.get(
-                url,
+                f"{base_url}/papi/v1/hostnames",
                 headers={"accept": "application/json", "PAPI-Use-Prefixes": "true"},
                 timeout=30,
             )
-            break
-        except requests.exceptions.RequestException as e:
-            if attempt < 2:
-                print(f"[WARN] Attempt {attempt + 1} failed: {e} — retrying...")
-                time.sleep(2 ** attempt)
+            if resp.status_code == 200:
+                data = resp.json() or {}
+                host_entries = (
+                    (data.get("items"))
+                    or (data.get("hostnames", {}).get("items") if isinstance(data.get("hostnames"), dict) else None)
+                    or (data.get("hostnames") if isinstance(data.get("hostnames"), list) else None)
+                    or []
+                )
+                fqdn_list = list({entry.get("cnameFrom", "").lower() for entry in host_entries if entry.get("cnameFrom")})
+                print(f"[INFO] Retrieved {len(fqdn_list)} FQDNs from PAPI.")
             else:
-                print(f"[ERROR] Reverse lookup failed for {fqdn_l}: {e}")
-                return result
+                print(f"[WARN] Failed to retrieve all FQDNs, HTTP {resp.status_code}")
+        except Exception as e:
+            print(f"[ERROR] Unable to fetch FQDNs from PAPI: {e}")
 
-    if resp.status_code != 200:
-        print(f"[ERROR] HTTP {resp.status_code} during reverse lookup for {fqdn_l}")
-        return result
+    # Deduplicate the FQDNs before running lookups
+    fqdn_list = sorted(set(fqdn_list))
+    print(f"[INFO] Running reverse lookup for {len(fqdn_list)} FQDNs...\n")
 
-    data = resp.json() or {}
-    host_entries = (
-        (data.get("items"))
-        or (data.get("hostnames", {}).get("items") if isinstance(data.get("hostnames"), dict) else None)
-        or (data.get("hostnames") if isinstance(data.get("hostnames"), list) else None)
-        or []
-    )
-
-    if not host_entries:
-        print_card(fqdn_l, ag_display, "<none>", False)
-        return result
-
-    # ------------------------ evaluate entries ------------------------
-    for entry in host_entries:
-        cname_from = str(entry.get("cnameFrom", "")).lower()
-        cname_to = str(entry.get("stagingCnameTo", "")).lower()
-        edge_host = str(entry.get("stagingEdgeHostnameId", "")).lower()
-
-        if fqdn_l not in (cname_from, cname_to, edge_host) and fqdn_l not in cname_from:
+    results = []
+    seen_fqdns = set()
+    for fqdn in fqdn_list:
+        if fqdn in seen_fqdns:
             continue
+        seen_fqdns.add(fqdn)
+        res = reverse_fqdn_lookup(session, base_url, fqdn, args.access_group, args.debug)
+        results.append(res)
 
-        property_name = entry.get("propertyName") or ""
-        prop_norm = normalize_name(property_name)
-        match_flag = (prop_norm == ag_norm)
+    # Write summary CSV
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    os.makedirs("output", exist_ok=True)
+    csv_path = f"output/reverse_fqdn_summary_{fqdn_input.replace('.', '_')}_{timestamp}.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(
+            csvfile,
+            fieldnames=[
+                "FQDN", "AccessGroup", "PropertyName", "NormalizedProperty", "Match"
+            ],
+        )
+        writer.writeheader()
+        for res in results:
+            writer.writerow({
+                "FQDN": fqdn_input,
+                "AccessGroup": args.access_group,
+                "PropertyName": res.get("propertyName"),
+                "NormalizedProperty": res.get("strippedPropertyName"),
+                "Match": res.get("matchAccessGroup"),
+            })
 
-        group_id = entry.get("groupId")
-        ag_name_from_id = get_group_name_by_id(session, base_url, group_id)
+    print(f"[INFO] Reverse FQDN summary written to: {csv_path}")
+    print(f"[INFO] Total FQDNs processed: {len(results)}")
+    print("[INFO] All reverse lookups complete.\n")
 
-        result.update({
-            "found": True,
-            "groupId": group_id,
-            "propertyName": property_name,
-            "accessGroupName": ag_name_from_id,
-            "strippedPropertyName": prop_norm,
-            "matchAccessGroup": match_flag,
-            "matchType": "full" if match_flag else "partial",
-        })
+    # Determine final result summary
+    papi_found = any(r.get("found") for r in results)
+    appsec_match = any(r.get("matchAccessGroup") for r in results)
 
-        print_card(fqdn_l, ag_display, property_name, match_flag)
+    print(f"[RESULT] CPS: PARTIAL MATCH")
+    print(f"[RESULT] AppSec: {'FULL MATCH' if appsec_match else 'PARTIAL MATCH'}")
+    print(f"[RESULT] PAPI: {'FOUND' if papi_found else 'NOT FOUND'}\n")
 
-        if match_flag:  # stop on first TRUE
-            return result
+    if appsec_match or papi_found:
+        print("[SUMMARY] Validation Result: AUTHORIZED")
+        print("[SUMMARY] Validated by: CPS (partial), AppSec, PAPI\n")
+    else:
+        print("[SUMMARY] Validation Result: UNAUTHORIZED\n")
 
-    # If we got here: no matches were TRUE
-    return result
+
+if __name__ == "__main__":
+    sys.exit(main())
