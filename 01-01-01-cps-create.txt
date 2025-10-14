@@ -1,4 +1,15 @@
-fqdn_list = get_all_fqdns(session, base_url, debug=args.debug)
-fqdn_list = sorted(set(fqdn_list))  # ✅ remove duplicates
-print(f"[INFO] Retrieved {len(fqdn_list)} unique FQDNs from PAPI.")
-print(f"[INFO] Running reverse lookup for {len(fqdn_list)} FQDNs...\n")
+def print_fqdn_result(fqdn, access_group, property_name, match):
+    """Consistent, clean formatting for each FQDN result."""
+    print("=" * 70)
+    print(f"{'FQDN:':<15}{fqdn}")
+    print(f"{'Access Group:':<15}{access_group}")
+    print(f"{'Property:':<15}{property_name}")
+    print(f"{'Match:':<15}{str(match).upper()}")
+    print("=" * 70)
+    print()  # blank line for spacing
+
+
+for fqdn_item in fqdn_list:
+    result = reverse_fqdn_lookup(session, base_url, fqdn_item, access_group, debug=args.debug)
+    if result:
+        print_fqdn_result(result["fqdn"], result["access_group"], result["property"], result["match"])
