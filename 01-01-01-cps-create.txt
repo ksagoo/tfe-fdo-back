@@ -1,94 +1,53 @@
-def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group, debug=False):
+from urllib.parse import urljoin
+
+
+if not check_group_exists(session, base_url, access_group, debug=debug):
+    print(f"[ERROR] Access Group '{access_group}' does not exist — aborting validation.")
+    return
+
+def check_group_exists(session, base_url, group_name, debug=False):
     """
-    Enhanced AppSec entitlement lookup:
-    Full match if fqdn in productionHostnames AND access_group substring in config name
+    Checks if an Akamai Access Group already exists in the account.
+
+    Args:
+        session: Authenticated Akamai EdgeGrid session
+        base_url (str): Base API hostname (e.g., https://akab-xxxx.luna.akamaiapis.net/)
+        group_name (str): Target access group name
+        debug (bool): Optional debug output toggle
+
+    Returns:
+        bool: True if the group exists, False otherwise
     """
-    import json, re, traceback, os
-
-    def sanitize_filename(name):
-        return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name))
-
-    def to_lower(v):
-        return str(v).lower().strip() if isinstance(v, (str, int)) else ""
-
-    fqdn_l = to_lower(fqdn)
-    ag_l = to_lower(access_group)
-
-    url = f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
-    print(f"[INFO] AppSec lookup: {url}")
-
-    result = {"found": False, "partial": False, "url": url, "matches": [], "partial_matches": []}
-
     try:
-        resp = session.get(url, timeout=30)
+        url = urljoin(base_url, "identity-management/v3/user-admin/groups")
+        headers = {"accept": "application/json"}
+
+        response = session.get(url, headers=headers, timeout=30)
+        if debug:
+            print(f"[INFO] Access Group lookup: {url}")
+            print(f"[DEBUG] HTTP {response.status_code}")
+
+        if response.status_code != 200:
+            print(f"[ERROR] Failed to fetch groups: {response.status_code} - {response.text[:300]}")
+            return False
+
+        groups_data = response.json()
+
+        # Some tenants return an object like {"groups": [...]}, handle both
+        groups = groups_data.get("groups", groups_data)
+
+        group_name_l = group_name.lower().strip()
+        for g in groups:
+            if group_name_l == g.get("groupName", "").lower().strip():
+                if debug:
+                    print(f"[DEBUG] Group found: {g.get('groupName')} (ID: {g.get('groupId')})")
+                return True
 
         if debug:
-            os.makedirs("output", exist_ok=True)
-            with open(f"output/raw_appsec_list_{sanitize_filename(fqdn)}.json", "w") as f:
-                f.write(resp.text)
+            print(f"[DEBUG] Group '{group_name}' not found in {len(groups)} entries.")
 
-        if resp.status_code != 200:
-            print(f"[ERROR] AppSec lookup failed: HTTP {resp.status_code}")
-            return result
-
-        data = resp.json()
-        configs = data.get("configurations", [])
-        print(f"[DEBUG] AppSec configs returned: {len(configs)}")
-
-        for cfg in configs:
-            cfg_id = cfg.get("id")
-            cfg_name = cfg.get("name", "")
-            name_l = to_lower(cfg_name)
-
-            # Check if access group name substring is in config name
-            ag_match = ag_l in name_l
-
-            cfg_url = f"{base_url}/appsec/v1/configs/{cfg_id}?includeHostnames=true"
-            cfg_resp = session.get(cfg_url, timeout=30)
-
-            if debug:
-                with open(f"output/raw_appsec_cfg_{cfg_id}_{sanitize_filename(fqdn)}.json", "w") as f:
-                    f.write(cfg_resp.text)
-
-            if cfg_resp.status_code != 200:
-                continue
-
-            cfg_data = cfg_resp.json()
-            hostnames = [to_lower(h) for h in cfg_data.get("productionHostnames", [])]
-
-            fqdn_match = fqdn_l in hostnames
-
-            if fqdn_match and ag_match:
-                result["matches"].append({
-                    "id": cfg_id,
-                    "name": cfg_name,
-                    "matchType": "full",
-                    "reason": "fqdn_and_access_group_in_same_config"
-                })
-                result["found"] = True
-                print(f"[DEBUG] FULL match: {cfg_name}")
-            elif fqdn_match or ag_match:
-                reason = "fqdn_only" if fqdn_match else "access_group_only"
-                result["partial_matches"].append({
-                    "id": cfg_id,
-                    "name": cfg_name,
-                    "matchType": "partial",
-                    "reason": reason
-                })
-                result["partial"] = True
-                print(f"[DEBUG] PARTIAL match: {cfg_name} ({reason})")
-
-        if result["found"]:
-            print("[RESULT] AppSec: FOUND")
-        elif result["partial"]:
-            print("[RESULT] AppSec: PARTIAL MATCH")
-        else:
-            print("[RESULT] AppSec: NOT FOUND")
-
-        return result
+        return False
 
     except Exception as e:
-        print(f"[ERROR] AppSec check failed: {e}")
-        if debug:
-            traceback.print_exc()
-        return result
+        print(f"[ERROR] check_group_exists() failed: {e}")
+        return False
