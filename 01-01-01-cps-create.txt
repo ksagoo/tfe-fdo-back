@@ -1,25 +1,23 @@
 # ==============================================================
-# AppSec Check — Match Access Group + FQDN inside productionHostnames
+# AppSec Check — Final Schema-Correct Version
 # ==============================================================
 
 import json
 import os
 import traceback
 
+
 def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_group, debug=False):
     """
-    Validates AppSec configuration entitlements.
+    Validates AppSec configuration entitlements using correct schema.
 
-    Logic:
-      1. Search AppSec configurations within the given contract/group.
-      2. Filter configs where the access_group appears in the config name.
-      3. Within those, search fqdn in productionHostnames.
-      4. Full match = fqdn exactly matches a hostname.
-         Partial = fqdn substring match within a hostname.
+    Steps:
+      1. Query /appsec/v1/configs?contractId=&groupId=
+      2. Filter configs whose name contains the access_group
+      3. Within those, search fqdn in productionHostnames (if key present)
+      4. Marks FOUND or PARTIAL MATCH accordingly
 
-    Always writes debug files when --debug is enabled:
-      - Raw HTTP response (.txt)
-      - Parsed JSON (.json)
+    Always writes raw + parsed JSON when debug=True.
     """
 
     def safe_lower(v):
@@ -27,39 +25,37 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
             return v.lower().strip()
         return str(v).lower().strip() if v else ""
 
+    fqdn_lower = safe_lower(fqdn)
+    ag_lower = safe_lower(access_group)
+
     result = {
         "found": False,
         "partial": False,
         "url": f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}",
         "matches": [],
-        "partial_matches": []
+        "partial_matches": [],
     }
-
-    fqdn_lower = safe_lower(fqdn)
-    ag_lower = safe_lower(access_group)
 
     try:
         url = result["url"]
         print(f"[INFO] AppSec lookup: {url}")
-
         resp = session.get(url, timeout=30)
 
-        # Always save raw response for debugging
+        # Always save raw HTTP response in debug mode
         if debug:
             _write_raw_http(fqdn, "appsec", resp.text)
 
         if resp.status_code == 403:
-            print("[WARN] AppSec access denied (HTTP 403): insufficient permissions.")
+            print("[WARN] AppSec access denied (HTTP 403)")
             result["partial_matches"].append({"reason": "access_denied"})
             return result
 
         if resp.status_code != 200:
             print(f"[ERROR] AppSec lookup failed with HTTP {resp.status_code}")
             if debug:
-                _write_debug_json(fqdn, "appsec", {"status_code": resp.status_code, "response": resp.text[:400]})
+                _write_debug_json(fqdn, "appsec", {"status_code": resp.status_code, "response": resp.text[:500]})
             return result
 
-        # Parse response JSON
         try:
             data = resp.json()
         except Exception as e:
@@ -68,7 +64,6 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
                 _write_debug_json(fqdn, "appsec", {"error": str(e), "raw": resp.text[:400]})
             return result
 
-        # Save parsed JSON for inspection
         if debug:
             _write_debug_json(fqdn, "appsec", data)
 
@@ -78,16 +73,21 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
         for cfg in configs:
             cfg_name = safe_lower(cfg.get("name"))
             cfg_id = cfg.get("id")
+
+            if ag_lower not in cfg_name:
+                continue  # skip unrelated configs
+
             prod_hosts = cfg.get("productionHostnames", [])
 
-            # --- Filter by access group name match
-            if ag_lower not in cfg_name:
+            # Skip configs without hostname data (not yet deployed)
+            if not isinstance(prod_hosts, list) or not prod_hosts:
+                if debug:
+                    print(f"[DEBUG] Config '{cfg.get('name')}' (ID {cfg_id}) has no productionHostnames")
                 continue
 
             if debug:
-                print(f"[DEBUG] Checking config '{cfg.get('name')}' (ID {cfg_id}) for FQDN {fqdn_lower}")
+                print(f"[DEBUG] Checking '{cfg.get('name')}' for {fqdn_lower} in productionHostnames ({len(prod_hosts)} entries)")
 
-            # --- Now search inside productionHostnames
             for hn in prod_hosts:
                 hn_lower = safe_lower(hn)
 
@@ -96,7 +96,7 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
                         "id": cfg_id,
                         "hostname": hn,
                         "matchType": "full",
-                        "reason": "fqdn_in_productionHostnames"
+                        "reason": "fqdn_in_productionHostnames",
                     })
                     result["found"] = True
 
@@ -105,11 +105,10 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
                         "id": cfg_id,
                         "hostname": hn,
                         "matchType": "partial",
-                        "reason": "partial_fqdn_in_productionHostnames"
+                        "reason": "partial_fqdn_in_productionHostnames",
                     })
                     result["partial"] = True
 
-        # --- Summary
         print(f"[RESULT] AppSec: {'FOUND' if result['found'] else ('PARTIAL MATCH' if result['partial'] else 'NOT FOUND')}")
 
         if debug:
@@ -122,7 +121,7 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
                 for p in result["partial_matches"]:
                     print(f"  → {p}")
             if not result["found"] and not result["partial"]:
-                print("[DEBUG] No AppSec matches found — inspect output/debug_appsec_*.json")
+                print("[DEBUG] No AppSec matches found — check debug_appsec_*.json")
 
         return result
 
@@ -134,7 +133,7 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
 
 
 # ==============================================================
-# Helpers
+# Helper functions
 # ==============================================================
 
 def _write_raw_http(fqdn, category, raw_text):
@@ -148,6 +147,7 @@ def _write_raw_http(fqdn, category, raw_text):
         print(f"[DEBUG] Raw {category} HTTP saved to {file_path}")
     except Exception as e:
         print(f"[WARN] Could not write {category} raw HTTP: {e}")
+
 
 def _write_debug_json(fqdn, category, data):
     """Writes parsed JSON output to a .json file."""
