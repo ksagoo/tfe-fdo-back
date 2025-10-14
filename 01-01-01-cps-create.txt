@@ -1,8 +1,17 @@
-def check_appsec(session, base_url, fqdn, access_group, debug=False):
-    """Validate against AppSec API, including nested hostnames in productionHostnames/stagingHostnames."""
-    url = f"https://{base_url}/appsec/v1/configs?contractId=V-5A82MTA&groupId=272095"
+def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_group, debug=False):
+    """
+    Validates AppSec configuration entitlements.
+
+    Checks whether the given FQDN and access group are authorized under Akamai AppSec.
+    Supports nested hostname matching within 'productionHostnames' and 'stagingHostnames'.
+
+    Returns a structured result with full and partial match details.
+    """
+    url = f"https://{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
+
     if debug:
         print(f"[INFO] AppSec lookup: {url}")
+
     result = {
         "found": False,
         "partial": False,
@@ -13,50 +22,67 @@ def check_appsec(session, base_url, fqdn, access_group, debug=False):
 
     try:
         resp = session.get(url)
-        data = resp.json()
+        if resp.status_code != 200:
+            print(f"[ERROR] AppSec lookup failed with HTTP {resp.status_code}")
+            if debug:
+                print(resp.text[:400])  # print snippet of response for diagnostics
+            return result
 
-        for item in data.get("configurations", []):
+        try:
+            data = resp.json()
+        except Exception:
+            print("[ERROR] AppSec lookup failed: Response not JSON (possibly HTML or empty).")
+            if debug:
+                print(resp.text[:400])
+            return result
+
+        configs = data.get("configurations", [])
+        if not configs and debug:
+            print("[DEBUG] AppSec: No configurations found in API response.")
+
+        for item in configs:
             name = item.get("name", "")
+            config_id = item.get("id")
             prod_hosts = item.get("productionHostnames", [])
             staging_hosts = item.get("stagingHostnames", [])
             all_hosts = prod_hosts + staging_hosts
 
-            # --- FULL MATCH: FQDN appears in nested hostnames and access group matches ---
+            # --- FULL MATCH ---
             if fqdn in all_hosts and access_group in name:
                 result["found"] = True
                 result["matches"].append({
-                    "id": item.get("id"),
+                    "id": config_id,
                     "name": name,
                     "matchType": "full",
                     "fqdn": fqdn,
                     "source": "productionHostnames" if fqdn in prod_hosts else "stagingHostnames"
                 })
                 if debug:
-                    print(f"[DEBUG] AppSec FULL = fqdn={fqdn}, config={name}")
+                    print(f"[DEBUG] AppSec FULL MATCH → fqdn={fqdn}, config={name}")
 
-            # --- PARTIAL MATCH: access group matches but FQDN not listed ---
+            # --- PARTIAL (Access Group only) ---
             elif access_group in name:
                 result["partial"] = True
                 result["partial_matches"].append({
-                    "id": item.get("id"),
+                    "id": config_id,
                     "name": name,
                     "matchType": "partial",
                     "reason": "access_group_only"
                 })
                 if debug:
-                    print(f"[DEBUG] AppSec PARTIAL = access_group={access_group}, config={name}")
+                    print(f"[DEBUG] AppSec PARTIAL (Access Group only) → config={name}")
 
-            # --- PARTIAL MATCH: FQDN found in hostnames, but unrelated config ---
+            # --- PARTIAL (FQDN only) ---
             elif fqdn in all_hosts:
                 result["partial"] = True
                 result["partial_matches"].append({
-                    "id": item.get("id"),
+                    "id": config_id,
                     "name": name,
                     "matchType": "partial",
                     "reason": "fqdn_only"
                 })
                 if debug:
-                    print(f"[DEBUG] AppSec PARTIAL = fqdn={fqdn}, config={name}")
+                    print(f"[DEBUG] AppSec PARTIAL (FQDN only) → fqdn={fqdn}, config={name}")
 
         if debug:
             if result["found"]:
