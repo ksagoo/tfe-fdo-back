@@ -1,25 +1,16 @@
 def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
     """
-    Reverse lookup for a given FQDN via PAPI, then normalize/compare:
-      - lowercase both sides
-      - remove 'sd-' prefix ONLY if first 3 characters
-      - remove trailing '-nonprod' (8 chars) or '-prod' (4 chars)
-      - compare stripped property name to access group
-    Returns:
-      {
-        'found': bool,
-        'groupId': str|None,
-        'propertyName': str|None,
-        'accessGroupName': str|None,
-        'strippedPropertyName': str|None,
-        'matchAccessGroup': bool|None,
-        'matchType': 'full'|'partial'|'none'
-      }
+    Reverse lookup for a given FQDN via PAPI, then compare normalized names:
+    - lowercase both sides
+    - remove 'sd-' prefix (first 3 chars only)
+    - remove trailing '-nonprod' or '-prod'
+    - compare stripped property to access group
     """
+
     import requests
     import time
 
-    # --- Helper: Resolve group name by ID ---
+    # ---- Helper: get group name ----
     def get_group_name_by_id(sess, base, gid):
         try:
             r = sess.get(f"{base}/papi/v1/groups",
@@ -45,7 +36,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
             pass
         return None
 
-    # --- Initialize result ---
+    # ---- Initialize result ----
     result = {
         "found": False,
         "groupId": None,
@@ -59,7 +50,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
     fqdn = (fqdn or "").strip().lower()
     access_group_l = (access_group or "").strip().lower()
 
-    # --- PAPI reverse lookup ---
+    # ---- PAPI reverse lookup ----
     url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
     if debug:
         print("\n==== Starting Reverse FQDN Lookup ====")
@@ -75,18 +66,20 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
             break
         except requests.exceptions.RequestException as e:
             if attempt < 2:
-                if debug: print(f"[WARN] Request failed ({e}), retrying...")
+                if debug:
+                    print(f"[WARN] Request failed ({e}), retrying...")
                 time.sleep(2 ** attempt)
             else:
-                if debug: print(f"[ERROR] Reverse lookup failed after retries: {e}")
+                print(f"[ERROR] Reverse lookup failed after retries: {e}")
                 return result
 
     if resp.status_code != 200:
-        if debug: print(f"[ERROR] PAPI reverse lookup failed: HTTP {resp.status_code}")
+        print(f"[ERROR] PAPI reverse lookup failed: HTTP {resp.status_code}")
         return result
 
     data = resp.json() or {}
     host_entries = []
+
     if isinstance(data, list):
         host_entries = data
     elif isinstance(data, dict):
@@ -100,10 +93,11 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
                 host_entries = hn
 
     if not host_entries:
-        if debug: print(f"[WARN] No hostnames found for {fqdn}")
+        if debug:
+            print(f"[WARN] No hostnames found for {fqdn}")
         return result
 
-    # --- choose best hit ---
+    # ---- Pick best match ----
     full_hit = None
     partial_hit = None
     for entry in host_entries:
@@ -117,53 +111,56 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
             full_hit = entry
             break
         if fqdn in cname_from or fqdn in cname_to:
-            partial_hit = partial_hit or entry
+            if not partial_hit:
+                partial_hit = entry
 
     hit = full_hit or partial_hit
     if not hit:
-        if debug: print(f"[WARN] No matching entry for {fqdn}")
+        if debug:
+            print(f"[WARN] No matching entry found for {fqdn}")
         return result
 
-    # --- extract + normalize ---
+    # ---- Extract property & normalize ----
     group_id = hit.get("groupId") or None
-    prop_name = hit.get("propertyName") or ""
-    prop_l = prop_name.strip().lower()
+    property_name = hit.get("propertyName") or ""
+    prop_l = property_name.strip().lower()
 
-    # remove 'sd-' ONLY if it's literally the first three chars
+    # remove first 3 chars if "sd-"
     if prop_l.startswith("sd-"):
         prop_l = prop_l[3:]
 
-    # strip trailing environment tags
+    # remove -nonprod or -prod
     if prop_l.endswith("-nonprod"):
         prop_l = prop_l[:-8]
     elif prop_l.endswith("-prod"):
         prop_l = prop_l[:-4]
 
     prop_l = prop_l.strip()
-    access_group_name = get_group_name_by_id(session, base_url, group_id)
-    match_flag = (prop_l == access_group_l)
 
-    # --- fill result ---
+    access_group_name = get_group_name_by_id(session, base_url, group_id)
+    match_flag = prop_l == access_group_l
+
+    # ---- Store result ----
     result.update({
         "found": True,
         "groupId": group_id,
-        "propertyName": prop_name,
+        "propertyName": property_name,
         "accessGroupName": access_group_name,
         "strippedPropertyName": prop_l,
         "matchAccessGroup": match_flag,
         "matchType": "full" if full_hit else "partial",
     })
 
-    # --- print output ---
+    # ---- Output summary ----
     print(f"\nFQDN:        {fqdn}")
     print(f"Access Group: {access_group}")
-    print(f"Property:    {prop_name}")
+    print(f"Property:    {property_name}")
     print(f"Match:       {'TRUE' if match_flag else 'FALSE'}")
 
     if debug:
         print(f"[DEBUG] Stripped property (lower): {prop_l}")
         print(f"[DEBUG] Access group (lower):     {access_group_l}")
         print(f"[DEBUG] Match type:               {'FULL' if full_hit else 'PARTIAL'}")
-        print(f"[DEBUG] groupId:                  {group_id} ({access_group_name or 'UNKNOWN'})")
+        print(f"[DEBUG] Group ID:                 {group_id} ({access_group_name or 'UNKNOWN'})")
 
     return result
