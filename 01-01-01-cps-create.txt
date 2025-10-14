@@ -1,4 +1,4 @@
- def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
+def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
     """
     Perform a reverse FQDN lookup using Akamai PAPI APIs.
     Returns dict:
@@ -12,18 +12,26 @@
         'matchType': 'full' | 'partial' | 'none'
       }
     """
-    import re, time
-    import requests
+    import re, time, requests
     from urllib.parse import urljoin
 
     # ---------------- Helper functions ----------------
-    def normalize_all(s):
-        """Normalize name by removing prefixes, suffixes, symbols and lowercasing."""
-        s = (s or "").strip()
-        s = re.sub(r"^sd[-_ ]?", "", s, flags=re.IGNORECASE)
-        s = re.sub(r"[-_ ]?(?:non[-_ ]?prod|prod)$", "", s, flags=re.IGNORECASE)
-        s = re.sub(r"[-_]{2,}", "-", s)
-        return re.sub(r"[^a-z0-9]", "", s.lower())
+    def normalize_name(name: str) -> str:
+        """
+        Normalize property/access group names for comparison.
+        Handles SD- prefix, -Prod / -NonProd suffixes, underscores, and case.
+        """
+        name = (name or "").strip()
+        # Remove SD-, SD_, sd-
+        name = re.sub(r"^sd[-_ ]*", "", name, flags=re.IGNORECASE)
+        # Remove -Prod, -NonProd (handles cases like -non-prod, _Prod, etc.)
+        name = re.sub(r"[-_ ]*(non[-_ ]?prod|prod)$", "", name, flags=re.IGNORECASE)
+        # Collapse double separators
+        name = re.sub(r"[-_]{2,}", "-", name)
+        # Strip trailing dash/underscore
+        name = name.strip("-_ ")
+        # Lowercase and remove all non-alphanumeric
+        return re.sub(r"[^a-z0-9]", "", name.lower())
 
     _group_cache = {}
 
@@ -31,7 +39,6 @@
         """Resolve Akamai groupId → human-readable name via PAPI or IM APIs."""
         if not group_id:
             return f"[unknown:{group_id}]"
-
         if group_id in _group_cache:
             return _group_cache[group_id]
 
@@ -155,10 +162,10 @@
 
     # --- Normalization + Comparison ---
     stripped_prop = property_name.strip()
-    stripped_prop_norm = normalize_all(stripped_prop)
-    access_group_norm = normalize_all(access_group)
+    stripped_norm = normalize_name(stripped_prop)
+    access_norm = normalize_name(access_group)
 
-    match_access = stripped_prop_norm == access_group_norm
+    match_access = stripped_norm == access_norm
 
     result.update({
         "found": True,
@@ -178,8 +185,8 @@
 
     if debug:
         print(f"[DEBUG] Stripped Property Name: {stripped_prop}")
-        print(f"[DEBUG] Normalized Property:    {stripped_prop_norm}")
-        print(f"[DEBUG] Normalized AccessGroup: {access_group_norm}")
+        print(f"[DEBUG] Normalized Property:    {stripped_norm}")
+        print(f"[DEBUG] Normalized AccessGroup: {access_norm}")
         print(f"[DEBUG] Match Type: {'FULL' if full_hit else 'PARTIAL'}")
         print(f"[DEBUG] Group ID: {group_id} ({access_group_name})")
 
