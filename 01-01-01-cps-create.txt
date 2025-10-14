@@ -1,7 +1,3 @@
-import json
-import os
-from urllib.parse import urljoin
-
 def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
     """
     Perform a reverse lookup for a given FQDN using PAPI hostnames endpoint.
@@ -29,14 +25,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
             return result
 
         data = resp.json()
-
-        #  Support both possible structures (list or dict with "hostnames" key)
-        if isinstance(data, list):
-            host_entries = data
-        elif isinstance(data, dict):
-            host_entries = data.get("hostnames", [])
-        else:
-            host_entries = []
+        host_entries = data if isinstance(data, list) else data.get("hostnames", [])
 
         if debug:
             print(f"[DEBUG] Total host entries returned: {len(host_entries)}")
@@ -46,14 +35,18 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
                 continue
 
             cname_from = entry.get("cnameFrom", "").lower()
-            if fqdn.lower() in cname_from:
-                group_id = entry.get("groupId")
-                property_name = entry.get("propertyName")
+            cname_to = entry.get("cnameTo", "").lower()
+            edge_hostname = entry.get("edgeHostname", "").lower()
 
-                # Derive access group via lookup function
+            # Broaden match logic
+            if fqdn.lower() in (cname_from, cname_to, edge_hostname):
+                group_id = entry.get("groupId")
+                property_name = entry.get("propertyName", "UNKNOWN")
+
+                # Get group name
                 access_group_name = get_group_name_by_id(session, base_url, group_id)
 
-                # Strip prefixes/suffixes
+                # Clean property name
                 stripped_name = property_name
                 if stripped_name.startswith("SD-"):
                     stripped_name = stripped_name[3:]
@@ -61,7 +54,6 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
                     if stripped_name.endswith(suffix):
                         stripped_name = stripped_name[: -len(suffix)]
 
-                # Populate result
                 result.update({
                     "groupId": group_id,
                     "propertyName": property_name,
@@ -69,7 +61,6 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
                     "strippedPropertyName": stripped_name
                 })
 
-                # Always print summary
                 print("\n=== Reverse FQDN Lookup Result ===")
                 print(f"FQDN: {fqdn}")
                 print(f"Group ID: {group_id}")
@@ -78,7 +69,6 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
                 print(f"Stripped Property Name: {stripped_name}")
                 print("===================================\n")
 
-                # Write debug file
                 if debug:
                     os.makedirs("output", exist_ok=True)
                     out_file = os.path.join("output", f"reverse_lookup_{fqdn.replace('.', '_')}.json")
@@ -86,7 +76,10 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
                         json.dump(result, f, indent=2)
                     print(f"[DEBUG] Reverse lookup JSON written to: {out_file}")
 
-                return result  #  Stop after first valid match
+                return result
+
+            elif debug:
+                print(f"[DEBUG] No direct match for entry: {entry.get('cnameFrom')} → {entry.get('propertyName')}")
 
         print(f"[WARN] No results found for {fqdn}")
 
