@@ -1,5 +1,5 @@
 # ==============================================================
-# AppSec Check — Strict Matching Version
+# AppSec Check — Strict Matching Version (Safe Type Handling)
 # ==============================================================
 def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_group, debug=False):
     """
@@ -16,7 +16,7 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
     Always writes raw JSON output to 'output/appsec_raw.json' when --debug is set.
     """
 
-    import traceback
+    import traceback, os, json
 
     url = f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
     print(f"[INFO] AppSec lookup: {url}")
@@ -66,7 +66,14 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
 
         for cfg in configs:
             name = str(cfg.get("name", "")).lower()
-            hostnames = [h.lower() for h in cfg.get("productionHostnames", [])]
+
+            # Safely normalize productionHostnames
+            host_field = cfg.get("productionHostnames", [])
+            if not isinstance(host_field, list):
+                hostnames = []
+            else:
+                hostnames = [h.lower() for h in host_field if isinstance(h, str)]
+
             cfg_id = cfg.get("id")
             match_logged = False
 
