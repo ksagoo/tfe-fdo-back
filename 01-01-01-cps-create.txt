@@ -5,7 +5,7 @@ from urllib.parse import urljoin
 def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
     """
     Perform a reverse lookup for a given FQDN using PAPI hostnames endpoint.
-    Returns groupId, propertyName, accessGroupName, and strippedPropertyName.
+    Supports both array and object response schemas.
     """
     result = {
         "fqdn": fqdn,
@@ -29,11 +29,22 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
             return result
 
         data = resp.json()
-        host_entries = data.get("hostnames", [])
+
+        #  Support both possible structures (list or dict with "hostnames" key)
+        if isinstance(data, list):
+            host_entries = data
+        elif isinstance(data, dict):
+            host_entries = data.get("hostnames", [])
+        else:
+            host_entries = []
+
         if debug:
             print(f"[DEBUG] Total host entries returned: {len(host_entries)}")
 
         for entry in host_entries:
+            if not isinstance(entry, dict):
+                continue
+
             cname_from = entry.get("cnameFrom", "").lower()
             if fqdn.lower() in cname_from:
                 group_id = entry.get("groupId")
@@ -77,46 +88,9 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
 
                 return result  #  Stop after first valid match
 
-        print(f"[WARN] No match found in PAPI for FQDN: {fqdn}")
+        print(f"[WARN] No results found for {fqdn}")
 
     except Exception as e:
         print(f"[ERROR] reverse_fqdn_lookup() failed: {e}")
 
     return result
-
-
-
-
-def get_group_name_by_id(session, base_url, group_id):
-    """
-    Lookup the access group name for a given groupId.
-    """
-    try:
-        url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{group_id}")
-        resp = session.get(url, timeout=30)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get("groupName") or data.get("name")
-        else:
-            return f"[unknown:{group_id}]"
-    except Exception:
-        return f"[lookup_failed:{group_id}]"
-
-
-def main():
-    args = parse_args()
-    session = setup_session(args.section)
-    base_url = REGION_SETTINGS[args.section]["base_url"]
-    fqdn = args.fqdn
-    debug = args.debug
-
-    print("\n=== Starting Reverse FQDN Lookup ===")
-    reverse_result = reverse_fqdn_lookup(session, base_url, fqdn, debug=debug)
-
-    if reverse_result["groupId"]:
-        print(f"[INFO] Reverse lookup successful for {fqdn}")
-    else:
-        print(f"[WARN] No results found for {fqdn}")
-
-    print("=== Reverse Lookup Complete ===\n")
-
