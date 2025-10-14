@@ -1,15 +1,31 @@
 # ==============================================================
-# Diagnostic AppSec Check (forces JSON dump + deeper insight)
+# AppSec Check — Match Access Group + FQDN inside productionHostnames
 # ==============================================================
 
 import json
 import os
+import traceback
 
 def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_group, debug=False):
-    def safe_lower(value):
-        if isinstance(value, str):
-            return value.lower().strip()
-        return str(value).lower().strip() if value else ""
+    """
+    Validates AppSec configuration entitlements.
+
+    Logic:
+      1. Search AppSec configurations within the given contract/group.
+      2. Filter configs where the access_group appears in the config name.
+      3. Within those, search fqdn in productionHostnames.
+      4. Full match = fqdn exactly matches a hostname.
+         Partial = fqdn substring match within a hostname.
+
+    Always writes debug files when --debug is enabled:
+      - Raw HTTP response (.txt)
+      - Parsed JSON (.json)
+    """
+
+    def safe_lower(v):
+        if isinstance(v, str):
+            return v.lower().strip()
+        return str(v).lower().strip() if v else ""
 
     result = {
         "found": False,
@@ -19,94 +35,122 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
         "partial_matches": []
     }
 
+    fqdn_lower = safe_lower(fqdn)
+    ag_lower = safe_lower(access_group)
+
     try:
         url = result["url"]
         print(f"[INFO] AppSec lookup: {url}")
+
         resp = session.get(url, timeout=30)
 
-        # Always write the raw HTTP response in debug mode
+        # Always save raw response for debugging
         if debug:
-            os.makedirs("output", exist_ok=True)
-            with open(f"output/debug_appsec_raw_{fqdn.replace('.', '_')}.txt", "w", encoding="utf-8") as f:
-                f.write(resp.text)
-            print(f"[DEBUG] Raw AppSec HTTP response saved to output/debug_appsec_raw_{fqdn.replace('.', '_')}.txt")
+            _write_raw_http(fqdn, "appsec", resp.text)
 
         if resp.status_code == 403:
-            print("[WARN] AppSec access denied (HTTP 403): Insufficient permissions.")
+            print("[WARN] AppSec access denied (HTTP 403): insufficient permissions.")
             result["partial_matches"].append({"reason": "access_denied"})
             return result
 
         if resp.status_code != 200:
             print(f"[ERROR] AppSec lookup failed with HTTP {resp.status_code}")
+            if debug:
+                _write_debug_json(fqdn, "appsec", {"status_code": resp.status_code, "response": resp.text[:400]})
             return result
 
+        # Parse response JSON
         try:
             data = resp.json()
         except Exception as e:
             print(f"[ERROR] AppSec JSON decode failed: {e}")
             if debug:
-                with open(f"output/debug_appsec_json_error_{fqdn.replace('.', '_')}.txt", "w", encoding="utf-8") as f:
-                    f.write(resp.text[:400])
+                _write_debug_json(fqdn, "appsec", {"error": str(e), "raw": resp.text[:400]})
             return result
 
-        # Always dump parsed JSON to file for inspection
+        # Save parsed JSON for inspection
         if debug:
             _write_debug_json(fqdn, "appsec", data)
 
         configs = data.get("configurations", [])
         print(f"[DEBUG] AppSec configs returned: {len(configs)}")
 
-        fqdn_lower = safe_lower(fqdn)
-        matched_any = False
-
-        # show a preview of the first few configs
-        if debug and configs:
-            for cfg in configs[:3]:
-                print(f"[DEBUG] Config '{cfg.get('name')}' has {len(cfg.get('productionHostnames', []))} hostnames")
-                if cfg.get("productionHostnames"):
-                    print(f"[DEBUG] → sample hostnames: {cfg['productionHostnames'][:5]}")
-
         for cfg in configs:
-            hostnames = cfg.get("productionHostnames", [])
-            if not isinstance(hostnames, list):
+            cfg_name = safe_lower(cfg.get("name"))
+            cfg_id = cfg.get("id")
+            prod_hosts = cfg.get("productionHostnames", [])
+
+            # --- Filter by access group name match
+            if ag_lower not in cfg_name:
                 continue
 
-            for hn in hostnames:
+            if debug:
+                print(f"[DEBUG] Checking config '{cfg.get('name')}' (ID {cfg_id}) for FQDN {fqdn_lower}")
+
+            # --- Now search inside productionHostnames
+            for hn in prod_hosts:
                 hn_lower = safe_lower(hn)
+
                 if fqdn_lower == hn_lower:
                     result["matches"].append({
-                        "id": cfg.get("id"),
+                        "id": cfg_id,
                         "hostname": hn,
-                        "matchType": "full"
+                        "matchType": "full",
+                        "reason": "fqdn_in_productionHostnames"
                     })
                     result["found"] = True
-                    matched_any = True
+
                 elif fqdn_lower in hn_lower:
                     result["partial_matches"].append({
-                        "id": cfg.get("id"),
+                        "id": cfg_id,
                         "hostname": hn,
-                        "matchType": "partial"
+                        "matchType": "partial",
+                        "reason": "partial_fqdn_in_productionHostnames"
                     })
                     result["partial"] = True
-                    matched_any = True
 
+        # --- Summary
         print(f"[RESULT] AppSec: {'FOUND' if result['found'] else ('PARTIAL MATCH' if result['partial'] else 'NOT FOUND')}")
 
-        if debug and not matched_any:
-            print("[DEBUG] No hostname matches found — check raw JSON output for structure differences.")
+        if debug:
+            if result["matches"]:
+                print(f"[DEBUG] Full matches ({len(result['matches'])}):")
+                for m in result["matches"]:
+                    print(f"  → {m}")
+            if result["partial_matches"]:
+                print(f"[DEBUG] Partial matches ({len(result['partial_matches'])}):")
+                for p in result["partial_matches"]:
+                    print(f"  → {p}")
+            if not result["found"] and not result["partial"]:
+                print("[DEBUG] No AppSec matches found — inspect output/debug_appsec_*.json")
 
         return result
 
     except Exception as e:
         print(f"[ERROR] AppSec lookup failed: {e}")
         if debug:
-            import traceback
             traceback.print_exc()
         return result
 
 
 # ==============================================================
+# Helpers
+# ==============================================================
+
+def _write_raw_http(fqdn, category, raw_text):
+    """Writes raw HTTP response to a .txt file."""
+    os.makedirs("output", exist_ok=True)
+    safe_name = fqdn.replace(".", "_")
+    file_path = f"output/debug_{category}_raw_{safe_name}.txt"
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(raw_text or "")
+        print(f"[DEBUG] Raw {category} HTTP saved to {file_path}")
+    except Exception as e:
+        print(f"[WARN] Could not write {category} raw HTTP: {e}")
+
 def _write_debug_json(fqdn, category, data):
+    """Writes parsed JSON output to a .json file."""
     os.makedirs("output", exist_ok=True)
     safe_name = fqdn.replace(".", "_")
     file_path = f"output/debug_{category}_{safe_name}.json"
