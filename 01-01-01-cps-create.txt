@@ -1,16 +1,57 @@
 # Full FQDN Lookup
 if args.all_fqdns:
+    print("\n[INFO] Fetching all hostnames via Akamai PAPI...")
     fqdns = get_all_fqdns(session, base_url, debug=args.debug)
-    print(f"\n[INFO] Running reverse lookup for {len(fqdns)} FQDNs...\n")
 
-    for fqdn_item in sorted(fqdns):
-        print(f"\n[INFO] → Reverse lookup for {fqdn_item}")
-        reverse_fqdn_lookup(session, base_url, fqdn_item, debug=args.debug)
+    if not fqdns:
+        print("[WARN] No FQDNs retrieved from PAPI. Skipping reverse lookups.\n")
+    else:
+        print(f"\n[INFO] Running reverse lookup for {len(fqdns)} FQDNs...\n")
 
-    print(f"\n[INFO] Retrieved {len(fqdns)} total FQDNs from Akamai PAPI.")
-    print("[INFO] All reverse lookups complete.\n")
+        csv_data = []  # Collect results for CSV export
 
-    # Only stop here if explicitly in debug mode
-    if args.debug:
-        print("[INFO] Debug mode enabled — stopping after all-fqdns run.\n")
-        return
+        for fqdn_item in sorted(fqdns):
+            reverse_result = reverse_fqdn_lookup(session, base_url, fqdn_item, debug=args.debug)
+
+            print("\n─────────────────────────────────────────────")
+            print(f"FQDN:              {fqdn_item}")
+
+            if reverse_result["found"]:
+                access_group = reverse_result.get("accessGroupName", "UNKNOWN")
+                stripped_name = reverse_result.get("strippedPropertyName", "UNKNOWN")
+                match_flag = (
+                    "TRUE" if stripped_name.lower() == access_group.lower() else " FALSE"
+                )
+
+                print(f"Access Group:      {access_group}")
+                print(f"Property:          {stripped_name}")
+                print(f"Property ↔ Group:  {match_flag}")
+            else:
+                print("Access Group:      Not Found")
+                print("Property:          Not Found")
+                print("Property ↔ Group:  FALSE")
+
+            # Append to CSV data
+            csv_data.append({
+                "FQDN": fqdn_item,
+                "GroupId": reverse_result.get("groupId", ""),
+                "AccessGroupName": reverse_result.get("accessGroupName", ""),
+                "PropertyName": reverse_result.get("propertyName", ""),
+                "StrippedPropertyName": reverse_result.get("strippedPropertyName", ""),
+                "MatchType": reverse_result.get("matchType", ""),
+                "Match": "TRUE" if reverse_result.get("strippedPropertyName", "").lower()
+                                  == reverse_result.get("accessGroupName", "").lower() else "FALSE"
+            })
+
+        # Export CSV summary
+        import csv, os
+        os.makedirs("output", exist_ok=True)
+        csv_file = f"output/reverse_fqdn_summary_{sanitize_filename(fqdn)}.csv"
+
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=csv_data[0].keys())
+            writer.writeheader()
+            writer.writerows(csv_data)
+
+        print(f"\n[INFO] Reverse lookup summary written to: {csv_file}")
+        print("[INFO] All reverse lookups complete.\n")
