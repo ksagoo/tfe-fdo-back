@@ -35,4 +35,4 @@ def get_all_fqdns(session, base_url, debug=False):
 
     except Exception as e:
         print(f"[ERROR] Exception in get_all_fqdns(): {e}")
-        return []  # ✅ return safe empty list
+        return []  # 
