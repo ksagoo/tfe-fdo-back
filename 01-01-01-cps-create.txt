@@ -1,37 +1,11 @@
-from urllib.parse import urljoin
-
-def check_group_exists(session, base_url, group_name, debug=False):
-    """
-    Checks if an Akamai Access Group exists using the PAPI groups endpoint.
-    Works for all standard API credentials (no IAM or AppSec admin rights needed).
-    """
-    try:
-        url = urljoin(base_url, "papi/v1/groups")
-        headers = {"accept": "application/json"}
-
-        if debug:
-            print(f"[INFO] Access Group lookup: {url}")
-
-        resp = session.get(url, headers=headers, timeout=30)
-        if resp.status_code != 200:
-            print(f"[ERROR] Failed to fetch groups: {resp.status_code} - {resp.text[:300]}")
-            return False
-
-        data = resp.json()
-        groups = data.get("groups", {}).get("items", data if isinstance(data, list) else [])
-
-        target = group_name.lower().strip()
-        for g in groups:
-            name = g.get("groupName", "").lower().strip()
-            if name == target:
-                if debug:
-                    print(f"[DEBUG] Group found: {g.get('groupName')} (ID: {g.get('groupId')})")
-                return True
-
-        if debug:
-            print(f"[DEBUG] Group '{group_name}' not found among {len(groups)} groups.")
-        return False
-
-    except Exception as e:
-        print(f"[ERROR] check_group_exists() failed: {e}")
-        return False
+if fqdn in hostnames and access_group.lower() in config_name.lower():
+    result["found"] = True
+    result["matches"].append({
+        "id": config_id,
+        "name": config_name,
+        "matchType": "full",
+        "reason": "fqdn_and_access_group"
+    })
+    if debug:
+        print(f"[DEBUG] FULL MATCH: {config_name} (ID: {config_id}) — stopping further checks.")
+    break  # Stop iterating through remaining configs
