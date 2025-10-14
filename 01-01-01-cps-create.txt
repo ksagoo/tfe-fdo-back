@@ -1,80 +1,51 @@
 def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
     """
-    Perform a reverse FQDN lookup using Akamai PAPI APIs.
-    Returns dict:
+    Reverse lookup for a given FQDN via PAPI, then normalize/compare:
+      - lowercase both sides
+      - remove 'sd-' prefix ONLY if first 3 characters
+      - remove trailing '-nonprod' (8 chars) or '-prod' (4 chars)
+      - compare stripped property name to access group
+    Returns:
       {
         'found': bool,
-        'groupId': str,
-        'propertyName': str,
-        'accessGroupName': str,
-        'strippedPropertyName': str,
-        'matchAccessGroup': bool,
-        'matchType': 'full' | 'partial' | 'none'
+        'groupId': str|None,
+        'propertyName': str|None,
+        'accessGroupName': str|None,
+        'strippedPropertyName': str|None,
+        'matchAccessGroup': bool|None,
+        'matchType': 'full'|'partial'|'none'
       }
     """
-    import re, time, requests
-    from urllib.parse import urljoin
+    import requests
+    import time
 
-    # ---------------- Helper functions ----------------
-    def normalize_name(name: str) -> str:
-        """
-        Normalize property/access group names for comparison.
-        Handles SD- prefix, -Prod / -NonProd suffixes, underscores, and case.
-        """
-        name = (name or "").strip()
-        # Remove SD-, SD_, sd-
-        name = re.sub(r"^sd[-_ ]*", "", name, flags=re.IGNORECASE)
-        # Remove -Prod, -NonProd (handles cases like -non-prod, _Prod, etc.)
-        name = re.sub(r"[-_ ]*(non[-_ ]?prod|prod)$", "", name, flags=re.IGNORECASE)
-        # Collapse double separators
-        name = re.sub(r"[-_]{2,}", "-", name)
-        # Strip trailing dash/underscore
-        name = name.strip("-_ ")
-        # Lowercase and remove all non-alphanumeric
-        return re.sub(r"[^a-z0-9]", "", name.lower())
-
-    _group_cache = {}
-
-    def get_group_name_by_id(session, base_url, group_id):
-        """Resolve Akamai groupId → human-readable name via PAPI or IM APIs."""
-        if not group_id:
-            return f"[unknown:{group_id}]"
-        if group_id in _group_cache:
-            return _group_cache[group_id]
-
+    # --- Helper: Resolve group name by ID ---
+    def get_group_name_by_id(sess, base, gid):
         try:
-            papi_url = f"{base_url}/papi/v1/groups"
-            headers = {"accept": "application/json", "PAPI-Use-Prefixes": "true"}
-            resp = session.get(papi_url, headers=headers, timeout=20)
-            if resp.status_code == 200:
-                data = resp.json() or {}
+            r = sess.get(f"{base}/papi/v1/groups",
+                         headers={"accept": "application/json", "PAPI-Use-Prefixes": "true"},
+                         timeout=20)
+            if r.status_code == 200:
+                data = r.json() or {}
                 items = (data.get("groups") or {}).get("items", [])
                 for g in items:
-                    gid = g.get("groupId", "")
-                    if gid.replace("grp_", "") == group_id.replace("grp_", ""):
-                        name = g.get("groupName") or f"[unknown:{group_id}]"
-                        _group_cache[group_id] = name
-                        return name
+                    if g.get("groupId", "").replace("grp_", "") == (gid or "").replace("grp_", ""):
+                        return g.get("groupName") or None
         except Exception:
             pass
-
-        # fallback: identity management API
         try:
-            im_url = urljoin(base_url + "/", "identity-management/v3/user-admin/groups")
-            resp = session.get(im_url, headers={"accept": "application/json"}, timeout=20)
-            if resp.status_code == 200:
-                for g in resp.json() or []:
-                    gid = str(g.get("groupId") or g.get("id") or "")
-                    if gid.replace("grp_", "") == group_id.replace("grp_", ""):
-                        name = g.get("groupName") or g.get("name") or f"[unknown:{group_id}]"
-                        _group_cache[group_id] = name
-                        return name
+            r = sess.get(f"{base}/identity-management/v3/user-admin/groups",
+                         headers={"accept": "application/json"}, timeout=20)
+            if r.status_code == 200:
+                for g in (r.json() or []):
+                    gid2 = str(g.get("groupId") or g.get("id") or "")
+                    if gid2.replace("grp_", "") == (gid or "").replace("grp_", ""):
+                        return g.get("groupName") or g.get("name") or None
         except Exception:
             pass
+        return None
 
-        return f"[unknown:{group_id}]"
-
-    # ---------------- Core Logic ----------------
+    # --- Initialize result ---
     result = {
         "found": False,
         "groupId": None,
@@ -86,55 +57,53 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
     }
 
     fqdn = (fqdn or "").strip().lower()
-    papi_url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
+    access_group_l = (access_group or "").strip().lower()
 
+    # --- PAPI reverse lookup ---
+    url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
     if debug:
-        print(f"\n===== Starting Reverse FQDN Lookup =====")
-        print(f"[INFO] Performing PAPI reverse lookup: {papi_url}")
+        print("\n==== Starting Reverse FQDN Lookup ====")
+        print(f"[INFO] Performing PAPI reverse lookup: {url}")
 
-    # Retry logic for transient Akamai API timeouts
     for attempt in range(3):
         try:
             resp = session.get(
-                papi_url,
+                url,
                 headers={"accept": "application/json", "PAPI-Use-Prefixes": "true"},
-                timeout=30
+                timeout=30,
             )
             break
         except requests.exceptions.RequestException as e:
             if attempt < 2:
-                print(f"[WARN] Lookup timeout, retrying ({attempt + 1}/3)...")
+                if debug: print(f"[WARN] Request failed ({e}), retrying...")
                 time.sleep(2 ** attempt)
-                continue
             else:
-                print(f"[ERROR] reverse_fqdn_lookup failed after retries: {e}")
+                if debug: print(f"[ERROR] Reverse lookup failed after retries: {e}")
                 return result
 
     if resp.status_code != 200:
-        print(f"[ERROR] PAPI reverse lookup failed: HTTP {resp.status_code}")
+        if debug: print(f"[ERROR] PAPI reverse lookup failed: HTTP {resp.status_code}")
         return result
 
     data = resp.json() or {}
     host_entries = []
-
     if isinstance(data, list):
         host_entries = data
     elif isinstance(data, dict):
         if "items" in data:
-            host_entries = data["items"]
+            host_entries = data["items"] or []
         elif "hostnames" in data:
             hn = data["hostnames"]
             if isinstance(hn, dict) and "items" in hn:
-                host_entries = hn["items"]
+                host_entries = hn["items"] or []
             elif isinstance(hn, list):
                 host_entries = hn
 
     if not host_entries:
-        if debug:
-            print(f"[WARN] No hostnames found for {fqdn}")
+        if debug: print(f"[WARN] No hostnames found for {fqdn}")
         return result
 
-    # Identify best hit
+    # --- choose best hit ---
     full_hit = None
     partial_hit = None
     for entry in host_entries:
@@ -152,42 +121,49 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
 
     hit = full_hit or partial_hit
     if not hit:
-        if debug:
-            print(f"[WARN] No matching hostname entry found for {fqdn}")
+        if debug: print(f"[WARN] No matching entry for {fqdn}")
         return result
 
-    group_id = hit.get("groupId", "")
-    property_name = hit.get("propertyName", "UNKNOWN")
+    # --- extract + normalize ---
+    group_id = hit.get("groupId") or None
+    prop_name = hit.get("propertyName") or ""
+    prop_l = prop_name.strip().lower()
+
+    # remove 'sd-' ONLY if it's literally the first three chars
+    if prop_l.startswith("sd-"):
+        prop_l = prop_l[3:]
+
+    # strip trailing environment tags
+    if prop_l.endswith("-nonprod"):
+        prop_l = prop_l[:-8]
+    elif prop_l.endswith("-prod"):
+        prop_l = prop_l[:-4]
+
+    prop_l = prop_l.strip()
     access_group_name = get_group_name_by_id(session, base_url, group_id)
+    match_flag = (prop_l == access_group_l)
 
-    # --- Normalization + Comparison ---
-    stripped_prop = property_name.strip()
-    stripped_norm = normalize_name(stripped_prop)
-    access_norm = normalize_name(access_group)
-
-    match_access = stripped_norm == access_norm
-
+    # --- fill result ---
     result.update({
         "found": True,
         "groupId": group_id,
-        "propertyName": property_name,
+        "propertyName": prop_name,
         "accessGroupName": access_group_name,
-        "strippedPropertyName": stripped_prop,
-        "matchAccessGroup": match_access,
+        "strippedPropertyName": prop_l,
+        "matchAccessGroup": match_flag,
         "matchType": "full" if full_hit else "partial",
     })
 
-    # ---------------- Output ----------------
+    # --- print output ---
     print(f"\nFQDN:        {fqdn}")
     print(f"Access Group: {access_group}")
-    print(f"Property:    {property_name}")
-    print(f"Match:       {'TRUE' if match_access else 'FALSE'}")
+    print(f"Property:    {prop_name}")
+    print(f"Match:       {'TRUE' if match_flag else 'FALSE'}")
 
     if debug:
-        print(f"[DEBUG] Stripped Property Name: {stripped_prop}")
-        print(f"[DEBUG] Normalized Property:    {stripped_norm}")
-        print(f"[DEBUG] Normalized AccessGroup: {access_norm}")
-        print(f"[DEBUG] Match Type: {'FULL' if full_hit else 'PARTIAL'}")
-        print(f"[DEBUG] Group ID: {group_id} ({access_group_name})")
+        print(f"[DEBUG] Stripped property (lower): {prop_l}")
+        print(f"[DEBUG] Access group (lower):     {access_group_l}")
+        print(f"[DEBUG] Match type:               {'FULL' if full_hit else 'PARTIAL'}")
+        print(f"[DEBUG] groupId:                  {group_id} ({access_group_name or 'UNKNOWN'})")
 
     return result
