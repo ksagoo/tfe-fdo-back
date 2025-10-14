@@ -1,2 +1,180 @@
-stripped = strip_property_name(property_name)
-match_access = normalize(stripped) == normalize(access_group)
+# ============================================================
+# FQDN Reverse Lookup (Bulletproof Version)
+# ============================================================
+def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
+    """
+    Reverse lookup for a given FQDN via PAPI hostnames search.
+    Returns:
+      found, groupId, propertyName, accessGroupName, strippedPropertyName,
+      matchAccessGroup (bool), matchType ("full"/"partial"/"none")
+    """
+    import os, re
+    from urllib.parse import urljoin
+
+    # ---------------- helpers ----------------
+    def sanitize_filename(name: str) -> str:
+        return re.sub(r"[^a-zA-Z0-9_.-]+", "_", name)
+
+    def normalize(s: str) -> str:
+        """Normalize names: lowercase + strip all non-alphanumeric."""
+        return re.sub(r"[^a-z0-9]", "", (s or "").strip().lower())
+
+    _group_cache = {}
+
+    def get_group_name_by_id(session, base_url, group_id):
+        """Try to resolve groupId → groupName using PAPI or IM APIs."""
+        if not group_id:
+            return f"[unknown:{group_id}]"
+
+        if group_id in _group_cache:
+            return _group_cache[group_id]
+
+        try:
+            url = f"{base_url}/papi/v1/groups"
+            hdrs = {"accept": "application/json", "PAPI-Use-Prefixes": "true"}
+            r = session.get(url, headers=hdrs, timeout=20)
+            if r.status_code == 200:
+                data = r.json() or {}
+                items = (data.get("groups") or {}).get("items", [])
+                for g in items:
+                    gid = g.get("groupId", "")
+                    if gid.replace("grp_", "") == group_id.replace("grp_", ""):
+                        name = g.get("groupName") or f"[unknown:{group_id}]"
+                        _group_cache[group_id] = name
+                        return name
+        except Exception:
+            pass
+
+        # fallback: identity management groups
+        try:
+            url = urljoin(base_url + "/", "identity-management/v3/user-admin/groups")
+            r = session.get(url, headers={"accept": "application/json"}, timeout=20)
+            if r.status_code == 200:
+                groups = r.json() or []
+                for g in groups:
+                    gid = str(g.get("groupId") or g.get("id") or "")
+                    if gid.replace("grp_", "") == group_id.replace("grp_", ""):
+                        name = g.get("groupName") or g.get("name") or f"[unknown:{group_id}]"
+                        _group_cache[group_id] = name
+                        return name
+        except Exception:
+            pass
+
+        return f"[unknown:{group_id}]"
+
+    # ---------------- function body ----------------
+    result = {
+        "found": False,
+        "groupId": None,
+        "propertyName": None,
+        "accessGroupName": None,
+        "strippedPropertyName": None,
+        "matchAccessGroup": None,
+        "matchType": "none",
+    }
+
+    fqdn = (fqdn or "").strip().lower()
+    url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
+
+    if debug:
+        print("\n===== Starting Reverse FQDN Lookup =====")
+        print(f"[INFO] Performing PAPI reverse lookup: {url}")
+
+    try:
+        resp = session.get(url, headers={"accept": "application/json", "PAPI-Use-Prefixes": "true"}, timeout=30)
+
+        if resp.status_code != 200:
+            print(f"[ERROR] PAPI reverse lookup failed: HTTP {resp.status_code}")
+            return result
+
+        data = resp.json() or {}
+
+        # Collect host entries from all known structures
+        host_entries = []
+        if isinstance(data, list):
+            host_entries = data
+        elif isinstance(data, dict):
+            if "items" in data:
+                host_entries = data["items"]
+            elif "hostnames" in data:
+                hn = data["hostnames"]
+                if isinstance(hn, dict) and "items" in hn:
+                    host_entries = hn["items"]
+                elif isinstance(hn, list):
+                    host_entries = hn
+
+        if not host_entries:
+            if debug:
+                print(f"[WARN] No hostname entries found for {fqdn}")
+            return result
+
+        # Try to find exact or partial match
+        full_hit = None
+        partial_hit = None
+        for entry in host_entries:
+            if not isinstance(entry, dict):
+                continue
+            cname_from = str(entry.get("cnameFrom", "")).lower()
+            cname_to = str(entry.get("stagingCnameTo", "")).lower()
+            edge_host = str(entry.get("stagingEdgeHostnameId", "")).lower()
+
+            if fqdn == cname_from or fqdn == cname_to or fqdn == edge_host:
+                full_hit = entry
+                break
+            if fqdn in cname_from or fqdn in cname_to:
+                partial_hit = partial_hit or entry
+
+        hit = full_hit or partial_hit
+        if not hit:
+            if debug:
+                print(f"[WARN] No results found for {fqdn}")
+            return result
+
+        group_id = hit.get("groupId", "")
+        property_name = hit.get("propertyName", "UNKNOWN")
+        access_group_name = get_group_name_by_id(session, base_url, group_id)
+
+        # --- Bulletproof stripping and normalization ---
+        prop_original = property_name or ""
+
+        # remove leading SD / SD- / SD_
+        prop_clean = re.sub(r"^sd[-_ ]?", "", prop_original, flags=re.IGNORECASE)
+
+        # remove trailing -Prod / -NonProd (case-insensitive, tolerant)
+        prop_clean = re.sub(r"[-_ ]?(?:non[-_ ]?prod|prod)$", "", prop_clean, flags=re.IGNORECASE)
+
+        # normalize both property and access group
+        normalized_prop = re.sub(r"[^a-z0-9]", "", prop_clean.lower())
+        normalized_access = re.sub(r"[^a-z0-9]", "", access_group.lower())
+
+        match_access = normalized_prop == normalized_access
+
+        result.update({
+            "found": True,
+            "groupId": group_id,
+            "propertyName": property_name,
+            "accessGroupName": access_group_name,
+            "strippedPropertyName": prop_clean.strip(),
+            "matchAccessGroup": match_access,
+            "matchType": "full" if full_hit else "partial",
+        })
+
+        # -------------- compact normal-mode output --------------
+        print(f"\nFQDN:        {fqdn}")
+        print(f"Access Group: {access_group}")
+        print(f"Property:    {property_name}")
+        print(f"Match:       {'TRUE' if match_access else 'FALSE'}")
+
+        if debug:
+            print("\n[DEBUG] Normalized Property:", normalized_prop)
+            print("[DEBUG] Normalized Access Group:", normalized_access)
+            print("[DEBUG] Stripped Property Name:", prop_clean)
+            print("[DEBUG] Access Group Name:", access_group_name)
+            print("[DEBUG] Match Type:", "FULL" if full_hit else "PARTIAL")
+            print("[DEBUG] Reverse lookup data saved under output/ if enabled.\n")
+
+        return result
+
+    except Exception as e:
+        print(f"[ERROR] reverse_fqdn_lookup failed: {e}")
+        return result
