@@ -2,20 +2,11 @@ from urllib.parse import urljoin
 
 def check_group_exists(session, base_url, group_name, debug=False):
     """
-    Checks if an Akamai Access Group already exists using the AppSec groups endpoint.
-    This avoids IAM permission issues from user-admin APIs.
-
-    Args:
-        session: Authenticated Akamai EdgeGrid session
-        base_url (str): Base API hostname
-        group_name (str): Target access group name
-        debug (bool): Enable verbose logging
-
-    Returns:
-        bool: True if group exists, False otherwise
+    Checks if an Akamai Access Group exists using the PAPI groups endpoint.
+    Works for all standard API credentials (no IAM or AppSec admin rights needed).
     """
     try:
-        url = urljoin(base_url, "appsec/v1/groups")
+        url = urljoin(base_url, "papi/v1/groups")
         headers = {"accept": "application/json"}
 
         if debug:
@@ -26,9 +17,10 @@ def check_group_exists(session, base_url, group_name, debug=False):
             print(f"[ERROR] Failed to fetch groups: {resp.status_code} - {resp.text[:300]}")
             return False
 
-        groups = resp.json().get("groups", [])
-        target = group_name.lower().strip()
+        data = resp.json()
+        groups = data.get("groups", {}).get("items", data if isinstance(data, list) else [])
 
+        target = group_name.lower().strip()
         for g in groups:
             name = g.get("groupName", "").lower().strip()
             if name == target:
@@ -37,7 +29,7 @@ def check_group_exists(session, base_url, group_name, debug=False):
                 return True
 
         if debug:
-            print(f"[DEBUG] Group '{group_name}' not found in {len(groups)} AppSec groups.")
+            print(f"[DEBUG] Group '{group_name}' not found among {len(groups)} groups.")
         return False
 
     except Exception as e:
