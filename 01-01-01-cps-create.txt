@@ -1,17 +1,42 @@
+# ---- Reverse FQDN Lookup ----
+csv_data = []
+
+if args.all_fqdns:
+    fqdn_list = get_all_fqdns(session, base_url, fqdn, debug=args.debug)
+    print(f"[INFO] Retrieved {len(fqdn_list)} FQDNs from PAPI.")
+    print(f"[INFO] Running reverse lookup for {len(fqdn_list)} FQDNs...\n")
+
+    seen_fqdns = set()
+    for fqdn_item in sorted(fqdn_list):
+        if fqdn_item.lower() in seen_fqdns:
+            continue
+        seen_fqdns.add(fqdn_item.lower())
+
+        reverse_result = reverse_fqdn_lookup(session, base_url, fqdn_item, access_group, debug=args.debug)
+        csv_data.append(reverse_result)
+
+else:
+    reverse_result = reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=args.debug)
+    csv_data.append(reverse_result)
+
+import re
+import requests
+import time
+
 def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
     """
-    Reverse lookup for a given FQDN via PAPI, then compare normalized names:
-    - lowercase both sides
-    - remove 'sd-' prefix (first 3 chars only)
-    - remove trailing '-nonprod' or '-prod'
-    - compare stripped property to access group
+    Robust Akamai PAPI reverse FQDN lookup and property/access-group matcher.
+
+    Features:
+    - Lowercases both access_group and property_name
+    - Removes 'sd-' prefix (first 3 chars only)
+    - Removes '-prod' or '-nonprod' suffix
+    - Strips all non-alphanumeric characters for robust comparison
+    - Outputs aligned, clean console output
     """
 
-    import requests
-    import time
-
-    # ---- Helper: get group name ----
     def get_group_name_by_id(sess, base, gid):
+        """Fetch group name for given groupId."""
         try:
             r = sess.get(f"{base}/papi/v1/groups",
                          headers={"accept": "application/json", "PAPI-Use-Prefixes": "true"},
@@ -36,7 +61,21 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
             pass
         return None
 
-    # ---- Initialize result ----
+    def normalize_name(name):
+        """Normalize name: lowercase, remove sd-, remove -prod/-nonprod, strip punctuation."""
+        if not name:
+            return ""
+        n = name.strip().lower()
+        if n.startswith("sd-"):
+            n = n[3:]  # remove first 3 chars only
+        if n.endswith("-nonprod"):
+            n = n[:-8]
+        elif n.endswith("-prod"):
+            n = n[:-4]
+        n = re.sub(r'[^a-z0-9]', '', n)
+        return n
+
+    # --- Initialize result ---
     result = {
         "found": False,
         "groupId": None,
@@ -48,9 +87,9 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
     }
 
     fqdn = (fqdn or "").strip().lower()
-    access_group_l = (access_group or "").strip().lower()
+    access_group_l = normalize_name(access_group)
 
-    # ---- PAPI reverse lookup ----
+    # --- API call ---
     url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
     if debug:
         print("\n==== Starting Reverse FQDN Lookup ====")
@@ -58,11 +97,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
 
     for attempt in range(3):
         try:
-            resp = session.get(
-                url,
-                headers={"accept": "application/json", "PAPI-Use-Prefixes": "true"},
-                timeout=30,
-            )
+            resp = session.get(url, headers={"accept": "application/json", "PAPI-Use-Prefixes": "true"}, timeout=30)
             break
         except requests.exceptions.RequestException as e:
             if attempt < 2:
@@ -74,7 +109,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
                 return result
 
     if resp.status_code != 200:
-        print(f"[ERROR] PAPI reverse lookup failed: HTTP {resp.status_code}")
+        print(f"[ERROR] Reverse lookup failed: HTTP {resp.status_code}")
         return result
 
     data = resp.json() or {}
@@ -97,7 +132,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
             print(f"[WARN] No hostnames found for {fqdn}")
         return result
 
-    # ---- Pick best match ----
+    # --- Find full or partial hit ---
     full_hit = None
     partial_hit = None
     for entry in host_entries:
@@ -111,8 +146,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
             full_hit = entry
             break
         if fqdn in cname_from or fqdn in cname_to:
-            if not partial_hit:
-                partial_hit = entry
+            partial_hit = partial_hit or entry
 
     hit = full_hit or partial_hit
     if not hit:
@@ -120,47 +154,36 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
             print(f"[WARN] No matching entry found for {fqdn}")
         return result
 
-    # ---- Extract property & normalize ----
+    # --- Normalize property and compare ---
     group_id = hit.get("groupId") or None
     property_name = hit.get("propertyName") or ""
-    prop_l = property_name.strip().lower()
-
-    # remove first 3 chars if "sd-"
-    if prop_l.startswith("sd-"):
-        prop_l = prop_l[3:]
-
-    # remove -nonprod or -prod
-    if prop_l.endswith("-nonprod"):
-        prop_l = prop_l[:-8]
-    elif prop_l.endswith("-prod"):
-        prop_l = prop_l[:-4]
-
-    prop_l = prop_l.strip()
-
+    prop_normalized = normalize_name(property_name)
     access_group_name = get_group_name_by_id(session, base_url, group_id)
-    match_flag = prop_l == access_group_l
+    match_flag = (prop_normalized == access_group_l)
 
-    # ---- Store result ----
+    # --- Update result ---
     result.update({
         "found": True,
         "groupId": group_id,
         "propertyName": property_name,
         "accessGroupName": access_group_name,
-        "strippedPropertyName": prop_l,
+        "strippedPropertyName": prop_normalized,
         "matchAccessGroup": match_flag,
         "matchType": "full" if full_hit else "partial",
     })
 
-    # ---- Output summary ----
-    print(f"\nFQDN:        {fqdn}")
-    print(f"Access Group: {access_group}")
-    print(f"Property:    {property_name}")
-    print(f"Match:       {'TRUE' if match_flag else 'FALSE'}")
+    # --- Aligned console output ---
+    print("\n" + "=" * 70)
+    print(f"{'FQDN:':20} {fqdn}")
+    print(f"{'Access Group:':20} {access_group}")
+    print(f"{'Property:':20} {property_name}")
+    print(f"{'Match:':20} {'TRUE' if match_flag else 'FALSE'}")
+    print("=" * 70)
 
     if debug:
-        print(f"[DEBUG] Stripped property (lower): {prop_l}")
-        print(f"[DEBUG] Access group (lower):     {access_group_l}")
-        print(f"[DEBUG] Match type:               {'FULL' if full_hit else 'PARTIAL'}")
-        print(f"[DEBUG] Group ID:                 {group_id} ({access_group_name or 'UNKNOWN'})")
+        print(f"[DEBUG] Normalized Property:     {prop_normalized}")
+        print(f"[DEBUG] Normalized Access Group: {access_group_l}")
+        print(f"[DEBUG] Match Type:              {'FULL' if full_hit else 'PARTIAL'}")
+        print(f"[DEBUG] Group ID:                {group_id} ({access_group_name or 'UNKNOWN'})")
 
     return result
