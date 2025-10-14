@@ -1,127 +1,76 @@
-def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_group, debug=False):
+def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group, debug=False):
     """
-    AppSec entitlement validation (2-step method with substring access group match)
-    Full match = fqdn present in productionHostnames AND access_group substring in config name.
+    Enhanced AppSec entitlement lookup:
+    Full match if fqdn in productionHostnames AND access_group substring in config name
     """
-
     import json, re, traceback
 
-    def sanitize_filename(name: str) -> str:
-        return re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+    def sanitize_filename(name): return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name))
+    def to_lower(v): return str(v).lower().strip() if isinstance(v, (str, int)) else ""
 
-    def to_lower(s):
-        try:
-            return s.strip().lower() if isinstance(s, str) else str(s).strip().lower()
-        except Exception:
-            return ""
+    fqdn_l = to_lower(fqdn)
+    ag_l = to_lower(access_group)
 
-    url_list = f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
-    print(f"[INFO] AppSec lookup: {url_list}")
+    url = f"{base_url}/appsec/v1/configs?contractId={contract_id}&groupId={group_id}"
+    print(f"[INFO] AppSec lookup: {url}")
 
-    result = {
-        "found": False,
-        "partial": False,
-        "url": url_list,
-        "matches": [],
-        "partial_matches": []
-    }
+    result = {"found": False, "partial": False, "url": url, "matches": [], "partial_matches": []}
 
     try:
-        resp = session.get(url_list, timeout=30)
-
-        # Always log raw HTTP if debug
+        resp = session.get(url, timeout=30)
         if debug:
             write_raw_http(fqdn, "appsec_list", resp.text)
 
-        if resp.status_code == 403:
-            print("[WARN] AppSec access denied (HTTP 403)")
-            result["partial_matches"].append({"matchType": "none", "reason": "access_denied"})
-            return result
-
         if resp.status_code != 200:
-            print(f"[ERROR] AppSec lookup failed (HTTP {resp.status_code})")
-            if debug:
-                write_json({"status_code": resp.status_code, "body": resp.text[:1000]}, f"appsec_error_{sanitize_filename(fqdn)}")
+            print(f"[ERROR] AppSec lookup failed: HTTP {resp.status_code}")
             return result
 
-        try:
-            data = resp.json()
-        except Exception as e:
-            print(f"[ERROR] AppSec JSON decode failed: {e}")
-            if debug:
-                write_raw_http(fqdn, "appsec_decode_error", resp.text)
-            return result
-
-        if debug:
-            write_json(data, f"appsec_list_{sanitize_filename(fqdn)}")
-
-        configs = data.get("configurations", []) or []
+        data = resp.json()
+        configs = data.get("configurations", [])
         print(f"[DEBUG] AppSec configs returned: {len(configs)}")
 
-        fqdn_l = to_lower(fqdn)
-        ag_l = to_lower(access_group)
-
-        # Step 2 — lookup each config individually
         for cfg in configs:
             cfg_id = cfg.get("id")
             cfg_name = cfg.get("name", "")
             name_l = to_lower(cfg_name)
 
+            # Check if access group name substring is in config name
+            ag_match = ag_l in name_l
+
             cfg_url = f"{base_url}/appsec/v1/configs/{cfg_id}?includeHostnames=true"
+            cfg_resp = session.get(cfg_url, timeout=30)
 
-            try:
-                cfg_resp = session.get(cfg_url, timeout=30)
+            if debug:
+                write_raw_http(fqdn, f"appsec_cfg_{cfg_id}", cfg_resp.text)
 
-                if debug:
-                    write_raw_http(fqdn, f"appsec_cfg_{cfg_id}", cfg_resp.text)
-
-                if cfg_resp.status_code != 200:
-                    if debug:
-                        print(f"[DEBUG] Skipping config {cfg_id}: HTTP {cfg_resp.status_code}")
-                    continue
-
-                cfg_data = cfg_resp.json()
-                if debug:
-                    write_json(cfg_data, f"appsec_cfg_{cfg_id}_{sanitize_filename(fqdn)}")
-
-                # Normalize hostname field
-                host_field = cfg_data.get("productionHostnames", [])
-                hostnames = [to_lower(h) for h in host_field] if isinstance(host_field, list) else []
-
-                # Matching logic
-                fqdn_hit = any(fqdn_l == h for h in hostnames)
-                ag_hit = ag_l in name_l  # substring match for access group
-
-                if fqdn_hit and ag_hit:
-                    result["matches"].append({
-                        "id": cfg_id,
-                        "name": cfg_name,
-                        "matchType": "full",
-                        "reason": "fqdn_and_access_group_in_same_config"
-                    })
-                    result["found"] = True
-                    if debug:
-                        print(f"[DEBUG] AppSec FULL → {cfg_id} : {cfg_name}")
-
-                elif fqdn_hit or ag_hit:
-                    reason = "fqdn_only" if fqdn_hit else "access_group_only"
-                    result["partial_matches"].append({
-                        "id": cfg_id,
-                        "name": cfg_name,
-                        "matchType": "partial",
-                        "reason": reason
-                    })
-                    result["partial"] = True
-                    if debug:
-                        print(f"[DEBUG] AppSec PARTIAL → {cfg_id} : {cfg_name} ({reason})")
-
-            except Exception as e:
-                print(f"[WARN] Error fetching config {cfg_id}: {e}")
-                if debug:
-                    traceback.print_exc()
+            if cfg_resp.status_code != 200:
                 continue
 
-        # Final summary
+            cfg_data = cfg_resp.json()
+            hostnames = [to_lower(h) for h in cfg_data.get("productionHostnames", [])]
+
+            fqdn_match = fqdn_l in hostnames
+
+            if fqdn_match and ag_match:
+                result["matches"].append({
+                    "id": cfg_id,
+                    "name": cfg_name,
+                    "matchType": "full",
+                    "reason": "fqdn_and_access_group_in_same_config"
+                })
+                result["found"] = True
+                print(f"[DEBUG] FULL match: {cfg_name}")
+            elif fqdn_match or ag_match:
+                reason = "fqdn_only" if fqdn_match else "access_group_only"
+                result["partial_matches"].append({
+                    "id": cfg_id,
+                    "name": cfg_name,
+                    "matchType": "partial",
+                    "reason": reason
+                })
+                result["partial"] = True
+                print(f"[DEBUG] PARTIAL match: {cfg_name} ({reason})")
+
         if result["found"]:
             print("[RESULT] AppSec: FOUND")
         elif result["partial"]:
@@ -132,7 +81,7 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
         return result
 
     except Exception as e:
-        print(f"[ERROR] AppSec lookup failed: {e}")
+        print(f"[ERROR] AppSec check failed: {e}")
         if debug:
             traceback.print_exc()
         return result
