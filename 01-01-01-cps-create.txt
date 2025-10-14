@@ -2,21 +2,16 @@ import re
 import time
 import requests
 
-SEP = "—" * 68  # nice single separator
+SEP = "—" * 68
 
 def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
     """
-    Reverse lookup a single FQDN via PAPI and compare the property name to the access group.
-
-    Returns dict:
-      found, groupId, propertyName, accessGroupName, strippedPropertyName,
-      matchAccessGroup (bool), matchType ('full'|'partial'|'none')
+    Robust Akamai reverse lookup and property/access-group matcher.
     """
 
-    # ------------------------ helpers ------------------------
-
+    # ---------------- helpers ----------------
     def get_group_name_by_id(sess, base, gid):
-        """Try PAPI groups, then identity API, to resolve group display name."""
+        """Resolve group name from ID."""
         if not gid:
             return None
         gid_clean = str(gid).replace("grp_", "")
@@ -25,62 +20,39 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
                          headers={"accept": "application/json", "PAPI-Use-Prefixes": "true"},
                          timeout=20)
             if r.status_code == 200:
-                data = r.json() or {}
-                items = (data.get("groups") or {}).get("items", []) or []
-                for g in items:
+                for g in (r.json().get("groups", {}).get("items", []) or []):
                     if str(g.get("groupId", "")).replace("grp_", "") == gid_clean:
-                        return g.get("groupName") or None
+                        return g.get("groupName")
         except Exception:
             pass
-
-        # Fallback: identity groups (not always available, but cheap to try)
-        try:
-            r = sess.get(f"{base}/identity-management/v3/user-admin/groups",
-                         headers={"accept": "application/json"}, timeout=20)
-            if r.status_code == 200:
-                for g in (r.json() or []):
-                    cand = str(g.get("groupId") or g.get("id") or "")
-                    if cand.replace("grp_", "") == gid_clean:
-                        return g.get("groupName") or g.get("name") or None
-        except Exception:
-            pass
-
         return None
 
-    def strip_env_suffix(n: str) -> str:
-        # remove only when at the end, case-insensitive
-        n_low = n.lower()
-        if n_low.endswith("-nonprod"):
-            return n[:-8]
-        if n_low.endswith("-prod"):
-            return n[:-4]
-        return n
-
     def normalize_name(name: str) -> str:
-        """Lower, remove leading 'sd-', drop env suffix, remove non-alphanumerics."""
+        """Lowercase, strip prefix/suffix, remove non-alphanumerics."""
         if not name:
             return ""
         n = name.strip().lower()
-        if n.startswith("sd-"):  # first 3 chars only
+        if n.startswith("sd-"):  # only first 3 chars
             n = n[3:]
-        n = strip_env_suffix(n)
-        n = re.sub(r"[^a-z0-9]", "", n)  # crush dashes/underscores/spaces/punct
+        if n.endswith("-nonprod"):
+            n = n[:-8]
+        elif n.endswith("-prod"):
+            n = n[:-4]
+        n = re.sub(r"[^a-z0-9]", "", n)
         return n
 
-    def print_card(title_fqdn, ag_display, prop_display, match_bool):
-        # aligned, compact, one card per fqdn
+    def print_card(fqdn, ag, prop, match):
         print(SEP)
-        print(f"{'FQDN:':13} {title_fqdn}")
-        print(f"{'Access Group:':13} {ag_display}")
-        print(f"{'Property:':13} {prop_display}")
-        print(f"{'Match:':13} {'TRUE' if match_bool else 'FALSE'}")
+        print(f"{'FQDN:':13} {fqdn}")
+        print(f"{'Access Group:':13} {ag}")
+        print(f"{'Property:':13} {prop}")
+        print(f"{'Match:':13} {'TRUE' if match else 'FALSE'}")
         print(SEP)
 
-    # ------------------------ init ------------------------
-
-    fqdn_l = (fqdn or "").strip().lower()
-    access_group_display = access_group or ""
-    ag_norm = normalize_name(access_group_display)
+    # ---------------- setup ----------------
+    fqdn = fqdn.strip().lower()
+    ag_display = access_group or ""
+    ag_norm = normalize_name(ag_display)
 
     result = {
         "found": False,
@@ -88,108 +60,85 @@ def reverse_fqdn_lookup(session, base_url, fqdn, access_group, debug=False):
         "propertyName": None,
         "accessGroupName": None,
         "strippedPropertyName": None,
-        "matchAccessGroup": None,
+        "matchAccessGroup": False,
         "matchType": "none",
     }
 
-    url = f"{base_url}/papi/v1/hostnames?search={fqdn_l}"
+    url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
     if debug:
-        print("\n[INFO] PAPI reverse lookup:", url)
+        print(f"\n[INFO] Reverse lookup: {url}")
 
-    # ------------------------ request (+retry) ------------------------
+    # ---------------- API call ----------------
     for attempt in range(3):
         try:
             resp = session.get(
                 url,
                 headers={"accept": "application/json", "PAPI-Use-Prefixes": "true"},
-                timeout=30,
+                timeout=30
             )
             break
         except requests.exceptions.RequestException as e:
             if attempt < 2:
                 if debug:
-                    print(f"[WARN] Reverse lookup attempt {attempt+1} failed: {e} — retrying…")
+                    print(f"[WARN] Attempt {attempt+1} failed ({e}), retrying...")
                 time.sleep(2 ** attempt)
             else:
-                print(f"[ERROR] Reverse lookup failed after retries: {e}")
+                print(f"[ERROR] Failed after 3 retries: {e}")
                 return result
 
     if resp.status_code != 200:
-        print(f"[ERROR] Reverse lookup HTTP {resp.status_code}")
+        print(f"[ERROR] HTTP {resp.status_code} for {fqdn}")
         return result
 
     data = resp.json() or {}
-    # accept any of the 3 shapes we’ve seen
-    if isinstance(data, list):
-        host_entries = data
-    else:
-        host_entries = (
-            (data.get("items"))
-            or (data.get("hostnames", {}).get("items") if isinstance(data.get("hostnames"), dict) else None)
-            or (data.get("hostnames") if isinstance(data.get("hostnames"), list) else None)
-            or []
-        )
+    host_entries = (
+        (data.get("items"))
+        or (data.get("hostnames", {}).get("items") if isinstance(data.get("hostnames"), dict) else None)
+        or (data.get("hostnames") if isinstance(data.get("hostnames"), list) else None)
+        or []
+    )
 
     if not host_entries:
-        if debug:
-            print(f"[WARN] No hostnames in response for {fqdn_l}")
-        # still print a card so you see this fqdn in output
-        print_card(fqdn_l, access_group_display, "<none>", False)
+        print_card(fqdn, ag_display, "<none>", False)
         return result
 
-    # ------------------------ choose best match ------------------------
-    full_hit = None
-    partial_hit = None
-    for e in host_entries:
-        if not isinstance(e, dict):
+    # ---------------- find match ----------------
+    match_found = False
+    for entry in host_entries:
+        cname_from = str(entry.get("cnameFrom", "")).lower()
+        cname_to = str(entry.get("stagingCnameTo", "")).lower()
+        edge_host = str(entry.get("stagingEdgeHostnameId", "")).lower()
+
+        if fqdn not in (cname_from, cname_to, edge_host) and fqdn not in cname_from:
             continue
-        cname_from = str(e.get("cnameFrom", "")).lower()
-        cname_to   = str(e.get("stagingCnameTo", "")).lower()
-        edge_host  = str(e.get("stagingEdgeHostnameId", "")).lower()
 
-        if fqdn_l == cname_from or fqdn_l == cname_to or fqdn_l == edge_host:
-            full_hit = e
-            break  # prefer strict equality
-        if fqdn_l in cname_from or fqdn_l in cname_to:
-            if partial_hit is None:
-                partial_hit = e
+        property_name = entry.get("propertyName") or ""
+        prop_norm = normalize_name(property_name)
+        match_flag = (prop_norm == ag_norm)
 
-    hit = full_hit or partial_hit
-    if not hit:
-        if debug:
-            print(f"[WARN] No match found for {fqdn_l}")
-        print_card(fqdn_l, access_group_display, "<none>", False)
-        return result
+        if match_flag:
+            # full hit, stop immediately
+            group_id = entry.get("groupId")
+            ag_name_from_id = get_group_name_by_id(session, base_url, group_id)
+            result.update({
+                "found": True,
+                "groupId": group_id,
+                "propertyName": property_name,
+                "accessGroupName": ag_name_from_id,
+                "strippedPropertyName": prop_norm,
+                "matchAccessGroup": True,
+                "matchType": "full",
+            })
+            print_card(fqdn, ag_display, property_name, True)
+            return result
 
-    # ------------------------ compare normalized names ------------------------
-    group_id = hit.get("groupId")
-    property_name = hit.get("propertyName") or ""
-
-    prop_norm = normalize_name(property_name)
-    ag_name_from_id = get_group_name_by_id(session, base_url, group_id)
-
-    # final equality on normalized forms
-    match_flag = (prop_norm == ag_norm)
-
-    # update result
+    # if we reach here — no matches, but property entries exist
+    print_card(fqdn, ag_display, property_name, False)
     result.update({
         "found": True,
-        "groupId": group_id,
         "propertyName": property_name,
-        "accessGroupName": ag_name_from_id,
         "strippedPropertyName": prop_norm,
-        "matchAccessGroup": match_flag,
-        "matchType": "full" if full_hit else "partial",
+        "matchAccessGroup": False,
+        "matchType": "partial",
     })
-
-    # ------------------------ clean, consistent output ------------------------
-    print_card(fqdn_l, access_group_display, property_name, match_flag)
-
-    if debug:
-        print(f"[DEBUG] matchType:        {'full' if full_hit else 'partial'}")
-        print(f"[DEBUG] groupId:          {group_id}")
-        print(f"[DEBUG] groupName(id):    {ag_name_from_id or 'UNKNOWN'}")
-        print(f"[DEBUG] accessGroup(norm):{ag_norm}")
-        print(f"[DEBUG] property(norm):   {prop_norm}")
-
     return result
