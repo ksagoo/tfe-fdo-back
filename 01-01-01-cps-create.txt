@@ -1,120 +1,119 @@
 #!/usr/bin/env python3
 """
-==============================================================
-Akamai Access Group Lookup from FQDN
-==============================================================
+================================================================================
+Akamai FQDN Access Group Lookup Utility
+================================================================================
 Description:
-  Retrieves the Akamai Access Group details (Group Name and ID)
-  for a given FQDN by using the PAPI API.
-
-  This is used primarily during the certificate discovery or
-  automation process, where we only have an FQDN and need to
-  determine its associated Access Group and Group ID.
+    This script is used primarily during the certificate discovery or automation
+    process, where only an FQDN is available and we need to determine its
+    associated Access Group name and Group ID via Akamai PAPI.
 
 Usage:
-  python akamai_get_access_group_from_fqdn.py --section <edgerc_section> --fqdn <hostname>
+    python akamai_fqdn_access_group_lookup.py --section <edgerc_section> --fqdn <hostname>
 
 Example:
-  python akamai_get_access_group_from_fqdn.py --section dev --fqdn epspos-dev-01.hsbc.com.hk
+    python akamai_fqdn_access_group_lookup.py --section dev --fqdn epspos-dev-01.hsbc.com.hk
 
 Output:
-  === Access Group Lookup Result ===
-  FQDN:           epspos-dev-01.hsbc.com.hk
-  Access Group:   ServiceNow-itilUser
-  Group ID:       grp_12345
-  =================================
-
-Author:
-  OpenAI GPT-5  |  Built for HSBC Akamai Automation
-==============================================================
+    == Access Group Lookup Result ==
+    FQDN: epspos-dev-01.hsbc.com.hk
+    Access Group: ServiceNow-itilUser
+    Group ID: grp_272095
+================================================================================
 """
 
+import os
+import sys
 import argparse
 import requests
 from akamai.edgegrid import EdgeGridAuth
 from configparser import ConfigParser
 
-
-# ==============================================================
-# Setup Akamai Session
-# ==============================================================
-def setup_session(section="default"):
-    """
-    Sets up an authenticated Akamai EdgeGrid session using .edgerc.
-    """
+# ==============================================================================
+# Session setup
+# ==============================================================================
+def setup_session(section):
     config = ConfigParser()
-    config.read(".edgerc")
+    config.read(os.path.expanduser("~/.edgerc"))
 
     if section not in config:
-        raise ValueError(f"Section '{section}' not found in .edgerc")
+        print(f"[ERROR] Section '{section}' not found in .edgerc")
+        sys.exit(1)
 
     base_url = f"https://{config[section]['host']}"
     session = requests.Session()
     session.auth = EdgeGridAuth(
-        client_token=config[section]["client_token"],
-        client_secret=config[section]["client_secret"],
-        access_token=config[section]["access_token"]
+        client_token=config[section]['client_token'],
+        client_secret=config[section]['client_secret'],
+        access_token=config[section]['access_token']
     )
-
     return session, base_url
 
 
-# ==============================================================
-# Lookup Access Group from FQDN
-# ==============================================================
-def get_access_group_from_fqdn(session, base_url, fqdn):
-    fqdn = fqdn.strip().lower()
+# ==============================================================================
+# Reverse FQDN Lookup (from your validator)
+# ==============================================================================
+def reverse_fqdn_lookup(session, base_url, fqdn):
     url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
+    try:
+        resp = session.get(url, headers={"accept": "application/json"}, timeout=30)
+        if resp.status_code != 200:
+            print(f"[ERROR] HTTP {resp.status_code} during reverse lookup for {fqdn}")
+            return None
+        data = resp.json()
+    except Exception as e:
+        print(f"[ERROR] Exception during reverse lookup: {e}")
+        return None
 
-    resp = session.get(url, headers={"accept": "application/json"}, timeout=30)
-    if resp.status_code != 200:
-        print(f"[ERROR] PAPI lookup failed ({resp.status_code}) for {fqdn}")
-        return None, None
-
-    data = resp.json() or {}
     host_entries = (
-        data.get("items", [])
+        data.get("items")
         or data.get("hostnames", {}).get("items", [])
         or data.get("hostnames", [])
     )
 
-    if not host_entries:
-        print(f"[INFO] No PAPI entries found for {fqdn}")
-        return None, None
+    for entry in host_entries:
+        if fqdn.lower() not in (
+            str(entry.get("cnameFrom", "")).lower(),
+            str(entry.get("edgeHostname", "")).lower(),
+            str(entry.get("stagingEdgeHostname", "")).lower()
+        ):
+            continue
 
-    entry = host_entries[0]
-    group_id = entry.get("groupId")
-    group_name = None
+        return {
+            "groupId": entry.get("groupId", "UNKNOWN"),
+            "accessGroupName": entry.get("accessGroupName", "UNKNOWN"),
+        }
 
-    if group_id:
-        r = session.get(f"{base_url}/papi/v1/groups", headers={"accept": "application/json"}, timeout=20)
-        if r.status_code == 200:
-            for g in r.json().get("groups", {}).get("items", []):
-                if g.get("groupId") == group_id:
-                    group_name = g.get("groupName")
-                    break
-
-    return group_name, group_id
+    return None
 
 
-# ==============================================================
+# ==============================================================================
 # Main
-# ==============================================================
+# ==============================================================================
 def main():
-    parser = argparse.ArgumentParser(description="Lookup Akamai Access Group from FQDN using PAPI API.")
-    parser.add_argument("--section", required=True, help="Section name in .edgerc for authentication")
-    parser.add_argument("--fqdn", required=True, help="FQDN to lookup (e.g. example.com)")
-
+    parser = argparse.ArgumentParser(description="Akamai FQDN → Access Group lookup tool")
+    parser.add_argument("--section", required=True, help="Section from .edgerc")
+    parser.add_argument("--fqdn", required=True, help="Fully qualified domain name to look up")
     args = parser.parse_args()
 
-    session, base_url = setup_session(args.section)
-    group_name, group_id = get_access_group_from_fqdn(session, base_url, args.fqdn)
+    print("================================================================================")
+    print("Akamai FQDN Access Group Lookup Utility")
+    print("================================================================================")
+    print(f"Section: {args.section}")
+    print(f"FQDN: {args.fqdn}\n")
 
-    print("\n=== Access Group Lookup Result ===")
-    print(f"FQDN:           {args.fqdn}")
-    print(f"Access Group:   {group_name or 'N/A'}")
-    print(f"Group ID:       {group_id or 'N/A'}")
-    print("=================================")
+    session, base_url = setup_session(args.section)
+    result = reverse_fqdn_lookup(session, base_url, args.fqdn)
+
+    if not result:
+        print(f"[WARN] No Access Group found for {args.fqdn}")
+        sys.exit(1)
+
+    print("== Access Group Lookup Result ==")
+    print(f"FQDN: {args.fqdn}")
+    print(f"Access Group: {result['accessGroupName']}")
+    print(f"Group ID: {result['groupId']}")
+    print("================================================================================")
 
 
 if __name__ == "__main__":
