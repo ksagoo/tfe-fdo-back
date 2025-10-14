@@ -3,10 +3,13 @@ def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group, d
     Enhanced AppSec entitlement lookup:
     Full match if fqdn in productionHostnames AND access_group substring in config name
     """
-    import json, re, traceback
+    import json, re, traceback, os
 
-    def sanitize_filename(name): return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name))
-    def to_lower(v): return str(v).lower().strip() if isinstance(v, (str, int)) else ""
+    def sanitize_filename(name):
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name))
+
+    def to_lower(v):
+        return str(v).lower().strip() if isinstance(v, (str, int)) else ""
 
     fqdn_l = to_lower(fqdn)
     ag_l = to_lower(access_group)
@@ -18,8 +21,11 @@ def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group, d
 
     try:
         resp = session.get(url, timeout=30)
+
         if debug:
-            write_raw_http(fqdn, "appsec_list", resp.text)
+            os.makedirs("output", exist_ok=True)
+            with open(f"output/raw_appsec_list_{sanitize_filename(fqdn)}.json", "w") as f:
+                f.write(resp.text)
 
         if resp.status_code != 200:
             print(f"[ERROR] AppSec lookup failed: HTTP {resp.status_code}")
@@ -41,7 +47,8 @@ def check_appsec(session, base_url, fqdn, contract_id, group_id, access_group, d
             cfg_resp = session.get(cfg_url, timeout=30)
 
             if debug:
-                write_raw_http(fqdn, f"appsec_cfg_{cfg_id}", cfg_resp.text)
+                with open(f"output/raw_appsec_cfg_{cfg_id}_{sanitize_filename(fqdn)}.json", "w") as f:
+                    f.write(cfg_resp.text)
 
             if cfg_resp.status_code != 200:
                 continue
