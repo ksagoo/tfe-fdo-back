@@ -1,24 +1,12 @@
-def get_group_name_by_id(session, base_url, group_id):
-    """
-    Lookup the access group name for a given groupId.
-    """
-    try:
-        url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{group_id}")
-        resp = session.get(url, timeout=30)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get("groupName") or data.get("name")
-        else:
-            return f"[unknown:{group_id}]"
-    except Exception:
-        return f"[lookup_failed:{group_id}]"
+import json
+import os
+from urllib.parse import urljoin
 
 def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
     """
     Perform a reverse lookup for a given FQDN using PAPI hostnames endpoint.
     Returns groupId, propertyName, accessGroupName, and strippedPropertyName.
     """
-
     result = {
         "fqdn": fqdn,
         "groupId": None,
@@ -51,7 +39,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
                 group_id = entry.get("groupId")
                 property_name = entry.get("propertyName")
 
-                # Derive access group via lookup function (if available)
+                # Derive access group via lookup function
                 access_group_name = get_group_name_by_id(session, base_url, group_id)
 
                 # Strip prefixes/suffixes
@@ -70,6 +58,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
                     "strippedPropertyName": stripped_name
                 })
 
+                # Always print summary
                 print("\n=== Reverse FQDN Lookup Result ===")
                 print(f"FQDN: {fqdn}")
                 print(f"Group ID: {group_id}")
@@ -78,7 +67,15 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
                 print(f"Stripped Property Name: {stripped_name}")
                 print("===================================\n")
 
-                return result  # Stop on first valid match
+                # Write debug file
+                if debug:
+                    os.makedirs("output", exist_ok=True)
+                    out_file = os.path.join("output", f"reverse_lookup_{fqdn.replace('.', '_')}.json")
+                    with open(out_file, "w") as f:
+                        json.dump(result, f, indent=2)
+                    print(f"[DEBUG] Reverse lookup JSON written to: {out_file}")
+
+                return result  #  Stop after first valid match
 
         print(f"[WARN] No match found in PAPI for FQDN: {fqdn}")
 
@@ -90,9 +87,36 @@ def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
 
 
 
+def get_group_name_by_id(session, base_url, group_id):
+    """
+    Lookup the access group name for a given groupId.
+    """
+    try:
+        url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{group_id}")
+        resp = session.get(url, timeout=30)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("groupName") or data.get("name")
+        else:
+            return f"[unknown:{group_id}]"
+    except Exception:
+        return f"[lookup_failed:{group_id}]"
 
 
+def main():
+    args = parse_args()
+    session = setup_session(args.section)
+    base_url = REGION_SETTINGS[args.section]["base_url"]
+    fqdn = args.fqdn
+    debug = args.debug
 
+    print("\n=== Starting Reverse FQDN Lookup ===")
+    reverse_result = reverse_fqdn_lookup(session, base_url, fqdn, debug=debug)
 
+    if reverse_result["groupId"]:
+        print(f"[INFO] Reverse lookup successful for {fqdn}")
+    else:
+        print(f"[WARN] No results found for {fqdn}")
 
+    print("=== Reverse Lookup Complete ===\n")
 
