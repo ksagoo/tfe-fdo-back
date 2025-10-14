@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-Akamai FQDN Access Group Lookup Utility
+Akamai FQDN Access Group Lookup Utility (Final)
 ================================================================================
 Description:
     This script is used primarily during the certificate discovery or automation
@@ -22,41 +22,68 @@ Output:
 ================================================================================
 """
 
-import os
 import sys
+import json
 import argparse
-import requests
+import re
+import os
+import traceback
+from requests.sessions import Session
 from akamai.edgegrid import EdgeGridAuth
 from configparser import ConfigParser
+
 
 # ==============================================================================
 # Session setup
 # ==============================================================================
-def setup_session(section):
-    config = ConfigParser()
-    config.read(os.path.expanduser("~/.edgerc"))
+def setup_session(section: str):
+    edgerc = os.path.join(os.path.expanduser("~"), ".edgerc")
+    parser = ConfigParser()
+    parser.read(edgerc)
 
-    if section not in config:
-        print(f"[ERROR] Section '{section}' not found in .edgerc")
+    if not parser.has_section(section):
+        print(f"[ERROR] Missing section [{section}] in {edgerc}")
         sys.exit(1)
 
-    base_url = f"https://{config[section]['host']}"
-    session = requests.Session()
+    base_url = f"https://{parser.get(section, 'host')}"
+    session = Session()
     session.auth = EdgeGridAuth(
-        client_token=config[section]['client_token'],
-        client_secret=config[section]['client_secret'],
-        access_token=config[section]['access_token']
+        client_token=parser.get(section, "client_token"),
+        client_secret=parser.get(section, "client_secret"),
+        access_token=parser.get(section, "access_token"),
     )
+    session.headers.update({
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    })
     return session, base_url
 
 
 # ==============================================================================
-# Reverse FQDN Lookup (from your validator)
+# Helper: Resolve Access Group Name from Group ID
+# ==============================================================================
+def get_group_name_by_id(session, base_url, group_id):
+    """Look up Access Group Name from /papi/v1/groups."""
+    try:
+        resp = session.get(f"{base_url}/papi/v1/groups", timeout=20)
+        if resp.status_code != 200:
+            return "UNKNOWN"
+        data = resp.json()
+        for g in data.get("groups", {}).get("items", []):
+            if g.get("groupId") == group_id:
+                return g.get("groupName", "UNKNOWN")
+    except Exception:
+        return "UNKNOWN"
+    return "UNKNOWN"
+
+
+# ==============================================================================
+# Reverse FQDN Lookup (from validator)
 # ==============================================================================
 def reverse_fqdn_lookup(session, base_url, fqdn):
     url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
     try:
-        resp = session.get(url, headers={"accept": "application/json"}, timeout=30)
+        resp = session.get(url, timeout=30)
         if resp.status_code != 200:
             print(f"[ERROR] HTTP {resp.status_code} during reverse lookup for {fqdn}")
             return None
@@ -71,18 +98,19 @@ def reverse_fqdn_lookup(session, base_url, fqdn):
         or data.get("hostnames", [])
     )
 
+    fqdn_lower = fqdn.lower()
     for entry in host_entries:
-        if fqdn.lower() not in (
-            str(entry.get("cnameFrom", "")).lower(),
-            str(entry.get("edgeHostname", "")).lower(),
-            str(entry.get("stagingEdgeHostname", "")).lower()
-        ):
+        cname_from = str(entry.get("cnameFrom", "")).lower()
+        cname_to = str(entry.get("cnameTo", "")).lower()
+        edge = str(entry.get("edgeHostname", "")).lower()
+        staging = str(entry.get("stagingEdgeHostname", "")).lower()
+
+        if fqdn_lower not in (cname_from, cname_to, edge, staging):
             continue
 
-        return {
-            "groupId": entry.get("groupId", "UNKNOWN"),
-            "accessGroupName": entry.get("accessGroupName", "UNKNOWN"),
-        }
+        group_id = entry.get("groupId", "UNKNOWN")
+        access_group = get_group_name_by_id(session, base_url, group_id)
+        return {"groupId": group_id, "accessGroupName": access_group}
 
     return None
 
