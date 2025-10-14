@@ -1,6 +1,7 @@
 # ==============================================================
 # AppSec Check
 # ==============================================================
+
 def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_group, debug=False):
     """
     Validates AppSec configuration entitlements.
@@ -20,6 +21,15 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
       }
     """
 
+    # --- Local helper to safely lowercase values
+    def safe_lower(value):
+        try:
+            if isinstance(value, str):
+                return value.lower()
+            return str(value).lower()
+        except Exception:
+            return ""
+
     result = {
         "found": False,
         "partial": False,
@@ -32,6 +42,7 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
         url = result["url"]
         resp = session.get(url, timeout=30)
 
+        # --- Handle permission or API errors cleanly
         if resp.status_code == 403:
             print("[WARN] AppSec access denied (HTTP 403): The API client lacks permission for this group.")
             result["partial_matches"].append({
@@ -46,37 +57,48 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
                 print(resp.text[:400])
             return result
 
-        data = resp.json()
-        configs = data.get("configurations", [])
+        # --- Parse response JSON safely
+        try:
+            data = resp.json()
+        except Exception as e:
+            print(f"[ERROR] AppSec JSON decode failed: {e}")
+            if debug:
+                print(resp.text[:400])
+            return result
 
-        fqdn_lower = fqdn.lower()
-        access_lower = access_group.lower()
+        configs = data.get("configurations", [])
+        fqdn_lower = safe_lower(fqdn)
+        access_lower = safe_lower(access_group)
 
         for cfg in configs:
-            cfg_name = cfg.get("name", "").lower()
-            match = None
+            cfg_name = safe_lower(cfg.get("name", ""))
+            match_found = False
 
-            # --- Check direct name match
+            # --- Direct name checks
             if fqdn_lower in cfg_name and access_lower in cfg_name:
-                match = {"id": cfg.get("id"), "name": cfg.get("name"), "matchType": "full"}
-                result["matches"].append(match)
+                result["matches"].append({
+                    "id": cfg.get("id"),
+                    "name": cfg.get("name"),
+                    "matchType": "full"
+                })
                 result["found"] = True
+                match_found = True
 
             elif fqdn_lower in cfg_name or access_lower in cfg_name:
-                match = {
+                result["partial_matches"].append({
                     "id": cfg.get("id"),
                     "name": cfg.get("name"),
                     "matchType": "partial",
                     "reason": "access_group_only" if access_lower in cfg_name else "fqdn_only"
-                }
-                result["partial_matches"].append(match)
+                })
                 result["partial"] = True
+                match_found = True
 
-            # --- Nested hostname lookup
+            # --- Nested hostname checks (productionHostnames)
             hostnames = cfg.get("productionHostnames", [])
             if isinstance(hostnames, list):
                 for hn in hostnames:
-                    hn_lower = hn.lower()
+                    hn_lower = safe_lower(hn)
                     if fqdn_lower == hn_lower:
                         result["matches"].append({
                             "id": cfg.get("id"),
@@ -85,6 +107,7 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
                             "reason": "fqdn_in_productionHostnames"
                         })
                         result["found"] = True
+                        match_found = True
                     elif fqdn_lower in hn_lower:
                         result["partial_matches"].append({
                             "id": cfg.get("id"),
@@ -93,16 +116,20 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
                             "reason": "partial_fqdn_in_productionHostnames"
                         })
                         result["partial"] = True
+                        match_found = True
 
-        # --- Output results
+            if debug and match_found:
+                print(f"[DEBUG] AppSec Match in config {cfg.get('id')} ({cfg.get('name')})")
+
+        # --- Summary output
+        print(f"[RESULT] AppSec: {'FOUND' if result['found'] else ('PARTIAL MATCH' if result['partial'] else 'NOT FOUND')}")
+
         if debug:
-            print(f"[DEBUG] AppSec configs found: {len(configs)}")
+            print(f"[DEBUG] AppSec configs checked: {len(configs)}")
             for m in result["matches"]:
                 print(f"[DEBUG] AppSec FULL → {m}")
             for p in result["partial_matches"]:
                 print(f"[DEBUG] AppSec PARTIAL → {p}")
-
-        print(f"[RESULT] AppSec: {'FOUND' if result['found'] else ('PARTIAL MATCH' if result['partial'] else 'NOT FOUND')}")
 
         return result
 
