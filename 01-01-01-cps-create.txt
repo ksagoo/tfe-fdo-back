@@ -1,10 +1,7 @@
 def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_group, debug=False):
     """
-    AppSec entitlement validation with per-config hostname lookup.
-    Performs:
-      1. List configs for given contract/group
-      2. For each config, fetch details with includeHostnames=true
-      3. Match fqdn against productionHostnames + access_group in name
+    AppSec entitlement validation (2-step method with substring access group match)
+    Full match = fqdn present in productionHostnames AND access_group substring in config name.
     """
 
     import json, re, traceback
@@ -14,7 +11,7 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
 
     def to_lower(s):
         try:
-            return s.lower() if isinstance(s, str) else str(s).lower()
+            return s.strip().lower() if isinstance(s, str) else str(s).strip().lower()
         except Exception:
             return ""
 
@@ -32,6 +29,7 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
     try:
         resp = session.get(url_list, timeout=30)
 
+        # Always log raw HTTP if debug
         if debug:
             write_raw_http(fqdn, "appsec_list", resp.text)
 
@@ -63,13 +61,14 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
         fqdn_l = to_lower(fqdn)
         ag_l = to_lower(access_group)
 
+        # Step 2 — lookup each config individually
         for cfg in configs:
             cfg_id = cfg.get("id")
             cfg_name = cfg.get("name", "")
             name_l = to_lower(cfg_name)
 
-            # Step 2 — fetch details for this config
             cfg_url = f"{base_url}/appsec/v1/configs/{cfg_id}?includeHostnames=true"
+
             try:
                 cfg_resp = session.get(cfg_url, timeout=30)
 
@@ -85,14 +84,13 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
                 if debug:
                     write_json(cfg_data, f"appsec_cfg_{cfg_id}_{sanitize_filename(fqdn)}")
 
+                # Normalize hostname field
                 host_field = cfg_data.get("productionHostnames", [])
-                if not isinstance(host_field, list):
-                    hostnames = []
-                else:
-                    hostnames = [to_lower(h) for h in host_field if isinstance(h, str)]
+                hostnames = [to_lower(h) for h in host_field] if isinstance(host_field, list) else []
 
-                fqdn_hit = fqdn_l in hostnames
-                ag_hit = ag_l in name_l
+                # Matching logic
+                fqdn_hit = any(fqdn_l == h for h in hostnames)
+                ag_hit = ag_l in name_l  # substring match for access group
 
                 if fqdn_hit and ag_hit:
                     result["matches"].append({
@@ -123,7 +121,7 @@ def check_appsec(session, base_url, fqdn, region, contract_id, group_id, access_
                     traceback.print_exc()
                 continue
 
-        # Print summary
+        # Final summary
         if result["found"]:
             print("[RESULT] AppSec: FOUND")
         elif result["partial"]:
