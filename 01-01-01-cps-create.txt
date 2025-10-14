@@ -1,11 +1,98 @@
-if fqdn in hostnames and access_group.lower() in config_name.lower():
-    result["found"] = True
-    result["matches"].append({
-        "id": config_id,
-        "name": config_name,
-        "matchType": "full",
-        "reason": "fqdn_and_access_group"
-    })
-    if debug:
-        print(f"[DEBUG] FULL MATCH: {config_name} (ID: {config_id}) — stopping further checks.")
-    break  # Stop iterating through remaining configs
+def get_group_name_by_id(session, base_url, group_id):
+    """
+    Lookup the access group name for a given groupId.
+    """
+    try:
+        url = urljoin(base_url, f"identity-management/v3/user-admin/groups/{group_id}")
+        resp = session.get(url, timeout=30)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("groupName") or data.get("name")
+        else:
+            return f"[unknown:{group_id}]"
+    except Exception:
+        return f"[lookup_failed:{group_id}]"
+
+def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
+    """
+    Perform a reverse lookup for a given FQDN using PAPI hostnames endpoint.
+    Returns groupId, propertyName, accessGroupName, and strippedPropertyName.
+    """
+
+    result = {
+        "fqdn": fqdn,
+        "groupId": None,
+        "propertyName": None,
+        "accessGroupName": None,
+        "strippedPropertyName": None
+    }
+
+    try:
+        url = urljoin(base_url, f"papi/v1/hostnames?search={fqdn}")
+        if debug:
+            print(f"[INFO] Performing PAPI reverse lookup: {url}")
+
+        resp = session.get(url, timeout=30)
+        if debug:
+            print(f"[DEBUG] HTTP {resp.status_code} - {len(resp.text)} bytes")
+
+        if resp.status_code != 200:
+            print(f"[ERROR] PAPI reverse lookup failed with {resp.status_code}: {resp.text[:300]}")
+            return result
+
+        data = resp.json()
+        host_entries = data.get("hostnames", [])
+        if debug:
+            print(f"[DEBUG] Total host entries returned: {len(host_entries)}")
+
+        for entry in host_entries:
+            cname_from = entry.get("cnameFrom", "").lower()
+            if fqdn.lower() in cname_from:
+                group_id = entry.get("groupId")
+                property_name = entry.get("propertyName")
+
+                # Derive access group via lookup function (if available)
+                access_group_name = get_group_name_by_id(session, base_url, group_id)
+
+                # Strip prefixes/suffixes
+                stripped_name = property_name
+                if stripped_name.startswith("SD-"):
+                    stripped_name = stripped_name[3:]
+                for suffix in ["-NonProd", "-Prod"]:
+                    if stripped_name.endswith(suffix):
+                        stripped_name = stripped_name[: -len(suffix)]
+
+                # Populate result
+                result.update({
+                    "groupId": group_id,
+                    "propertyName": property_name,
+                    "accessGroupName": access_group_name,
+                    "strippedPropertyName": stripped_name
+                })
+
+                print("\n=== Reverse FQDN Lookup Result ===")
+                print(f"FQDN: {fqdn}")
+                print(f"Group ID: {group_id}")
+                print(f"Property Name: {property_name}")
+                print(f"Access Group: {access_group_name}")
+                print(f"Stripped Property Name: {stripped_name}")
+                print("===================================\n")
+
+                return result  # Stop on first valid match
+
+        print(f"[WARN] No match found in PAPI for FQDN: {fqdn}")
+
+    except Exception as e:
+        print(f"[ERROR] reverse_fqdn_lookup() failed: {e}")
+
+    return result
+
+
+
+
+
+
+
+
+
+
