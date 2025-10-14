@@ -1,55 +1,74 @@
-#!/usr/bin/env python3
-"""
-===============================================================================
-   Akamai Entitlement Validator Suite  (v2.0 Final)
-===============================================================================
+def check_appsec(session, base_url, fqdn, access_group, debug=False):
+    """Validate against AppSec API, including nested hostnames in productionHostnames/stagingHostnames."""
+    url = f"https://{base_url}/appsec/v1/configs?contractId=V-5A82MTA&groupId=272095"
+    if debug:
+        print(f"[INFO] AppSec lookup: {url}")
+    result = {
+        "found": False,
+        "partial": False,
+        "url": url,
+        "matches": [],
+        "partial_matches": []
+    }
 
-   Description:
-   ---------------------------------------------------------------------------
-   Validates entitlements for a given FQDN and Access Group across Akamai:
-       • CPS    (Certificate Provisioning System)
-       • AppSec (Application Security Configurations)
-       • PAPI   (Property Manager API)
+    try:
+        resp = session.get(url)
+        data = resp.json()
 
-   The validator checks whether a hostname (FQDN) and access group pairing
-   is authorized across Akamai platforms by detecting:
-       - Full matches   → FQDN and Access Group both align
-       - Partial matches → Only one element aligns (FQDN or Access Group)
+        for item in data.get("configurations", []):
+            name = item.get("name", "")
+            prod_hosts = item.get("productionHostnames", [])
+            staging_hosts = item.get("stagingHostnames", [])
+            all_hosts = prod_hosts + staging_hosts
 
-   Generates both:
-       • A human-readable terminal summary
-       • A structured JSON report saved under:
-           ./output/entitlement_summary_<fqdn>.json
+            # --- FULL MATCH: FQDN appears in nested hostnames and access group matches ---
+            if fqdn in all_hosts and access_group in name:
+                result["found"] = True
+                result["matches"].append({
+                    "id": item.get("id"),
+                    "name": name,
+                    "matchType": "full",
+                    "fqdn": fqdn,
+                    "source": "productionHostnames" if fqdn in prod_hosts else "stagingHostnames"
+                })
+                if debug:
+                    print(f"[DEBUG] AppSec FULL = fqdn={fqdn}, config={name}")
 
-   ---------------------------------------------------------------------------
-   Usage:
-       python akamai_entitlement_validator-v2.py \
-           --section <ENV_SECTION> \
-           --fqdn <FQDN> \
-           --access-group <ACCESS_GROUP> \
-           [--debug]
+            # --- PARTIAL MATCH: access group matches but FQDN not listed ---
+            elif access_group in name:
+                result["partial"] = True
+                result["partial_matches"].append({
+                    "id": item.get("id"),
+                    "name": name,
+                    "matchType": "partial",
+                    "reason": "access_group_only"
+                })
+                if debug:
+                    print(f"[DEBUG] AppSec PARTIAL = access_group={access_group}, config={name}")
 
-   Example:
-       python akamai_entitlement_validator-v2.py \
-           --section DEV \
-           --fqdn epspos-dev-059test.hsbc.com.hk \
-           --access-group ServiceNow-itilUser \
-           --debug
+            # --- PARTIAL MATCH: FQDN found in hostnames, but unrelated config ---
+            elif fqdn in all_hosts:
+                result["partial"] = True
+                result["partial_matches"].append({
+                    "id": item.get("id"),
+                    "name": name,
+                    "matchType": "partial",
+                    "reason": "fqdn_only"
+                })
+                if debug:
+                    print(f"[DEBUG] AppSec PARTIAL = fqdn={fqdn}, config={name}")
 
-   ---------------------------------------------------------------------------
-   Arguments:
-       --section        Environment section name (e.g. DEV, PROD)
-       --fqdn           Fully Qualified Domain Name to validate
-       --access-group   Access group or role for entitlement check
-       --debug          Enables detailed output and raw JSON capture
+        if debug:
+            if result["found"]:
+                print("[RESULT] AppSec: FOUND")
+            elif result["partial"]:
+                print("[RESULT] AppSec: PARTIAL MATCH")
+            else:
+                print("[RESULT] AppSec: NOT FOUND")
 
-   Exit Codes:
-       0 = Authorized (Full or Mixed Match)
-       1 = Unauthorized (No Valid Entitlement Found)
+    except Exception as e:
+        print(f"[ERROR] AppSec lookup failed: {e}")
+        if debug:
+            traceback.print_exc()
 
-   ---------------------------------------------------------------------------
-   Author:    <Your Name / Team>
-   Created:   October 2025
-   Version:   2.0 Final
-===============================================================================
-"""
+    return result
