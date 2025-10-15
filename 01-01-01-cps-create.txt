@@ -1,17 +1,13 @@
-# Encode only the group name — all other parts are pre-encoded and must remain literal
-    encoded_group = urllib.parse.quote(group_name)
+encoded_group = urllib.parse.quote(group_name)
 
-    # Recreate the working URL exactly as per your reference
-    url = (
-        f"https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap?"
-        f"serverUrl=ldaps%3A%2F%2Ffaa-lds-prod.uk.hsbc"
-        f"&baseDN=OU%3DH%20Prod%2COU%3DHSBCPeople%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
-        f"&attributes=mail"
-        f"&member-of=CN%3D{encoded_group}%2COU%3DCyber%20WASP%20Automation%2COU%3DApplications"
-        f"%2COU%3DGroups%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
-        f"&InfoDir=CN%3D{encoded_group}%2COU%3DCyber%20WASP%20Automation%2COU%3DApplications"
-        f"%2COU%3DGroups%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
-        f"&limit=100&ad=false&sentFrom=CyberWASP"
-    )
-
-    print(f"[INFO] Querying LDAP API:\n{url}\n")
+url = (
+    f"https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap?"
+    f"serverUrl=ldaps%3A%2F%2Ffaa-lds-prod.uk.hsbc"
+    f"&baseDN=OU%3DH%20Prod%2COU%3DHSBCPeople%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
+    f"&attributes=mail"
+    f"&member-of=CN%3D{encoded_group}%2COU%3DCyber%20WASP%20Automation%2COU%3DApplications"
+    f"%2COU%3DGroups%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
+    f"&InfoDir=CN%3D{encoded_group}%2COU%3DCyber%20WASP%20Automation%2COU%3DApplications"
+    f"%2COU%3DGroups%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
+    f"&limit=100&ad=false&sentFrom=CyberWASP"
+)
