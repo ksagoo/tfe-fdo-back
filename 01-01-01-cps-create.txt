@@ -2,17 +2,12 @@
 """
 Query Active Directory group members via HSBC LDAP API.
 
-Usage Examples:
-  Live mode:       python query_ad_group_v1.py --group_name <ADGroup>
-  Dry run:         python query_ad_group_v1.py --group_name <ADGroup> --dry_run
-  Simulate fail:   python query_ad_group_v1.py --group_name <ADGroup> --dry_run --simulate_fail
-  Flatten output:  python query_ad_group_v1.py --group_name <ADGroup> --flatten
-  Show URL only:   python query_ad_group_v1.py --group_name <ADGroup> --show_url
-
-Description:
-  Retrieves Active Directory (AD) user email addresses from HSBC's LDAP endpoint
-  based on the specified AD group name. Includes dry-run mode, failure simulation,
-  URL preview, and flattened output formatting for Jenkins or automation pipelines.
+Usage:
+  python query_ad_group_v1.py --group_name <ADGroup>
+  python query_ad_group_v1.py --group_name <ADGroup> --dry_run
+  python query_ad_group_v1.py --group_name <ADGroup> --dry_run --simulate_fail
+  python query_ad_group_v1.py --group_name <ADGroup> --flatten
+  python query_ad_group_v1.py --group_name <ADGroup> --show_url
 """
 
 import requests
@@ -58,12 +53,10 @@ def sanity_check_url(url):
         if "%25" in value[0]:
             print(f"  Warning: Double encoding detected in '{key}' (contains '%25')")
 
-    if "member-of" not in query_params or "InfoDir" not in query_params:
-        print("  Missing required parameter: 'member-of' or 'InfoDir'")
-    elif query_params["member-of"][0] != query_params["InfoDir"][0]:
-        print("  Mismatch between 'member-of' and 'InfoDir' sections")
+    if "member-of" not in query_params:
+        print("  Missing required parameter: 'member-of'")
     else:
-        print("  Sanity check passed: 'member-of' and 'InfoDir' sections match.\n")
+        print("  Sanity check passed: 'member-of' present.\n")
 
 
 # ---------------------------------------------------------------------
@@ -90,14 +83,13 @@ def fetch_ad_user_details(
     # Encode only the group name (avoid double-encoding other parameters)
     encoded_group = urllib.parse.quote(group_name)
 
-    # Construct URL exactly as per working production format
+    # Construct LDAP query (only one CN reference needed)
     url = (
         f"{base_url}?"
         f"serverUrl={urllib.parse.quote(server_url)}"
         f"&baseDN={base_dn}"
         f"&attributes=mail"
         f"&member-of=CN%3D{encoded_group}%2C{member_path}"
-        f"&InfoDir=CN%3D{encoded_group}%2C{member_path}"
         f"&limit=100&ad=false&sentFrom=CyberWASP"
     )
 
@@ -147,7 +139,6 @@ if __name__ == "__main__":
             f"&baseDN={DEFAULT_BASE_DN}"
             f"&attributes=mail"
             f"&member-of=CN%3D{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
-            f"&InfoDir=CN%3D{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
             f"&limit=100&ad=false&sentFrom=CyberWASP"
         )
         print(f"[SHOW_URL]\n{preview_url}\n")
