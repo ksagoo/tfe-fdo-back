@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 Query Active Directory group members via HSBC LDAP API.
 
@@ -20,8 +20,8 @@ from urllib.parse import urlparse, parse_qs, unquote
 # Constants
 # ---------------------------------------------------------------------
 DEFAULT_BASE_URL = "https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap"
-DEFAULT_SERVER_URL = "ldaps://faa-lds-prod.uk.hsbc"
-DEFAULT_BASE_DN = "OU%3DH%20Prod%2COU%3DHSBCPeople%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
+DEFAULT_SERVER_URL = "ldaps://faa-lds-prod.uk.hsbc:3269"
+DEFAULT_BASE_DN = "OU%3DHSBCPeople%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
 DEFAULT_MEMBER_PATH = (
     "OU%3DCyber%20WASP%20Automation%2COU%3DApplications%2COU%3DGroups"
     "%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
@@ -53,10 +53,10 @@ def sanity_check_url(url):
         if "%25" in value[0]:
             print(f"  Warning: Double encoding detected in '{key}' (contains '%25')")
 
-    if "member-of" in query_params and "InfoDir" in query_params:
-        print("  Sanity check passed: both 'member-of' and 'InfoDir' present.\n")
+    if "member-of" in query_params:
+        print("  Sanity check passed: 'member-of' present.\n")
     else:
-        print("  Warning: missing one of required parameters.\n")
+        print("  Warning: missing 'member-of' parameter.\n")
 
 
 # ---------------------------------------------------------------------
@@ -80,23 +80,19 @@ def fetch_ad_user_details(
         print("[Dry Run] Returning static default email list.")
         return DEFAULT_EMAILS
 
-    # Encode only the group name
     encoded_group = urllib.parse.quote(group_name)
 
-    # Construct exact working URL structure (with Infodir- prefix)
+    # Construct the working LDAP query (single member-of clause, Infodir prefix)
     url = (
         f"{base_url}?"
         f"serverUrl={urllib.parse.quote(server_url)}"
         f"&baseDN={base_dn}"
         f"&attributes=mail"
         f"&member-of=CN%3DInfodir-{encoded_group}%2C{member_path}"
-        f"&InfoDir=CN%3DInfodir-{encoded_group}%2C{member_path}"
         f"&limit=100&ad=false&sentFrom=CyberWASP"
     )
 
-    # Validate before running
     sanity_check_url(url)
-
     print(f"\n[INFO] Querying LDAP API:\n{url}\n")
 
     try:
@@ -140,14 +136,12 @@ if __name__ == "__main__":
             f"&baseDN={DEFAULT_BASE_DN}"
             f"&attributes=mail"
             f"&member-of=CN%3DInfodir-{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
-            f"&InfoDir=CN%3DInfodir-{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
             f"&limit=100&ad=false&sentFrom=CyberWASP"
         )
         print(f"[SHOW_URL]\n{preview_url}\n")
         sanity_check_url(preview_url)
         exit(0)
 
-    # Execute query
     user_details = fetch_ad_user_details(
         args.group_name,
         dry_run=args.dry_run,
