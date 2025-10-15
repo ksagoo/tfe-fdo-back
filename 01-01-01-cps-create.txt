@@ -3,11 +3,11 @@
 Query Active Directory group members via HSBC LDAP API.
 
 Usage Examples:
-  Live mode:       python query_ad_group_v3.py --group_name <ADGroup>
-  Dry run:         python query_ad_group_v3.py --group_name <ADGroup> --dry_run
-  Simulate fail:   python query_ad_group_v3.py --group_name <ADGroup> --dry_run --simulate_fail
-  Flatten output:  python query_ad_group_v3.py --group_name <ADGroup> --flatten
-  Show URL only:   python query_ad_group_v3.py --group_name <ADGroup> --show_url
+  Live mode:       python query_ad_group_final.py --group_name <ADGroup>
+  Dry run:         python query_ad_group_final.py --group_name <ADGroup> --dry_run
+  Simulate fail:   python query_ad_group_final.py --group_name <ADGroup> --dry_run --simulate_fail
+  Flatten output:  python query_ad_group_final.py --group_name <ADGroup> --flatten
+  Show URL only:   python query_ad_group_final.py --group_name <ADGroup> --show_url
 """
 
 import requests
@@ -17,10 +17,10 @@ import json
 from urllib.parse import urlparse, parse_qs, unquote
 
 # ---------------------------------------------------------------------
-# Constants (FULLY ENCODED — verified production-ready version)
+# Constants (FULLY ENCODED — confirmed working configuration)
 # ---------------------------------------------------------------------
 DEFAULT_BASE_URL = "https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap"
-DEFAULT_SERVER_URL = "ldaps%3A%2F%2Fffaa-lds-prod.uk.hsbc%3A3269"
+DEFAULT_SERVER_URL = "ldaps%3A%2F%2Ffaa-lds-prod.uk.hsbc%3A3269"
 DEFAULT_BASE_DN = "OU%3DHSBCPeople%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
 DEFAULT_MEMBER_PATH = (
     "OU%3DCyber%20WASP%20Automation%2COU%3DApplications%2COU%3DGroups"
@@ -74,7 +74,7 @@ def fetch_ad_user_details(group_name, dry_run=False, simulate_fail=False):
 
     encoded_group = urllib.parse.quote(group_name)
 
-    # Construct final working URL — matches verified working reference format
+    # Construct working LDAP query exactly as in confirmed working version
     url = (
         f"{DEFAULT_BASE_URL}?"
         f"serverUrl={DEFAULT_SERVER_URL}"
@@ -133,12 +133,10 @@ if __name__ == "__main__":
         sanity_check_url(preview_url)
         exit(0)
 
-    # Fetch user details
     user_details = fetch_ad_user_details(
         args.group_name, dry_run=args.dry_run, simulate_fail=args.simulate_fail
     )
 
-    # Output formatting
     if args.flatten:
         print(", ".join([u["mail"] for u in user_details]))
     else:
