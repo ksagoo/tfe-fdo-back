@@ -1,30 +1,67 @@
 #!/usr/bin/env python3
-"""
-Query Active Directory group members via HSBC LDAP API.
+# ==================================================================================================
+#  HSBC CyberWASP | AD Group Query Utility
+# ==================================================================================================
+#
+#  Description:
+#  -----------------------------------------------------------------------------------------------
+#  Queries Active Directory (AD) group membership details via HSBC’s LDAP API endpoint.
+#  Supports live lookups, dry-run simulation, URL preview, and debugging output.
+#  Core use case is entitlement validation for access groups and platform onboarding automation.
+#
+#  The script retrieves group members from LDAP based on:
+#       - Group Distinguished Name (CN=Infodir-<group_name>)
+#       - Configurable Base DN and Member Path
+#
+#  Default values correspond to the production LDAP endpoint:
+#       https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap
+#
+#  Generates:
+#       • Structured JSON output of group members
+#       • Optional flattened email list (--flatten)
+#
+#  -----------------------------------------------------------------------------------------------
+#  Usage:
+#       python query_ad_group_v4.py --group_name <AD_GROUP>
+#
+#  Options:
+#       --dry_run               Simulates LDAP query (returns static default list)
+#       --simulate_fail         Forces simulated failure (returns fallback email)
+#       --flatten               Outputs comma-separated email list
+#       --show_url              Displays constructed LDAP query URL
+#       --debug                 Enables detailed debug output
+#
+#       # Override defaults
+#       --base_url <URL>        Override LDAP base URL
+#       --server_url <URL>      Override LDAP server URL (URL-encoded)
+#       --base_dn <DN>          Override Base DN (URL-encoded)
+#       --member_path <DN>      Override Member Path (URL-encoded)
+#       --failsafe_email <MAIL> Override fallback email
+#
+#  -----------------------------------------------------------------------------------------------
+#  Examples:
+#
+#       # Live LDAP lookup (Production)
+#       python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers
+#
+#       # Preview LDAP query URL only
+#       python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers --show_url
+#
+#       # UAT override with custom server and Base DN
+#       python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers \
+#           --server_url "ldaps%3A%2F%2Faa-lds-uat.uk.hsbc%3A3269" \
+#           --base_dn "OU%3DHSBCPeople%2CDC%3DInfoDir%2CDC%3DUAT%2CDC%3DHSBC"
+#
+#       # Flattened list output
+#       python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers --flatten
+#
+#  -----------------------------------------------------------------------------------------------
+#  Exit Codes:
+#       0   Successful query or dry-run
+#       1   Query failed (fallback triggered)
+#
+# ==================================================================================================
 
-Description:
-    Retrieves members of a given AD group using HSBC’s LDAP gateway endpoint.
-    Supports dry-run simulation, URL preview, flattening of output, and optional debug mode.
-    All key parameters (base URL, server URL, DN paths, and fail-safe email) can be overridden via CLI.
-
-Usage Examples:
-    • Live query:
-        python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers
-
-    • Dry run (simulate without hitting LDAP):
-        python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers --dry_run
-
-    • Show only generated LDAP query URL:
-        python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers --show_url
-
-    • Enable debug (verbose mode):
-        python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers --debug
-
-    • Override LDAP parameters (example):
-        python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers \
-            --server_url "ldaps%3A%2F%2Faa-lds-uat.uk.hsbc%3A3269" \
-            --base_dn "OU%3DHSBCPeople%2CDC%3DInfoDir%2CDC%3DUAT%2CDC%3DHSBC"
-"""
 
 import requests
 import argparse
@@ -34,7 +71,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 
 # ------------------------------------------------------------------------
-# Constants (canonical verified version)
+# Canonical Verified Constants
 # ------------------------------------------------------------------------
 DEFAULT_BASE_URL = "https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap"
 DEFAULT_SERVER_URL = "ldaps%3A%2F%2Faa-lds-prod.uk.hsbc%3A3269"
@@ -56,9 +93,10 @@ FAILSAFE_EMAIL = "cyberwaspwafdevops@noexternalmail.hsbc.com"
 
 
 # ------------------------------------------------------------------------
-# Helper: Sanity check LDAP query URL
+# Debug Utility
 # ------------------------------------------------------------------------
 def sanity_check_url(url, debug=False):
+    """Prints decoded LDAP query details if debug enabled."""
     if not debug:
         return
     print("\n[DEBUG] Sanity check before live LDAP query:")
@@ -90,7 +128,6 @@ def fetch_ad_user_details(
     member_path=DEFAULT_MEMBER_PATH,
 ):
     """Fetch AD user details for a given group name or return fallback data."""
-
     if dry_run:
         print("[Dry Run] Returning static default email list.")
         return DEFAULT_EMAILS
@@ -132,6 +169,7 @@ if __name__ == "__main__":
         formatter_class=argparse.RawTextHelpFormatter,
     )
 
+    # Standard options
     parser.add_argument("--group_name", required=True, help="Name of AD group to query")
     parser.add_argument("--dry_run", action="store_true", help="Simulate response only")
     parser.add_argument("--simulate_fail", action="store_true", help="Force dry-run failure mode")
@@ -139,7 +177,7 @@ if __name__ == "__main__":
     parser.add_argument("--show_url", action="store_true", help="Show LDAP query URL only")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug output")
 
-    # Override parameters
+    # Overrides
     parser.add_argument("--base_url", help="Override default LDAP base URL")
     parser.add_argument("--server_url", help="Override LDAP server URL (URL-encoded)")
     parser.add_argument("--base_dn", help="Override base distinguished name (URL-encoded)")
@@ -148,11 +186,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Allow overriding failsafe dynamically
+    # Allow override of fallback email dynamically
     if args.failsafe_email:
         FAILSAFE_EMAIL = args.failsafe_email
 
-    # URL preview only
+    # Show only the constructed URL
     if args.show_url:
         encoded_group = urllib.parse.quote(args.group_name)
         preview_url = (
@@ -166,7 +204,7 @@ if __name__ == "__main__":
         print(f"\n[SHOW_URL]\n{preview_url}\n")
         exit(0)
 
-    # Execute query
+    # Execute main LDAP query
     user_details = fetch_ad_user_details(
         args.group_name,
         dry_run=args.dry_run,
