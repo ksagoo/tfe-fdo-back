@@ -54,11 +54,9 @@ def sanity_check_url(url):
             print(f"  Warning: Double encoding detected in '{key}' (contains '%25')")
 
     if "member-of" in query_params and "InfoDir" in query_params:
-        print("  Sanity check passed: both 'member-of' and 'InfoDir' sections present.\n")
-    elif "member-of" in query_params:
-        print("  Sanity check: only 'member-of' present.\n")
+        print("  Sanity check passed: both 'member-of' and 'InfoDir' present.\n")
     else:
-        print("  Missing 'member-of' parameter.\n")
+        print("  Warning: missing one of required parameters.\n")
 
 
 # ---------------------------------------------------------------------
@@ -72,7 +70,6 @@ def fetch_ad_user_details(
     server_url=DEFAULT_SERVER_URL,
     base_dn=DEFAULT_BASE_DN,
     member_path=DEFAULT_MEMBER_PATH,
-    include_infodir=True,
 ):
     """Fetch AD user details for a given group name or return fallback data."""
 
@@ -83,22 +80,21 @@ def fetch_ad_user_details(
         print("[Dry Run] Returning static default email list.")
         return DEFAULT_EMAILS
 
+    # Encode only the group name
     encoded_group = urllib.parse.quote(group_name)
 
-    # Construct URL — match working production pattern
+    # Construct exact working URL structure (with Infodir- prefix)
     url = (
         f"{base_url}?"
         f"serverUrl={urllib.parse.quote(server_url)}"
         f"&baseDN={base_dn}"
         f"&attributes=mail"
-        f"&member-of=CN%3D{encoded_group}%2C{member_path}"
+        f"&member-of=CN%3DInfodir-{encoded_group}%2C{member_path}"
+        f"&InfoDir=CN%3DInfodir-{encoded_group}%2C{member_path}"
+        f"&limit=100&ad=false&sentFrom=CyberWASP"
     )
 
-    if include_infodir:
-        url += f"&InfoDir=CN%3D{encoded_group}%2C{member_path}"
-
-    url += "&limit=100&ad=false&sentFrom=CyberWASP"
-
+    # Validate before running
     sanity_check_url(url)
 
     print(f"\n[INFO] Querying LDAP API:\n{url}\n")
@@ -132,13 +128,10 @@ if __name__ == "__main__":
     parser.add_argument("--simulate_fail", action="store_true", help="Force dry-run failure mode")
     parser.add_argument("--flatten", action="store_true", help="Output flattened email list")
     parser.add_argument("--show_url", action="store_true", help="Show LDAP query URL and exit")
-    parser.add_argument("--no_infodir", action="store_true", help="Exclude InfoDir parameter")
 
     args = parser.parse_args()
 
-    include_infodir = not args.no_infodir
-
-    # Show URL preview only
+    # Show URL only
     if args.show_url:
         encoded_group = urllib.parse.quote(args.group_name)
         preview_url = (
@@ -146,21 +139,19 @@ if __name__ == "__main__":
             f"serverUrl={urllib.parse.quote(DEFAULT_SERVER_URL)}"
             f"&baseDN={DEFAULT_BASE_DN}"
             f"&attributes=mail"
-            f"&member-of=CN%3D{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
+            f"&member-of=CN%3DInfodir-{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
+            f"&InfoDir=CN%3DInfodir-{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
+            f"&limit=100&ad=false&sentFrom=CyberWASP"
         )
-        if include_infodir:
-            preview_url += f"&InfoDir=CN%3D{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
-        preview_url += "&limit=100&ad=false&sentFrom=CyberWASP"
         print(f"[SHOW_URL]\n{preview_url}\n")
         sanity_check_url(preview_url)
         exit(0)
 
-    # Fetch members
+    # Execute query
     user_details = fetch_ad_user_details(
         args.group_name,
         dry_run=args.dry_run,
         simulate_fail=args.simulate_fail,
-        include_infodir=include_infodir,
     )
 
     if args.flatten:
