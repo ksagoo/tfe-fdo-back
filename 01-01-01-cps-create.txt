@@ -4,26 +4,34 @@
 Akamai FQDN Access Group Lookup Utility (Property-Level)
 ================================================================================
 Description:
-    Used during the certificate discovery or automation process where only
+    Used during certificate discovery or automation processes where only
     an FQDN is available. This performs a full PAPI reverse lookup to return
-    the *property-level* Access Group and Group ID (not just account-level).
+    the *property-level* Access Group and Group ID.
 
 Usage:
-    python akamai_fqdn_access_group_lookup.py --section <edgerc_section> --fqdn <hostname>
+    python akamai_fqdn_access_group_lookup.py --section <edgerc_section> --fqdn <hostname> [--json]
 
 Example:
     python akamai_fqdn_access_group_lookup.py --section dev --fqdn epspos-dev-059test.hsbc.com.hk
 
-Output:
+Output (text mode):
     == Access Group Lookup Result ==
     FQDN: epspos-dev-059test.hsbc.com.hk
     Access Group: ServiceNow-itilUser
     Group ID: grp_272095
+
+Output (JSON mode):
+    {
+      "fqdn": "epspos-dev-059test.hsbc.com.hk",
+      "accessGroupName": "ServiceNow-itilUser",
+      "groupId": "grp_272095"
+    }
 ================================================================================
 """
 
 import os
 import sys
+import json
 import argparse
 import requests
 from akamai.edgegrid import EdgeGridAuth
@@ -73,7 +81,6 @@ def get_group_name_by_id(session, base_url, group_id):
 # Full reverse lookup for property-level group
 # ==============================================================================
 def reverse_fqdn_lookup(session, base_url, fqdn):
-    """Perform reverse FQDN lookup to return true property-level Access Group info."""
     fqdn = fqdn.lower()
     url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
 
@@ -102,7 +109,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn):
         if fqdn not in (cname_from, cname_to, edge, staging):
             continue
 
-        # --- Step 1: Extract property info ---
+        # Step 1: Extract property info
         property_id = entry.get("propertyId")
         contract_id = entry.get("contractId")
         group_id = entry.get("groupId")
@@ -110,7 +117,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn):
         if not property_id or not contract_id or not group_id:
             continue
 
-        # --- Step 2: Query property metadata to get true property-level groupId ---
+        # Step 2: Query property metadata to get true property-level groupId
         prop_url = f"{base_url}/papi/v1/properties/{property_id}?contractId={contract_id}&groupId={group_id}"
         try:
             prop_resp = session.get(prop_url, timeout=20)
@@ -126,7 +133,7 @@ def reverse_fqdn_lookup(session, base_url, fqdn):
         except Exception:
             real_group_id = group_id
 
-        # --- Step 3: Get friendly Access Group name ---
+        # Step 3: Get friendly Access Group name
         access_group_name = get_group_name_by_id(session, base_url, real_group_id)
 
         return {
@@ -145,13 +152,8 @@ def main():
     parser = argparse.ArgumentParser(description="Akamai FQDN → Access Group lookup tool")
     parser.add_argument("--section", required=True, help="Section from .edgerc")
     parser.add_argument("--fqdn", required=True, help="Fully qualified domain name to look up")
+    parser.add_argument("--json", action="store_true", help="Output results in JSON format for CI/CD pipelines")
     args = parser.parse_args()
-
-    print("================================================================================")
-    print("Akamai FQDN Access Group Lookup Utility")
-    print("================================================================================")
-    print(f"Section: {args.section}")
-    print(f"FQDN: {args.fqdn}\n")
 
     session, base_url = setup_session(args.section)
     result = reverse_fqdn_lookup(session, base_url, args.fqdn)
@@ -160,11 +162,19 @@ def main():
         print(f"[WARN] No Access Group found for {args.fqdn}")
         sys.exit(1)
 
-    print("== Access Group Lookup Result ==")
-    print(f"FQDN: {result['fqdn']}")
-    print(f"Access Group: {result['accessGroupName']}")
-    print(f"Group ID: {result['groupId']}")
-    print("================================================================================")
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        print("================================================================================")
+        print("Akamai FQDN Access Group Lookup Utility")
+        print("================================================================================")
+        print(f"Section: {args.section}")
+        print(f"FQDN: {args.fqdn}\n")
+        print("== Access Group Lookup Result ==")
+        print(f"FQDN: {result['fqdn']}")
+        print(f"Access Group: {result['accessGroupName']}")
+        print(f"Group ID: {result['groupId']}")
+        print("================================================================================")
 
 
 if __name__ == "__main__":
