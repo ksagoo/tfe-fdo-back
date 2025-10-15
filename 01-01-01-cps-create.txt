@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Query Active Directory group members via HSBC LDAP API.
+Query Active Directory group members via HSBC LDAP API (final encoded version).
 """
 
 import requests
@@ -10,14 +10,14 @@ import json
 from urllib.parse import urlparse, parse_qs, unquote
 
 # ---------------------------------------------------------------------
-# Constants (UNENCODED — requests handles escaping)
+# Constants (FULLY ENCODED — matches verified working version)
 # ---------------------------------------------------------------------
 DEFAULT_BASE_URL = "https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap"
-DEFAULT_SERVER_URL = "ldaps://faa-lds-prod.uk.hsbc:3269"
-DEFAULT_BASE_DN = "OU=HSBCPeople,OU=InfoDir,DC=Prod,DC=HSBC"
+DEFAULT_SERVER_URL = "ldaps%3A%2F%2Ffaa-lds-prod.uk.hsbc%3A3269"
+DEFAULT_BASE_DN = "OU%3DHSBCPeople%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
 DEFAULT_MEMBER_PATH = (
-    "OU=Cyber WASP Automation,OU=Applications,OU=Groups,"
-    "OU=InfoDir,DC=Prod,DC=HSBC"
+    "OU%3DCyber%20WASP%20Automation%2COU%3DApplications%2COU%3DGroups"
+    "%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
 )
 
 DEFAULT_EMAILS = [
@@ -31,9 +31,10 @@ FAILSAFE_EMAIL = "cyberwaspwafdevops@noexternalmail.hsbc.com"
 
 
 # ---------------------------------------------------------------------
-# Sanity Check
+# Sanity Check (Optional)
 # ---------------------------------------------------------------------
 def sanity_check_url(url):
+    """Decode and validate constructed URL before live call."""
     print("\n[DEBUG] Sanity check before live LDAP query:")
     parsed = urlparse(url)
     print(f"  Base URL: {parsed.scheme}://{parsed.netloc}{parsed.path}")
@@ -58,18 +59,15 @@ def fetch_ad_user_details(group_name, dry_run=False, simulate_fail=False):
         print("[Dry Run] Returning static default email list.")
         return DEFAULT_EMAILS
 
-    # Encode only the DN parts, not the protocol or port
-    encoded_server_url = urllib.parse.quote(DEFAULT_SERVER_URL, safe=":/")
-    encoded_base_dn = urllib.parse.quote(DEFAULT_BASE_DN, safe="=,")
-    encoded_member_path = urllib.parse.quote(DEFAULT_MEMBER_PATH, safe="=,")
+    # Encode only the dynamic group name
     encoded_group = urllib.parse.quote(group_name)
 
     url = (
         f"{DEFAULT_BASE_URL}?"
-        f"serverUrl={encoded_server_url}"
-        f"&baseDN={encoded_base_dn}"
+        f"serverUrl={DEFAULT_SERVER_URL}"
+        f"&baseDN={DEFAULT_BASE_DN}"
         f"&attributes=mail"
-        f"&member-of=CN%3DInfodir-{encoded_group}%2C{encoded_member_path}"
+        f"&member-of=CN%3DInfodir-{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
         f"&limit=100&ad=false&sentFrom=CyberWASP"
     )
 
@@ -94,7 +92,10 @@ def fetch_ad_user_details(group_name, dry_run=False, simulate_fail=False):
 # CLI Entry Point
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Query AD group members via HSBC LDAP endpoint.",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     parser.add_argument("--group_name", required=True)
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--simulate_fail", action="store_true")
@@ -102,17 +103,15 @@ if __name__ == "__main__":
     parser.add_argument("--show_url", action="store_true")
     args = parser.parse_args()
 
+    # Preview URL only
     if args.show_url:
-        encoded_server_url = urllib.parse.quote(DEFAULT_SERVER_URL, safe=":/")
-        encoded_base_dn = urllib.parse.quote(DEFAULT_BASE_DN, safe="=,")
-        encoded_member_path = urllib.parse.quote(DEFAULT_MEMBER_PATH, safe="=,")
         encoded_group = urllib.parse.quote(args.group_name)
         preview_url = (
             f"{DEFAULT_BASE_URL}?"
-            f"serverUrl={encoded_server_url}"
-            f"&baseDN={encoded_base_dn}"
+            f"serverUrl={DEFAULT_SERVER_URL}"
+            f"&baseDN={DEFAULT_BASE_DN}"
             f"&attributes=mail"
-            f"&member-of=CN%3DInfodir-{encoded_group}%2C{encoded_member_path}"
+            f"&member-of=CN%3DInfodir-{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
             f"&limit=100&ad=false&sentFrom=CyberWASP"
         )
         print(f"[SHOW_URL]\n{preview_url}\n")
