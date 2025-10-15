@@ -1,40 +1,29 @@
 #!/usr/bin/env python3
 """
-===============================================================================
-Query Active Directory Group Members via HSBC LDAP API
-===============================================================================
+Query Active Directory group members via HSBC LDAP API.
 
 Description:
-    This utility queries the HSBC LDAP directory to retrieve user email
-    addresses belonging to a specified Active Directory (AD) group.
+    Retrieves members of a given AD group using HSBC’s LDAP gateway endpoint.
+    Supports dry-run simulation, URL preview, flattening of output, and optional debug mode.
+    All key parameters (base URL, server URL, DN paths, and fail-safe email) can be overridden via CLI.
 
 Usage Examples:
-    Live query:
-        python query_ad_group_v3.py --group_name CYBERWASPJIRA-PowerUsers
+    • Live query:
+        python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers
 
-    Dry run (returns static data without querying LDAP):
-        python query_ad_group_v3.py --group_name CYBERWASPJIRA-PowerUsers --dry_run
+    • Dry run (simulate without hitting LDAP):
+        python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers --dry_run
 
-    Simulate failure (dry run mode returning fallback email):
-        python query_ad_group_v3.py --group_name CYBERWASPJIRA-PowerUsers --dry_run --simulate_fail
+    • Show only generated LDAP query URL:
+        python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers --show_url
 
-    Flatten output (comma-separated emails):
-        python query_ad_group_v3.py --group_name CYBERWASPJIRA-PowerUsers --flatten
+    • Enable debug (verbose mode):
+        python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers --debug
 
-    Show the LDAP API URL (without executing query):
-        python query_ad_group_v3.py --group_name CYBERWASPJIRA-PowerUsers --show_url
-
-    Debug mode (print detailed request structure):
-        python query_ad_group_v3.py --group_name CYBERWASPJIRA-PowerUsers --debug
-
-Flags:
-    --group_name     (required)   Name of the AD group to query
-    --dry_run                     Perform a static test (no live API call)
-    --simulate_fail               Force dry run to simulate API failure
-    --flatten                     Output comma-separated email addresses
-    --show_url                    Display constructed LDAP query URL only
-    --debug                       Enable verbose logging and sanity checks
-===============================================================================
+    • Override LDAP parameters (example):
+        python query_ad_group_v4.py --group_name CYBERWASPJIRA-PowerUsers \
+            --server_url "ldaps%3A%2F%2Faa-lds-uat.uk.hsbc%3A3269" \
+            --base_dn "OU%3DHSBCPeople%2CDC%3DInfoDir%2CDC%3DUAT%2CDC%3DHSBC"
 """
 
 import requests
@@ -45,13 +34,11 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 
 # ------------------------------------------------------------------------
-# Constants (verified and working)
+# Constants (canonical verified version)
 # ------------------------------------------------------------------------
 DEFAULT_BASE_URL = "https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap"
 DEFAULT_SERVER_URL = "ldaps%3A%2F%2Faa-lds-prod.uk.hsbc%3A3269"
-
 DEFAULT_BASE_DN = "OU%3DHSBCPeople%2CDC%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
-
 DEFAULT_MEMBER_PATH = (
     "OU%3DCyber%20WASP%20Automation%2COU%3DApplications%2COU%3DGroups"
     "%2CDC%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
@@ -69,25 +56,24 @@ FAILSAFE_EMAIL = "cyberwaspwafdevops@noexternalmail.hsbc.com"
 
 
 # ------------------------------------------------------------------------
-# Sanity Check (only active with --debug)
+# Helper: Sanity check LDAP query URL
 # ------------------------------------------------------------------------
 def sanity_check_url(url, debug=False):
-    """Decode and validate LDAP query URL structure."""
     if not debug:
         return
     print("\n[DEBUG] Sanity check before live LDAP query:")
     parsed = urlparse(url)
-    print(f"  Base URL: {parsed.scheme}://{parsed.netloc}{parsed.path}")
     query_params = parse_qs(parsed.query)
+    print(f" Base URL: {parsed.scheme}://{parsed.netloc}{parsed.path}")
     for key, value in query_params.items():
         decoded_value = unquote(value[0])
-        print(f"  {key} = {decoded_value}")
+        print(f" {key} = {decoded_value}")
         if "%25" in value[0]:
-            print(f"  Warning: Double encoding detected in '{key}' (contains '%25')")
+            print(f" Warning: Double encoding detected in '{key}' (contains %25)")
     if "member-of" in query_params:
-        print("  Sanity check passed: 'member-of' present.\n")
+        print(" Sanity check passed: 'member-of' present.\n")
     else:
-        print("  Warning: missing 'member-of' parameter.\n")
+        print(" Warning: missing 'member-of' parameter.\n")
 
 
 # ------------------------------------------------------------------------
@@ -104,10 +90,9 @@ def fetch_ad_user_details(
     member_path=DEFAULT_MEMBER_PATH,
 ):
     """Fetch AD user details for a given group name or return fallback data."""
+
     if dry_run:
-        if simulate_fail:
-            print("[Dry Run: Simulated Failure] Returning fail-safe email alias.")
-            return [{"mail": FAILSAFE_EMAIL}]
+        print("[Dry Run] Returning static default email list.")
         return DEFAULT_EMAILS
 
     encoded_group = urllib.parse.quote(group_name)
@@ -120,23 +105,21 @@ def fetch_ad_user_details(
         f"&limit=100&ad=false&sentFrom=CyberWASP"
     )
 
-    sanity_check_url(url, debug)
-
-    if debug:
-        print(f"\n[DEBUG] Querying LDAP API:\n{url}\n")
+    sanity_check_url(url, debug=debug)
 
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
+
         if not data:
-            if debug:
-                print("[DEBUG] No AD members found — returning fail-safe alias.")
+            print("[Warning] No AD members found. Using fail-safe email alias.")
             return [{"mail": FAILSAFE_EMAIL}]
         return data
+
     except Exception as e:
-        if debug:
-            print(f"[DEBUG] Exception encountered: {e}")
+        print(f"[Error] Failed to fetch AD group details: {e}")
+        print("[Fallback] Returning fail-safe email alias.")
         return [{"mail": FAILSAFE_EMAIL}]
 
 
@@ -153,33 +136,50 @@ if __name__ == "__main__":
     parser.add_argument("--dry_run", action="store_true", help="Simulate response only")
     parser.add_argument("--simulate_fail", action="store_true", help="Force dry-run failure mode")
     parser.add_argument("--flatten", action="store_true", help="Output flattened email list")
-    parser.add_argument("--show_url", action="store_true", help="Show LDAP query URL and exit")
-    parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging")
+    parser.add_argument("--show_url", action="store_true", help="Show LDAP query URL only")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose debug output")
+
+    # Override parameters
+    parser.add_argument("--base_url", help="Override default LDAP base URL")
+    parser.add_argument("--server_url", help="Override LDAP server URL (URL-encoded)")
+    parser.add_argument("--base_dn", help="Override base distinguished name (URL-encoded)")
+    parser.add_argument("--member_path", help="Override member path DN (URL-encoded)")
+    parser.add_argument("--failsafe_email", help="Override fallback email address")
 
     args = parser.parse_args()
 
-    # Show URL only
+    # Allow overriding failsafe dynamically
+    if args.failsafe_email:
+        FAILSAFE_EMAIL = args.failsafe_email
+
+    # URL preview only
     if args.show_url:
         encoded_group = urllib.parse.quote(args.group_name)
         preview_url = (
-            f"{DEFAULT_BASE_URL}?"
-            f"serverUrl={DEFAULT_SERVER_URL}"
-            f"&baseDN={DEFAULT_BASE_DN}"
+            f"{args.base_url or DEFAULT_BASE_URL}?"
+            f"serverUrl={args.server_url or DEFAULT_SERVER_URL}"
+            f"&baseDN={args.base_dn or DEFAULT_BASE_DN}"
             f"&attributes=mail"
-            f"&member-of=CN%3DInfodir-{encoded_group}%2C{DEFAULT_MEMBER_PATH}"
+            f"&member-of=CN%3DInfodir-{encoded_group}%2C{args.member_path or DEFAULT_MEMBER_PATH}"
             f"&limit=100&ad=false&sentFrom=CyberWASP"
         )
-        print(f"[SHOW_URL]\n{preview_url}\n")
+        print(f"\n[SHOW_URL]\n{preview_url}\n")
         exit(0)
 
+    # Execute query
     user_details = fetch_ad_user_details(
         args.group_name,
         dry_run=args.dry_run,
         simulate_fail=args.simulate_fail,
         debug=args.debug,
+        base_url=args.base_url or DEFAULT_BASE_URL,
+        server_url=args.server_url or DEFAULT_SERVER_URL,
+        base_dn=args.base_dn or DEFAULT_BASE_DN,
+        member_path=args.member_path or DEFAULT_MEMBER_PATH,
     )
 
+    # Output results
     if args.flatten:
-        print(", ".join([u["mail"] for u in user_details]))
+        print(" ".join(u["mail"] for u in user_details))
     else:
         print(json.dumps(user_details, indent=4))
