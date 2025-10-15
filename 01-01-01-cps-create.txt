@@ -8,7 +8,12 @@ import json
 # ---------------------------------------------------------------------
 DEFAULT_BASE_URL = "https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap"
 DEFAULT_SERVER_URL = "ldaps://faa-lds-prod.uk.hsbc"
-DEFAULT_BASE_DN = "OU=Cyber WASP Automation,OU=Applications,OU=Prod,DC=hsbc,DC=com"
+DEFAULT_BASE_DN = (
+    "OU=DH Prod,OU=HSBCPeople,OU=InfoDir,DC=Prod,DC=HSBC"
+)
+DEFAULT_MEMBER_PATH = (
+    "CN=Cyber WASP Automation,OU=Applications,OU=Groups,OU=InfoDir,DC=Prod,DC=HSBC"
+)
 
 DEFAULT_EMAILS = [
     {"mail": "paul.dawson@hsbc.com"},
@@ -20,7 +25,7 @@ DEFAULT_EMAILS = [
 FAILSAFE_EMAIL = "cyberwaspwafdevops@noexternalmail.hsbc.com"
 
 # ---------------------------------------------------------------------
-# Core Function
+# Core Function: Fetch AD Group Members
 # ---------------------------------------------------------------------
 def fetch_ad_user_details(
     group_name,
@@ -29,10 +34,11 @@ def fetch_ad_user_details(
     base_url=DEFAULT_BASE_URL,
     server_url=DEFAULT_SERVER_URL,
     base_dn=DEFAULT_BASE_DN,
+    member_path=DEFAULT_MEMBER_PATH,
 ):
     """Fetch AD user details for a given group name or return fallback data."""
 
-    # Dry-run handling
+    # Dry-run logic
     if dry_run:
         if simulate_fail:
             print("[Dry Run: Simulated Failure] Returning fail-safe email alias.")
@@ -40,16 +46,19 @@ def fetch_ad_user_details(
         print("[Dry Run] Returning static default email list.")
         return DEFAULT_EMAILS
 
-    # Encode only once for live URL
-    encoded_group = urllib.parse.quote(group_name)
+    # Encode only the parts that vary
     encoded_server_url = urllib.parse.quote(server_url)
-    encoded_base_dn = urllib.parse.quote(base_dn)
+    encoded_group_name = urllib.parse.quote(group_name)
 
+    # Construct URL exactly like the working version
     url = (
         f"{base_url}?"
-        f"serverUrl={encoded_server_url}&"
-        f"baseDn={encoded_base_dn}&"
-        f"InfoDir={encoded_group}&limit=100&ad=false&sentFrom=CyberWASP"
+        f"serverUrl={encoded_server_url}"
+        f"&baseDN={urllib.parse.quote(base_dn)}"
+        f"&attributes=mail"
+        f"&member-of=CN={encoded_group_name},{urllib.parse.quote(member_path)}"
+        f"&InfoDir=CN={encoded_group_name},{urllib.parse.quote(member_path)}"
+        f"&limit=100&ad=false&sentFrom=CyberWASP"
     )
 
     print(f"[INFO] Querying LDAP API:\n{url}\n")
@@ -69,20 +78,22 @@ def fetch_ad_user_details(
         print("[Fallback] Returning fail-safe email alias.")
         return [{"mail": FAILSAFE_EMAIL}]
 
+
 # ---------------------------------------------------------------------
 # CLI Entry Point
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Query AD group members (dry-run or live mode)."
+        description="Query AD group members via HSBC LDAP endpoint (dry-run or live mode)."
     )
     parser.add_argument("--group_name", required=True, help="Name of AD group to query")
     parser.add_argument("--dry_run", action="store_true", help="Simulate response only")
     parser.add_argument("--simulate_fail", action="store_true", help="Force dry-run failure mode")
-    parser.add_argument("--base_url", default=DEFAULT_BASE_URL, help="Base URL for LDAP endpoint")
-    parser.add_argument("--server_url", default=DEFAULT_SERVER_URL, help="LDAP server URL (unencoded)")
-    parser.add_argument("--base_dn", default=DEFAULT_BASE_DN, help="Base DN (unencoded)")
     parser.add_argument("--flatten", action="store_true", help="Output flattened email list")
+    parser.add_argument("--base_url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--server_url", default=DEFAULT_SERVER_URL)
+    parser.add_argument("--base_dn", default=DEFAULT_BASE_DN)
+    parser.add_argument("--member_path", default=DEFAULT_MEMBER_PATH)
 
     args = parser.parse_args()
 
@@ -93,6 +104,7 @@ if __name__ == "__main__":
         base_url=args.base_url,
         server_url=args.server_url,
         base_dn=args.base_dn,
+        member_path=args.member_path,
     )
 
     if args.flatten:
