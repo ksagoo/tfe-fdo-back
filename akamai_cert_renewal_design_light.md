@@ -12,7 +12,7 @@ This document outlines the Akamai Certificate Renewal Automation architecture an
 flowchart LR
 subgraph JENKINS [Jenkins Automation]
   J1([Scheduled Discovery Job]) --> J2[Run Akamai Cert Manager - Discovery Module]
-  J2 --> J3[Identify Expiring Certificates (≤ 28 days)]
+  J2 --> J3[Identify Expiring Certificates - less than or equal to 28 days]
   J3 --> J4[Reverse FQDN Lookup via PAPI - Auto Resolve Access Group]
   J4 --> J5[Access Group to AD Group Mapping]
   J5 --> J6{AD Group Exists?}
@@ -28,7 +28,7 @@ end
 subgraph AKAMAI [Akamai APIs - CPS / PAPI]
   A1[GET /cps/v2/enrollments - List Enrollments] --> A2[Identify Expiring Enrollments]
   A2 --> A3[Reverse FQDN Lookup - Match Property to Access Group]
-  A3 --> A4[POST /cps/v2/enrollments/{id}/renew]
+  A3 --> A4[POST /cps/v2/enrollments/id/renew]
   A4 --> A5[Poll CPS for CSR_READY and Submit CSR to CA]
   A5 --> A6[POST /cps/v2/deployments - Deploy Certificate]
   A6 --> A7[POST /cps/v2/activations - Activate Staging and Prod]
@@ -76,6 +76,7 @@ style AKAMAI fill:#b7d7e8,stroke:#82b3c9,color:#000000
 style AD fill:#d5e8d4,stroke:#82b366,color:#000000
 style JIRA fill:#ffe6cc,stroke:#d79b00,color:#000000
 style SNOW fill:#f8cecc,stroke:#b85450,color:#000000
+
 ```
 
 ---
@@ -100,7 +101,7 @@ subgraph AKAMAI [Akamai APIs - CPS / PAPI]
   A1[GET /cps/v2/enrollments]
   A2[Identify Expiring Enrollments]
   A3[Reverse FQDN Lookup - Property to Group]
-  A4[POST /enrollments/{id}/renew]
+  A4[POST /enrollments/id/renew]
   A5[Deploy and Activate Certificates]
 end
 
@@ -139,10 +140,8 @@ style AKAMAI fill:#b7d7e8,stroke:#82b3c9,color:#000000
 style AD fill:#d5e8d4,stroke:#82b366,color:#000000
 style JIRA fill:#ffe6cc,stroke:#d79b00,color:#000000
 style SNOW fill:#f8cecc,stroke:#b85450,color:#000000
+
 ```
 
 ---
 
-✅ **Notes:**
-- This version uses light, high-contrast colors for readability on Confluence and GitHub.
-- Mermaid syntax fully validated — will render correctly in both environments.
