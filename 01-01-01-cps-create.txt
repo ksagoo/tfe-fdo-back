@@ -3,11 +3,11 @@
 Query Active Directory group members via HSBC LDAP API.
 
 Usage Examples:
-  Live mode:       python query_ad_group_final_stitched.py --group_name <ADGroup>
-  Dry run:         python query_ad_group_final_stitched.py --group_name <ADGroup> --dry_run
-  Simulate fail:   python query_ad_group_final_stitched.py --group_name <ADGroup> --dry_run --simulate_fail
-  Flatten output:  python query_ad_group_final_stitched.py --group_name <ADGroup> --flatten
-  Show URL only:   python query_ad_group_final_stitched.py --group_name <ADGroup> --show_url
+  Live mode:       python query_ad_group_final_fixed.py --group_name <ADGroup>
+  Dry run:         python query_ad_group_final_fixed.py --group_name <ADGroup> --dry_run
+  Simulate fail:   python query_ad_group_final_fixed.py --group_name <ADGroup> --dry_run --simulate_fail
+  Flatten output:  python query_ad_group_final_fixed.py --group_name <ADGroup> --flatten
+  Show URL only:   python query_ad_group_final_fixed.py --group_name <ADGroup> --show_url
 """
 
 import requests
@@ -17,14 +17,16 @@ import json
 from urllib.parse import urlparse, parse_qs, unquote
 
 # ---------------------------------------------------------------------
-# Constants (verified working values)
+# Constants (✅ verified working encoding & correct DC=InfoDir structure)
 # ---------------------------------------------------------------------
 DEFAULT_BASE_URL = "https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap"
 DEFAULT_SERVER_URL = "ldaps%3A%2F%2Ffaa-lds-prod.uk.hsbc%3A3269"
-DEFAULT_BASE_DN = "OU%3DHSBCPeople%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
+
+# ✅ Correct domain components (DC=InfoDir)
+DEFAULT_BASE_DN = "OU%3DHSBCPeople%2CDC%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
 DEFAULT_MEMBER_PATH = (
     "OU%3DCyber%20WASP%20Automation%2COU%3DApplications%2COU%3DGroups"
-    "%2COU%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
+    "%2CDC%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
 )
 
 DEFAULT_EMAILS = [
