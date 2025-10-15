@@ -1,181 +1,145 @@
 #!/usr/bin/env python3
 """
-================================================================================
-Akamai FQDN Access Group Lookup Utility (Property-Level)
-================================================================================
+====================================================================
+Akamai / AD Group Email Fetcher Utility
+====================================================================
 Description:
-    Used during certificate discovery or automation processes where only
-    an FQDN is available. This performs a full PAPI reverse lookup to return
-    the *property-level* Access Group and Group ID.
+------------
+This lightweight utility retrieves Active Directory (AD) user
+email addresses for a given AD group name.
 
+It supports both:
+- Live mode (queries the internal HSBC LDAP API)
+- Dry-run mode (returns a fixed mock list or a fail-safe address)
+
+If the AD lookup fails or no members exist, the script safely
+returns a fallback alias:
+    cyberwaspwafdevops@noexternalmail.hsbc.com
+
+====================================================================
 Usage:
-    python akamai_fqdn_access_group_lookup.py --section <edgerc_section> --fqdn <hostname> [--json]
+------
 
-Example:
-    python akamai_fqdn_access_group_lookup.py --section dev --fqdn epspos-dev-059test.hsbc.com.hk
+Live Mode:
+-----------
+Fetch real AD membership via HSBC internal LDAP API.
 
-Output (text mode):
-    == Access Group Lookup Result ==
-    FQDN: epspos-dev-059test.hsbc.com.hk
-    Access Group: ServiceNow-itilUser
-    Group ID: grp_272095
+    python fetch_ad_users.py --group_name "<AD Group Name>"
+    python fetch_ad_users.py --group_name "<AD Group Name>" --flatten
 
-Output (JSON mode):
-    {
-      "fqdn": "epspos-dev-059test.hsbc.com.hk",
-      "accessGroupName": "ServiceNow-itilUser",
-      "groupId": "grp_272095"
-    }
-================================================================================
+Dry-Run Mode:
+--------------
+Return default test data (no live API calls).
+
+    # Simulated success (returns default email list)
+    python fetch_ad_users.py --group_name "AnyGroup" --dry-run
+
+    # Simulated failure (returns fail-safe alias)
+    python fetch_ad_users.py --group_name "FakeGroup" --dry-run --simulate-fail
+
+    # Flattened output for Jenkins/email usage
+    python fetch_ad_users.py --group_name "AnyGroup" --dry-run --flatten
+
+====================================================================
+Output:
+-------
+JSON (default) or comma-separated email list (when using --flatten)
+
+Examples:
+---------
+1. JSON Output:
+[
+    {"mail": "paul.dawson@hsbc.com"},
+    {"mail": "paul.hiesley@hsbc.com"},
+    {"mail": "pavan.prabhakar@hsbc.com"}
+]
+
+2. Flattened Output (--flatten):
+paul.dawson@hsbc.com, paul.hiesley@hsbc.com, pavan.prabhakar@hsbc.com
+====================================================================
 """
 
-import os
-import sys
-import json
-import argparse
 import requests
-from akamai.edgegrid import EdgeGridAuth
-from configparser import ConfigParser
+import argparse
+import json
+import urllib.parse
+
+# -------------------------------------------------------------
+# Default Data Sets
+# -------------------------------------------------------------
+DEFAULT_EMAILS = [
+    {"mail": "paul.dawson@hsbc.com"},
+    {"mail": "paul.hiesley@hsbc.com"},
+    {"mail": "pavan.prabhakar@hsbc.com"},
+    {"mail": "kuldeep.sagoo@hsbc.com"},
+    {"mail": "jijin.karumathilvellilapully@hsbc.com"},
+]
+
+FAILSAFE_EMAIL = "cyberwaspwafdevops@noexternalmail.hsbc.com"
 
 
-# ==============================================================================
-# Setup Akamai EdgeGrid session
-# ==============================================================================
-def setup_session(section):
-    edgerc = os.path.join(os.path.expanduser("~"), ".edgerc")
-    parser = ConfigParser()
-    parser.read(edgerc)
+# -------------------------------------------------------------
+# Core Function: Fetch AD Group Members
+# -------------------------------------------------------------
+def fetch_ad_user_details(group_name, dry_run=False, simulate_fail=False):
+    """Fetch AD user details for a given group name or return fallback data."""
+    if dry_run:
+        if simulate_fail:
+            print("[Dry Run: Simulated Failure] Returning fail-safe email alias.")
+            return [{"mail": FAILSAFE_EMAIL}]
+        print("[Dry Run] Returning static default email list.")
+        return DEFAULT_EMAILS
 
-    if not parser.has_section(section):
-        print(f"[ERROR] Missing section [{section}] in {edgerc}")
-        sys.exit(1)
-
-    base_url = f"https://{parser.get(section, 'host')}"
-    session = requests.Session()
-    session.auth = EdgeGridAuth(
-        client_token=parser.get(section, "client_token"),
-        client_secret=parser.get(section, "client_secret"),
-        access_token=parser.get(section, "access_token")
+    encoded_group = urllib.parse.quote(group_name)
+    url = (
+        f"https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap?"
+        f"serverUrl=ldaps://faa-lds-prod.uk.hsbc&baseDn=OU%3DCyber%20WASP%20Automation,"
+        f"OU%3DApplications,OU%3DProd,DC%3Dhsbc,DC=com&InfoDir={encoded_group}"
+        f"&limit=100&ad=false&sentFrom=CyberWASP"
     )
-    session.headers.update({"Accept": "application/json"})
-    return session, base_url
-
-
-# ==============================================================================
-# Helper: Get group name by ID
-# ==============================================================================
-def get_group_name_by_id(session, base_url, group_id):
-    try:
-        resp = session.get(f"{base_url}/papi/v1/groups", timeout=20)
-        if resp.status_code != 200:
-            return "UNKNOWN"
-        for item in resp.json().get("groups", {}).get("items", []):
-            if item.get("groupId") == group_id:
-                return item.get("groupName", "UNKNOWN")
-    except Exception:
-        pass
-    return "UNKNOWN"
-
-
-# ==============================================================================
-# Full reverse lookup for property-level group
-# ==============================================================================
-def reverse_fqdn_lookup(session, base_url, fqdn):
-    fqdn = fqdn.lower()
-    url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
 
     try:
-        resp = session.get(url, timeout=30)
-        if resp.status_code != 200:
-            print(f"[ERROR] HTTP {resp.status_code} during lookup for {fqdn}")
-            return None
-        data = resp.json()
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data:
+            print("[Warning] No AD members found. Using fail-safe email alias.")
+            return [{"mail": FAILSAFE_EMAIL}]
+        return data
+
     except Exception as e:
-        print(f"[ERROR] Exception during lookup: {e}")
-        return None
-
-    host_entries = (
-        data.get("items")
-        or data.get("hostnames", {}).get("items", [])
-        or data.get("hostnames", [])
-    )
-
-    for entry in host_entries:
-        cname_from = str(entry.get("cnameFrom", "")).lower()
-        cname_to = str(entry.get("cnameTo", "")).lower()
-        edge = str(entry.get("edgeHostname", "")).lower()
-        staging = str(entry.get("stagingEdgeHostname", "")).lower()
-
-        if fqdn not in (cname_from, cname_to, edge, staging):
-            continue
-
-        # Step 1: Extract property info
-        property_id = entry.get("propertyId")
-        contract_id = entry.get("contractId")
-        group_id = entry.get("groupId")
-
-        if not property_id or not contract_id or not group_id:
-            continue
-
-        # Step 2: Query property metadata to get true property-level groupId
-        prop_url = f"{base_url}/papi/v1/properties/{property_id}?contractId={contract_id}&groupId={group_id}"
-        try:
-            prop_resp = session.get(prop_url, timeout=20)
-            if prop_resp.status_code == 200:
-                prop_data = prop_resp.json()
-                prop_items = prop_data.get("properties", {}).get("items", [])
-                if prop_items:
-                    real_group_id = prop_items[0].get("groupId", group_id)
-                else:
-                    real_group_id = group_id
-            else:
-                real_group_id = group_id
-        except Exception:
-            real_group_id = group_id
-
-        # Step 3: Get friendly Access Group name
-        access_group_name = get_group_name_by_id(session, base_url, real_group_id)
-
-        return {
-            "fqdn": fqdn,
-            "groupId": real_group_id,
-            "accessGroupName": access_group_name
-        }
-
-    return None
+        print(f"[Error] Failed to fetch AD group details: {e}")
+        print("[Fallback] Returning fail-safe email alias.")
+        return [{"mail": FAILSAFE_EMAIL}]
 
 
-# ==============================================================================
-# Main
-# ==============================================================================
-def main():
-    parser = argparse.ArgumentParser(description="Akamai FQDN → Access Group lookup tool")
-    parser.add_argument("--section", required=True, help="Section from .edgerc")
-    parser.add_argument("--fqdn", required=True, help="Fully qualified domain name to look up")
-    parser.add_argument("--json", action="store_true", help="Output results in JSON format for CI/CD pipelines")
+# -------------------------------------------------------------
+# Helper: Flatten to CSV string
+# -------------------------------------------------------------
+def flatten_email_list(data):
+    """Convert list of {'mail': ...} dicts to a single comma-separated string."""
+    return ", ".join(item.get("mail", "") for item in data if "mail" in item)
+
+
+# -------------------------------------------------------------
+# Main Entry Point
+# -------------------------------------------------------------
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Fetch AD user details for a given group name.")
+    parser.add_argument("--group_name", required=True, help="The name of the AD group to query.")
+    parser.add_argument("--dry-run", action="store_true", help="Use dry-run mode with dummy data.")
+    parser.add_argument("--simulate-fail", action="store_true", help="Simulate AD lookup failure in dry-run mode.")
+    parser.add_argument("--flatten", action="store_true", help="Output flattened comma-separated email string.")
     args = parser.parse_args()
 
-    session, base_url = setup_session(args.section)
-    result = reverse_fqdn_lookup(session, base_url, args.fqdn)
+    user_details = fetch_ad_user_details(
+        args.group_name,
+        dry_run=args.dry_run,
+        simulate_fail=args.simulate_fail
+    )
 
-    if not result:
-        print(f"[WARN] No Access Group found for {args.fqdn}")
-        sys.exit(1)
-
-    if args.json:
-        print(json.dumps(result, indent=2))
+    if args.flatten:
+        print(flatten_email_list(user_details))
     else:
-        print("================================================================================")
-        print("Akamai FQDN Access Group Lookup Utility")
-        print("================================================================================")
-        print(f"Section: {args.section}")
-        print(f"FQDN: {args.fqdn}\n")
-        print("== Access Group Lookup Result ==")
-        print(f"FQDN: {result['fqdn']}")
-        print(f"Access Group: {result['accessGroupName']}")
-        print(f"Group ID: {result['groupId']}")
-        print("================================================================================")
-
-
-if __name__ == "__main__":
-    main()
+        print(json.dumps(user_details, indent=4))
