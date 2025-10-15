@@ -18,11 +18,11 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 
 # ------------------------------------------------------------------------
-# Constants (Final verified and fixed)
+# Constants (canonical verified version)
 # ------------------------------------------------------------------------
 DEFAULT_BASE_URL = "https://hsbc-ldap.prd.digital.gbm.cloud.hk.hsbc/hsbc-ldap"
 #DEFAULT_SERVER_URL = "ldaps://faa-lds-prod.uk.hsbc:3269"
-DEFAULT_SERVER_URL = "ldaps%3A%2F%2FFaa-lds-prod.uk.hsbc%3A3269"  # fixed uppercase F after %2F
+DEFAULT_SERVER_URL = "ldaps%3A%2F%2Faa-lds-prod.uk.hsbc%3A3269"  # verified working form
 
 DEFAULT_BASE_DN = "OU%3DHSBCPeople%2CDC%3DInfoDir%2CDC%3DProd%2CDC%3DHSBC"
 
