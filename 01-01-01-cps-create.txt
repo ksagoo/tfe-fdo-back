@@ -1,183 +1,224 @@
 #!/usr/bin/env python3
-# ------------------------------------------------------------------------
-# Akamai Reverse Entitlement Lookup | Multi-FQDN Access Group Resolver
-# ------------------------------------------------------------------------
+# -*- coding: utf-8 -*-
+
+# =============================================================================
+# Akamai FQDN ➜ Access Group Lookup Utility (v3)
+# =============================================================================
 #
 # Description:
-#   Given one or more Fully Qualified Domain Names (FQDNs), this script
-#   queries Akamai APIs (CPS, AppSec, and PAPI) to determine which Access
-#   Group(s) authorize each FQDN. It is designed to integrate with
-#   discovery and certificate renewal pipelines such as Jenkins or
-#   ServiceNow automation.
+#   Performs reverse lookups to determine the Akamai Access Group responsible
+#   for a given Fully Qualified Domain Name (FQDN).
+#
+#   The script queries the Akamai Property Manager (PAPI) API to resolve
+#   property-level metadata and map hostnames to their associated group.
+#
+#   Supports multiple FQDNs, structured JSON output for pipelines, and
+#   optional dry-run and debug modes.
 #
 # Features:
-#   • Accepts multiple --fqdn flags
-#   • Returns structured JSON output for CI/CD pipelines
-#   • Includes --dry_run and --debug modes
-#   • Supports configurable environment section (--section)
-#   • Compatible with EdgeGrid authentication (.edgerc)
+#   • Multi-FQDN lookup (multiple --fqdn flags)
+#   • Optional --output JSON file for Jenkins or CI/CD usage
+#   • --debug for detailed trace logging (URLs, HTTP codes, JSON fragments)
+#   • --dry_run to always return success (useful for pipelines)
+#   • Pretty terminal output when --json not used
 #
-# Usage Examples:
-#   Live Lookup:
-#       python akamai_reverse_entitlement_lookup.py \
-#           --section PROD \
-#           --fqdn app1.hsbc.com \
-#           --fqdn app2.hsbc.co.uk
-#
-#   Dry Run Simulation:
-#       python akamai_reverse_entitlement_lookup.py \
-#           --fqdn app1.hsbc.com --dry_run
-#
-#   Debug Mode (show full API URLs and verbose output):
-#       python akamai_reverse_entitlement_lookup.py \
-#           --section DEV --fqdn testapp.dev.hsbc.com --debug
-#
-#   Export Results to JSON (for Jenkins use):
-#       python akamai_reverse_entitlement_lookup.py \
-#           --section PROD \
-#           --fqdn app1.hsbc.com \
-#           --fqdn app2.hsbc.co.uk \
-#           --output entitlement_map.json
+# Usage:
+#   python akamai_fqdn_access_group_lookup_v3.py \
+#       --section GLOBAL \
+#       --fqdn ybtaf.hsbc.com.cn \
+#       --fqdn fusion-onboard-ifc.hsbc.com.cn \
+#       --output entitlement_map.json
 #
 # Example Output:
 #   {
-#       "app1.hsbc.com": ["AppSec-EMEA-Prod", "CPS-Prod-Certs"],
-#       "app2.hsbc.co.uk": ["AppSec-UK-Prod"]
+#     "ybtaf.hsbc.com.cn": {
+#       "accessGroupName": "CET-APAC-CNYBISystem",
+#       "groupId": "grp_282359"
+#     },
+#     "fusion-onboard-ifc.hsbc.com.cn": "No-Matching-Access-Group"
 #   }
 #
-# ------------------------------------------------------------------------
+# Exit Codes:
+#   0 - Success (all lookups completed)
+#   1 - One or more lookups failed
+# =============================================================================
 
-import argparse
-import json
 import sys
-from akamai.edgegrid import EdgeGridAuth
+import os
+import json
+import argparse
 import requests
-from urllib.parse import urlencode
-from requests.sessions import Session
+from akamai.edgegrid import EdgeGridAuth
+from configparser import ConfigParser
 
-# ------------------------------------------------------------------------
-# EdgeGrid Session Setup
-# ------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Setup Akamai EdgeGrid Session
+# -----------------------------------------------------------------------------
 def setup_session(section):
-    """Initialise EdgeGrid authenticated session for given section."""
-    try:
-        from akamai.edgegrid import EdgeGridAuth
-        from configparser import ConfigParser
-        import os
+    edgerc = os.path.join(os.path.expanduser("~"), ".edgerc")
+    parser = ConfigParser()
+    parser.read(edgerc)
 
-        edgerc_path = os.path.expanduser("~/.edgerc")
-        config = ConfigParser()
-        config.read(edgerc_path)
-        if section not in config:
-            print(f"[Error] Section '{section}' not found in {edgerc_path}")
-            sys.exit(1)
-
-        base_url = config.get(section, "host", fallback=None)
-        client_token = config.get(section, "client_token", fallback=None)
-        client_secret = config.get(section, "client_secret", fallback=None)
-        access_token = config.get(section, "access_token", fallback=None)
-
-        if not all([base_url, client_token, client_secret, access_token]):
-            print(f"[Error] Missing credentials in .edgerc for section {section}")
-            sys.exit(1)
-
-        session = Session()
-        session.auth = EdgeGridAuth(
-            client_token=client_token,
-            client_secret=client_secret,
-            access_token=access_token
-        )
-        session.headers.update({"Content-Type": "application/json"})
-        session.base_url = f"https://{base_url}"
-        return session
-
-    except Exception as e:
-        print(f"[Error] Failed to initialize EdgeGrid session: {e}")
+    if not parser.has_section(section):
+        print(f"[ERROR] Missing section [{section}] in {edgerc}")
         sys.exit(1)
 
-# ------------------------------------------------------------------------
-# Lookup Function (Mock/Example Implementation)
-# ------------------------------------------------------------------------
-def lookup_access_groups(session, fqdn, section, debug=False):
-    """
-    Query Akamai APIs (PAPI/AppSec/CPS) to identify which Access Group(s)
-    authorize the given FQDN.
-    """
-    # Placeholder API endpoints for demonstration
-    papi_endpoint = f"{session.base_url}/papi/v1/search/find-by-value?value={fqdn}"
-    cps_endpoint = f"{session.base_url}/cps/v2/certificates?commonName={fqdn}"
-    appsec_endpoint = f"{session.base_url}/appsec/v1/configs?hostname={fqdn}"
+    base_url = f"https://{parser.get(section, 'host')}"
+    session = requests.Session()
+    session.auth = EdgeGridAuth(
+        client_token=parser.get(section, "client_token"),
+        client_secret=parser.get(section, "client_secret"),
+        access_token=parser.get(section, "access_token")
+    )
+    session.headers.update({"Accept": "application/json"})
+    return session, base_url
 
-    access_groups = set()
-
+# -----------------------------------------------------------------------------
+# Helper: Get group name by ID
+# -----------------------------------------------------------------------------
+def get_group_name_by_id(session, base_url, group_id, debug=False):
     try:
-        for api_url, label in [
-            (papi_endpoint, "PAPI"),
-            (cps_endpoint, "CPS"),
-            (appsec_endpoint, "AppSec"),
-        ]:
-            if debug:
-                print(f"[DEBUG] Querying {label}: {api_url}")
-
-            resp = session.get(api_url, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, dict):
-                    for key in ["accessGroupName", "groupName", "name"]:
-                        if key in data:
-                            access_groups.add(data[key])
-                    # Demo extraction for nested JSON
-                    for item in data.get("items", []):
-                        if "accessGroupName" in item:
-                            access_groups.add(item["accessGroupName"])
-            elif debug:
-                print(f"[DEBUG] {label} returned HTTP {resp.status_code}")
-
+        url = f"{base_url}/papi/v1/groups"
+        resp = session.get(url, timeout=20)
+        if debug:
+            print(f"[DEBUG] GET {url} -> {resp.status_code}")
+        if resp.status_code != 200:
+            return "UNKNOWN"
+        for item in resp.json().get("groups", {}).get("items", []):
+            if item.get("groupId") == group_id:
+                return item.get("groupName", "UNKNOWN")
     except Exception as e:
         if debug:
-            print(f"[DEBUG] Error querying APIs for {fqdn}: {e}")
+            print(f"[DEBUG] Exception while fetching group name: {e}")
+    return "UNKNOWN"
 
-    return sorted(list(access_groups)) or ["No-Matching-Access-Group"]
+# -----------------------------------------------------------------------------
+# Reverse lookup by FQDN
+# -----------------------------------------------------------------------------
+def reverse_fqdn_lookup(session, base_url, fqdn, debug=False):
+    fqdn = fqdn.lower()
+    url = f"{base_url}/papi/v1/hostnames?search={fqdn}"
 
-# ------------------------------------------------------------------------
-# Main Entry
-# ------------------------------------------------------------------------
+    if debug:
+        print(f"[DEBUG] Querying hostnames endpoint: {url}")
+
+    try:
+        resp = session.get(url, timeout=30)
+        if resp.status_code != 200:
+            if debug:
+                print(f"[DEBUG] HTTP {resp.status_code} for {fqdn}")
+            return None
+        data = resp.json()
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] Exception during lookup: {e}")
+        return None
+
+    host_entries = (
+        data.get("items")
+        or data.get("hostnames", {}).get("items", [])
+        or data.get("hostnames", [])
+    )
+
+    for entry in host_entries:
+        cname_from = str(entry.get("cnameFrom", "")).lower()
+        cname_to = str(entry.get("cnameTo", "")).lower()
+        edge = str(entry.get("edgeHostname", "")).lower()
+        staging = str(entry.get("stagingEdgeHostname", "")).lower()
+
+        if fqdn not in (cname_from, cname_to, edge, staging):
+            continue
+
+        property_id = entry.get("propertyId")
+        contract_id = entry.get("contractId")
+        group_id = entry.get("groupId")
+
+        if not (property_id and contract_id and group_id):
+            continue
+
+        # Retrieve property metadata
+        prop_url = f"{base_url}/papi/v1/properties/{property_id}?contractId={contract_id}&groupId={group_id}"
+        try:
+            prop_resp = session.get(prop_url, timeout=20)
+            if debug:
+                print(f"[DEBUG] GET {prop_url} -> {prop_resp.status_code}")
+            if prop_resp.status_code == 200:
+                prop_data = prop_resp.json()
+                prop_items = prop_data.get("properties", {}).get("items", [])
+                real_group_id = prop_items[0].get("groupId", group_id) if prop_items else group_id
+            else:
+                real_group_id = group_id
+        except Exception as e:
+            if debug:
+                print(f"[DEBUG] Property metadata exception: {e}")
+            real_group_id = group_id
+
+        # Resolve group name
+        access_group_name = get_group_name_by_id(session, base_url, real_group_id, debug)
+
+        return {
+            "fqdn": fqdn,
+            "groupId": real_group_id,
+            "accessGroupName": access_group_name
+        }
+
+    return None
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="Reverse lookup Akamai Access Group(s) for one or more FQDNs.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        description="Akamai FQDN ➜ Access Group lookup utility (multi-FQDN + JSON support)"
     )
-    parser.add_argument("--fqdn", action="append", required=True,
-                        help="One or more Fully Qualified Domain Names (FQDNs) to lookup.")
-    parser.add_argument("--section", required=False, default="default",
-                        help="EdgeGrid section name in ~/.edgerc (e.g., PROD, DEV). Default: 'default'.")
-    parser.add_argument("--output", help="Optional path to save JSON output.")
-    parser.add_argument("--debug", action="store_true", help="Enable verbose debug output.")
-    parser.add_argument("--dry_run", action="store_true", help="Simulate response only (no live API calls).")
-
+    parser.add_argument("--section", required=True, help="Environment section from .edgerc")
+    parser.add_argument("--fqdn", required=True, action="append", help="FQDN(s) to look up (can specify multiple)")
+    parser.add_argument("--output", help="Optional JSON file to save results")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose output for troubleshooting")
+    parser.add_argument("--dry_run", action="store_true", help="Simulate success for CI/CD pipeline continuation")
     args = parser.parse_args()
 
+    session, base_url = setup_session(args.section)
     results = {}
-    session = None if args.dry_run else setup_session(args.section)
+    has_failures = False
 
     for fqdn in args.fqdn:
-        if args.dry_run:
-            print(f"[Dry Run] Simulating lookup for {fqdn}")
-            results[fqdn] = ["Simulated-Access-Group"]
+        result = reverse_fqdn_lookup(session, base_url, fqdn, args.debug)
+        if result:
+            results[fqdn] = {
+                "accessGroupName": result.get("accessGroupName"),
+                "groupId": result.get("groupId")
+            }
         else:
-            access_groups = lookup_access_groups(session, fqdn, args.section, debug=args.debug)
-            results[fqdn] = access_groups
+            results[fqdn] = "No-Matching-Access-Group"
+            has_failures = True
 
-    # --------------------------------------------------------------------
-    # Output Formatting
-    # --------------------------------------------------------------------
+    # Output handling
     if args.output:
         with open(args.output, "w") as f:
-            json.dump(results, f, indent=4)
+            json.dump(results, f, indent=2)
         print(f"[INFO] JSON output saved: {args.output}")
     else:
-        print(json.dumps(results, indent=4))
+        print("\nAkamai FQDN Access Group Lookup Utility")
+        print("=========================================")
+        for fqdn, data in results.items():
+            print(f"\nFQDN: {fqdn}")
+            if isinstance(data, dict):
+                print(f"Access Group: {data['accessGroupName']}")
+                print(f"Group ID: {data['groupId']}")
+            else:
+                print("Access Group: No-Matching-Access-Group")
+        print("=========================================\n")
 
-# ------------------------------------------------------------------------
+    # Exit code management
+    if args.dry_run:
+        print("[INFO] Dry-run mode: pipeline will continue regardless of results.")
+        sys.exit(0)
+    elif has_failures:
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+
 if __name__ == "__main__":
     main()
